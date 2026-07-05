@@ -7,9 +7,17 @@ export function getResourceConfig(resourceName, client) {
     };
   }
 
+  if (resourceName === "pages") {
+    return {
+      route: "pages",
+      kind: "content",
+      deleteMode: "trash"
+    };
+  }
+
   if (resourceName === "products") {
     return {
-      route: "products",
+      route: "product",
       kind: "content",
       deleteMode: "trash"
     };
@@ -18,6 +26,14 @@ export function getResourceConfig(resourceName, client) {
   if (resourceName === "categories") {
     return {
       route: "categories",
+      kind: "taxonomy",
+      deleteMode: "force"
+    };
+  }
+
+  if (resourceName === "product-categories") {
+    return {
+      route: "product_cat",
       kind: "taxonomy",
       deleteMode: "force"
     };

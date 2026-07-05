@@ -132,7 +132,7 @@ async function handleClientCommand(args, store) {
       `Active client: ${payload.activeClient ?? "(none)"}`,
       ...clients.map((client) => {
         const marker = payload.activeClient === client.name ? "*" : "-";
-        return `${marker} ${client.name}`;
+        return `${marker} ${client.name} ${client.siteUrl}`;
       })
     ];
 
@@ -170,12 +170,45 @@ function renderEntity(resourceName, entity) {
   return `${label} ${entity.id}: ${title}\n`;
 }
 
-function renderList(resourceName, payload) {
+function extractSeoPayload(resourceName, entity, id) {
+  const meta = entity?.meta ?? {};
+  return {
+    id: entity?.id ?? id,
+    resource: resourceName,
+    rank_math_title: meta.rank_math_title ?? "",
+    rank_math_description: meta.rank_math_description ?? "",
+    rank_math_focus_keyword: meta.rank_math_focus_keyword ?? ""
+  };
+}
+
+function renderSeoPayload(payload, { updated = false } = {}) {
+  const header = updated
+    ? `SEO updated for ${payload.resource} ${payload.id}`
+    : `SEO for ${payload.resource} ${payload.id}`;
+  return [
+    header,
+    `Title: ${payload.rank_math_title}`,
+    `Description: ${payload.rank_math_description}`,
+    `Focus keyword: ${payload.rank_math_focus_keyword}`
+  ].join("\n") + "\n";
+}
+
+function buildSeoMeta(options) {
+  const entries = Object.entries({
+    rank_math_title: options.title,
+    rank_math_description: options.description,
+    rank_math_focus_keyword: options["focus-keyword"]
+  }).filter(([, value]) => value !== undefined);
+
+  return Object.fromEntries(entries);
+}
+
+function renderList(resourceName, payload, { currentPage = 1 } = {}) {
   const lines = payload.items.map((item) => {
     const title = item.title?.rendered ?? item.name ?? item.slug ?? "";
     return `${item.id}\t${title}`;
   });
-  const footer = `Total ${payload.pagination.total} across ${payload.pagination.totalPages} page(s)`;
+  const footer = `Total ${payload.pagination.total}, ${payload.pagination.totalPages} pages, fetched ${payload.items.length} items, current page ${currentPage}`;
   return `${[`${resourceName}:`, ...lines, footer].join("\n")}\n`;
 }
 
@@ -210,7 +243,14 @@ async function handleResourceCommand(command, args, store, options) {
 
   if (subcommand === "list") {
     const payload = await client.list(config.route, buildListQuery(args.options));
-    return args.options.json ? ok(renderJson(payload), payload) : ok(renderList(command, payload), payload);
+    const currentPage = Number(args.options["per-page"]) === -1
+      ? "all"
+      : args.options.page === undefined
+        ? 1
+        : Number(args.options.page);
+    return args.options.json
+      ? ok(renderJson(payload), payload)
+      : ok(renderList(command, payload, { currentPage }), payload);
   }
 
   if (subcommand === "get") {
@@ -252,6 +292,32 @@ async function handleResourceCommand(command, args, store, options) {
   return fail(`Unknown ${command} subcommand: ${subcommand ?? "(missing)"}`);
 }
 
+async function handleSeoCommand(args, store, options) {
+  const [resourceName, rawId] = args.positionals;
+  if (!resourceName) {
+    return fail("Resource name is required.");
+  }
+  if (!rawId) {
+    return fail("Resource id is required.");
+  }
+
+  const id = Number(rawId);
+  const client = await resolveClient(args, store, options);
+  const selectedClient = await store.getResolvedClient(args.options.client);
+  const config = getResourceConfig(resourceName, selectedClient);
+  const seoMeta = buildSeoMeta(args.options);
+  const isUpdate = Object.keys(seoMeta).length > 0;
+
+  const entity = isUpdate
+    ? await client.update(config.route, id, { meta: seoMeta })
+    : await client.get(config.route, id);
+
+  const payload = extractSeoPayload(resourceName, entity, id);
+  return args.options.json
+    ? ok(renderJson(payload), payload)
+    : ok(renderSeoPayload(payload, { updated: isUpdate }), payload);
+}
+
 export async function runCli(argv, options = {}) {
   const { command, args: parsed } = parseCommandLine(argv);
   const store = new ConfigStore({ configDir: options.configDir });
@@ -261,7 +327,11 @@ export async function runCli(argv, options = {}) {
       return await handleClientCommand(parsed, store);
     }
 
-    if (["posts", "products", "categories"].includes(command)) {
+    if (command === "seo") {
+      return await handleSeoCommand(parsed, store, options);
+    }
+
+    if (["posts", "pages", "products", "categories", "product-categories"].includes(command)) {
       return await handleResourceCommand(command, parsed, store, options);
     }
 

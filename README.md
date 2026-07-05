@@ -5,7 +5,8 @@ A small Node.js CLI for managing remote WordPress content through the native RES
 Current scope:
 
 - `posts`
-- `products` at the native `/wp/v2/products` endpoint
+- `pages`
+- `products` mapped to the native `/wp/v2/product` endpoint
 - `categories`
 - local client management for multiple WordPress sites
 
@@ -93,8 +94,10 @@ Supported resources:
 
 ```bash
 wp-api posts ...
+wp-api pages ...
 wp-api products ...
 wp-api categories ...
+wp-api product-categories ...
 ```
 
 Supported actions:
@@ -105,6 +108,12 @@ get <id>
 create
 update <id>
 delete <id>
+```
+
+Additional command group:
+
+```bash
+seo <resource> <id>
 ```
 
 Global flags can be placed before the resource command:
@@ -121,14 +130,26 @@ Available global flags:
 - `--json`: return JSON instead of human-readable output
 - `--verbose`: print request information to stderr
 
-## Posts and Products
+List behavior applies to every resource command that supports `list`, including:
 
-`posts` and `products` share the same content-style flags.
+- `posts`
+- `pages`
+- `products`
+- `categories`
+- `product-categories`
+
+The `seo` command supports these same resources.
+
+## Posts, Pages, and Products
+
+`posts`, `pages`, and `products` share the same content-style flags.
 
 ### List
 
 ```bash
 wp-api posts list --search hello --page 2 --per-page 10
+wp-api pages list --status publish
+wp-api posts list --per-page -1
 wp-api products list --status publish --json
 ```
 
@@ -139,10 +160,15 @@ Supported list filters:
 - `--per-page <number>`
 - `--status <status>`
 
+Special `--per-page` behavior:
+
+- `--per-page -1`: fetch all items across every page and merge them into one result
+
 ### Get
 
 ```bash
 wp-api posts get 42
+wp-api pages get 7
 wp-api products get 9 --json
 ```
 
@@ -154,6 +180,13 @@ wp-api posts create \
   --status draft \
   --slug hello-world \
   --excerpt "Short summary"
+```
+
+```bash
+wp-api pages create \
+  --title "About Us" \
+  --status draft \
+  --content-file ./about.md
 ```
 
 ```bash
@@ -174,6 +207,7 @@ echo "Long body content" | wp-api posts create --title "Piped Post" --status dra
 
 ```bash
 wp-api posts update 42 --title "Updated Title" --status publish
+wp-api pages update 7 --title "About" --content-file ./about-v2.md
 wp-api products update 9 --content-file ./new-body.md
 ```
 
@@ -198,10 +232,11 @@ Content precedence:
 ```bash
 wp-api posts delete 42
 wp-api posts delete 42 --force
+wp-api pages delete 7
 wp-api products delete 9
 ```
 
-For content resources like `posts` and `products`, delete is soft delete by default. Use `--force` when the endpoint supports permanent deletion.
+For content resources like `posts`, `pages`, and `products`, delete is soft delete by default. Use `--force` when the endpoint supports permanent deletion.
 
 ## Categories
 
@@ -236,9 +271,97 @@ wp-api categories delete 15
 
 Category deletion is permanent by default because WordPress taxonomy endpoints do not support trashing.
 
+## Product Categories
+
+Product categories use the native `product_cat` taxonomy and share the same taxonomy-style fields as normal categories.
+
+### List and Get
+
+```bash
+wp-api product-categories list
+wp-api product-categories get 15 --json
+```
+
+### Create and Update
+
+```bash
+wp-api product-categories create --name Meters --slug meters --description "Product category"
+wp-api product-categories update 15 --name "Digital Meters" --parent 3
+```
+
+Supported product category flags:
+
+- `--name <text>`
+- `--slug <slug>`
+- `--description <text>`
+- `--parent <id>`
+
+### Delete
+
+```bash
+wp-api product-categories delete 15
+```
+
+Product category deletion is permanent by default because taxonomy endpoints do not support trashing.
+
+## SEO
+
+The `seo` command reads or updates Rank Math meta fields for an existing supported resource.
+
+Command shape:
+
+```bash
+wp-api seo <resource> <id>
+```
+
+Supported SEO fields:
+
+- `rank_math_title`
+- `rank_math_description`
+- `rank_math_focus_keyword`
+
+### Read SEO fields
+
+If no SEO flags are provided, the command fetches the current values.
+
+```bash
+wp-api seo posts 42
+wp-api seo pages 7
+wp-api seo product-categories 15 --json
+```
+
+### Update SEO fields
+
+If one or more SEO flags are provided, the command updates only those fields.
+
+```bash
+wp-api seo posts 42 \
+  --title "SEO Title" \
+  --description "SEO Description" \
+  --focus-keyword "focus keyword"
+```
+
+```bash
+wp-api seo categories 15 --description "Category SEO description"
+```
+
+Supported SEO flags:
+
+- `--title <text>` -> `rank_math_title`
+- `--description <text>` -> `rank_math_description`
+- `--focus-keyword <text>` -> `rank_math_focus_keyword`
+
 ## Output and Errors
 
 Default output is human-readable.
+
+For `list` commands, text output includes a pagination summary footer:
+
+```text
+Total 11, 6 pages, fetched 2 items, current page 2
+```
+
+When `--per-page -1` is used, the footer reports `current page all`.
 
 Use `--json` for script-friendly output:
 
@@ -258,6 +381,19 @@ Example:
 HTTP 401 rest_forbidden: Sorry, you are not allowed to do that.
 ```
 
+Network and TLS failures include request context and the underlying cause when available. Example:
+
+```text
+Request failed: GET https://example.com/wp-json/wp/v2/posts | Reason: fetch failed | Code: DEPTH_ZERO_SELF_SIGNED_CERT | Cause: self-signed certificate
+```
+
+If your local site uses a trusted local CA, you can often resolve certificate errors with:
+
+```powershell
+$env:NODE_OPTIONS='--use-system-ca'
+wp-api posts list
+```
+
 ## Development
 
 Run tests:
@@ -270,14 +406,18 @@ Current test coverage includes:
 
 - client persistence and active client switching
 - Application Password auth header generation
-- endpoint mapping for posts, categories, and products
+- endpoint mapping for posts, pages, categories, product categories, and products
+- automatic multi-page aggregation for `--per-page -1`
+- list footer output for pagination summaries
+- SEO read and update flows for post-type and taxonomy resources
 - CLI parsing and CRUD flows
 - stdin and file-based content input
-- WordPress error rendering
+- WordPress and network error rendering
 
 ## Notes and Limits
 
-- `products` is not WooCommerce. It is the native `/wp-json/wp/v2/products` route.
-- The CLI currently targets only `posts`, `products`, and `categories`.
+- `products` is not WooCommerce. It is the native `/wp-json/wp/v2/product` route.
+- Product categories use the native `/wp-json/wp/v2/product_cat` taxonomy route.
+- The CLI currently targets only `posts`, `pages`, `products`, `categories`, and `product-categories`, including through `seo`.
 - There is no interactive prompt mode yet.
 - Configuration is stored in plain local JSON. Protect the machine and user account accordingly.

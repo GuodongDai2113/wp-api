@@ -64,3 +64,77 @@ test("WordPressClient surfaces WordPress API errors with status and code", async
     }
   );
 });
+
+test("WordPressClient surfaces fetch errors with request context and cause details", async () => {
+  const fetchError = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("self-signed certificate"), {
+      code: "DEPTH_ZERO_SELF_SIGNED_CERT"
+    })
+  });
+
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async () => {
+      throw fetchError;
+    }
+  });
+
+  await assert.rejects(
+    () => client.get("posts", 42),
+    (error) => {
+      assert.equal(error.name, "WordPressNetworkError");
+      assert.match(error.message, /GET https:\/\/example\.com\/wp-json\/wp\/v2\/posts\/42/);
+      assert.match(error.message, /fetch failed/);
+      assert.match(error.message, /DEPTH_ZERO_SELF_SIGNED_CERT/);
+      assert.match(error.message, /self-signed certificate/);
+      return true;
+    }
+  );
+});
+
+test("WordPressClient list fetches all pages when per_page is -1", async () => {
+  const calls = [];
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url) => {
+      calls.push(url);
+
+      if (url === "https://example.com/wp-json/wp/v2/posts?per_page=100&page=1") {
+        return new Response(JSON.stringify([{ id: 1 }, { id: 2 }]), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-wp-total": "3",
+            "x-wp-totalpages": "2"
+          }
+        });
+      }
+
+      if (url === "https://example.com/wp-json/wp/v2/posts?per_page=100&page=2") {
+        return new Response(JSON.stringify([{ id: 3 }]), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-wp-total": "3",
+            "x-wp-totalpages": "2"
+          }
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    }
+  });
+
+  const result = await client.list("posts", { per_page: -1 });
+
+  assert.deepEqual(calls, [
+    "https://example.com/wp-json/wp/v2/posts?per_page=100&page=1",
+    "https://example.com/wp-json/wp/v2/posts?per_page=100&page=2"
+  ]);
+  assert.deepEqual(result.items, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+  assert.deepEqual(result.pagination, { total: 3, totalPages: 2 });
+});
