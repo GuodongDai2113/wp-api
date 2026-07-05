@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+import { runCli } from "../src/cli.js";
+import { readStdinText } from "../src/lib/stdin.js";
+
+const result = await runCli(process.argv.slice(2), {
+  stdinText: await readStdinText(process.stdin)
+});
+
+if (result.stdout) {
+  process.stdout.write(result.stdout);
+}
+
+if (result.stderr) {
+  process.stderr.write(result.stderr);
+}
+
+process.exitCode = result.exitCode;

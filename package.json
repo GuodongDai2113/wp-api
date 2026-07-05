@@ -1,0 +1,12 @@
+{
+  "name": "wp-api",
+  "version": "0.1.0",
+  "description": "CLI for managing remote WordPress content through the native REST API",
+  "type": "module",
+  "bin": {
+    "wp-api": "./bin/wp-api.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
