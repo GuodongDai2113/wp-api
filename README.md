@@ -117,6 +117,7 @@ Additional command group:
 
 ```bash
 seo <resource> <id>
+links add <post-id>
 ```
 
 Global flags can be placed before the resource command:
@@ -381,6 +382,33 @@ Supported SEO flags:
 - `--title <text>` -> `rank_math_title`
 - `--description <text>` -> `rank_math_description`
 - `--focus-keyword <text>` -> `rank_math_focus_keyword`
+
+## Links
+
+`links add` updates a single WordPress post by fetching its current content, replacing the first exact text match with an anchor tag, and writing the changed content back through the native posts endpoint.
+
+Command format:
+
+```bash
+wp-api links add <post-id> --text <text> --href <url>
+```
+
+Examples:
+
+```bash
+wp-api links add 42 --text "OpenAI" --href "https://openai.com"
+wp-api links add 42 --text "OpenAI" --href "https://openai.com" --json
+```
+
+Behavior:
+
+- Only `posts` are supported.
+- The command reads the post before updating it.
+- `content.raw` is used when available; otherwise `content.rendered` is used.
+- Matching is exact and case-sensitive.
+- Only the first exact match is considered.
+- If the first match is already inside an `<a>...</a>` element, no update is sent.
+- `--href` must be non-empty but is not normalized or scheme-restricted.
 
 ## Output and Errors
 

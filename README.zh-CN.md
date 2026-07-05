@@ -113,6 +113,7 @@ delete <id>
 
 ```bash
 seo <resource> <id>
+links add <post-id>
 ```
 
 全局参数可以写在资源命令前面：
@@ -375,6 +376,33 @@ wp-api seo product-categories 15 --description "Product category SEO description
 - `products`：自定义 post type 必须支持 `custom-fields`，否则 REST schema 不会包含 `meta`
 - `categories`、`product-categories`：需要对 term meta 做 REST 注册
 - 如果你使用本地 `jelly-seo` 插件，它可以提供这组字段的 REST 白名单
+
+## Links
+
+`links add` 用于更新单篇 WordPress 文章。命令会先读取文章当前正文，把第一处精确匹配的文本替换成 `a` 标签，然后通过原生 posts 端点写回正文。
+
+命令格式：
+
+```bash
+wp-api links add <post-id> --text <text> --href <url>
+```
+
+示例：
+
+```bash
+wp-api links add 42 --text "OpenAI" --href "https://openai.com"
+wp-api links add 42 --text "OpenAI" --href "https://openai.com" --json
+```
+
+行为：
+
+- 只支持 `posts`。
+- 必定先读取文章，再更新文章。
+- 优先使用 `content.raw`；没有时使用 `content.rendered`。
+- 匹配按用户输入原样执行，区分大小写。
+- 只考虑第一处精确匹配。
+- 如果第一处匹配已经在 `<a>...</a>` 内，不发送更新请求。
+- `--href` 必须非空，但第一版不做 URL 规范化或协议限制。
 
 ## 输出与错误
 
