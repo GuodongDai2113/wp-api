@@ -355,6 +355,11 @@ async function handleLinksCommand(args, store, options) {
     return fail("Post id is required.");
   }
 
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return fail("Post id must be a positive integer.");
+  }
+
   if (
     typeof args.options.text !== "string" ||
     args.options.text.length === 0 ||
@@ -364,7 +369,6 @@ async function handleLinksCommand(args, store, options) {
     return fail("Missing required flags: --text, --href");
   }
 
-  const id = Number(rawId);
   const client = await resolveClient(args, store, options);
   const entity = await client.get("posts", id);
   const result = addLinkToContent(extractPostContent(entity), {

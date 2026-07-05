@@ -35,6 +35,16 @@ async function withClient(callback) {
   }
 }
 
+async function withTempConfig(callback) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-links-cli-"));
+
+  try {
+    await callback(tempDir);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 test("links add requires a post id", async () => {
   await withClient(async (configDir) => {
     const result = await runCli(["links", "add", "--text", "Beta", "--href", "https://example.com/beta"], {
@@ -43,6 +53,48 @@ test("links add requires a post id", async () => {
 
     assert.equal(result.exitCode, 1);
     assert.equal(result.stderr, "Post id is required.\n");
+  });
+});
+
+test("links add rejects a nonnumeric post id before resolving a client", async () => {
+  await withTempConfig(async (configDir) => {
+    const calls = [];
+
+    const result = await runCli(["links", "add", "abc", "--text", "Beta", "--href", "https://example.com/beta"], {
+      configDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 42, content: { raw: "Alpha Beta" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stderr, "Post id must be a positive integer.\n");
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("links add rejects a non-positive post id before resolving a client", async () => {
+  await withTempConfig(async (configDir) => {
+    const calls = [];
+
+    const result = await runCli(["links", "add", "0", "--text", "Beta", "--href", "https://example.com/beta"], {
+      configDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 42, content: { raw: "Alpha Beta" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stderr, "Post id must be a positive integer.\n");
+    assert.equal(calls.length, 0);
   });
 });
 
