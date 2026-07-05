@@ -45,7 +45,7 @@ test("client add stores a client and client list returns it", async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
-test("client list text output no longer shows product type", async () => {
+test("client list text output shows only client names", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
 
   await runCli(
@@ -66,7 +66,8 @@ test("client list text output no longer shows product type", async () => {
   const listResult = await runCli(["client", "list"], { configDir: tempDir });
 
   assert.equal(listResult.exitCode, 0);
-  assert.match(listResult.stdout, /- prod https:\/\/example\.com/);
+  assert.match(listResult.stdout, /Active client: \(none\)/);
+  assert.match(listResult.stdout, /- prod/);
   assert.doesNotMatch(listResult.stdout, /\(products\)|\(catalog\)/);
 
   await rm(tempDir, { recursive: true, force: true });

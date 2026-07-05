@@ -132,7 +132,7 @@ async function handleClientCommand(args, store) {
       `Active client: ${payload.activeClient ?? "(none)"}`,
       ...clients.map((client) => {
         const marker = payload.activeClient === client.name ? "*" : "-";
-        return `${marker} ${client.name} ${client.siteUrl}`;
+        return `${marker} ${client.name}`;
       })
     ];
 

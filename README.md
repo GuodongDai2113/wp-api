@@ -2,37 +2,32 @@
 
 A small Node.js CLI for managing remote WordPress content through the native REST API.
 
+Chinese version: [README.zh-CN.md](./README.zh-CN.md)
+
 Current scope:
 
 - `posts`
 - `pages`
 - `products` mapped to the native `/wp/v2/product` endpoint
 - `categories`
+- `product-categories` mapped to the native `/wp/v2/product_cat` endpoint
 - local client management for multiple WordPress sites
 
 Authentication uses native WordPress Application Passwords.
+
+SEO updates use the standard WordPress REST `meta` payload on the target resource endpoint. No Rank Math private REST endpoint is required.
 
 ## Requirements
 
 - Node.js 20+
 - A WordPress site with REST API access
 - A WordPress user with an Application Password
+- For `seo` commands, the target resource must expose `rank_math_title`, `rank_math_description`, and `rank_math_focus_keyword` through REST `meta`
 
 ## Install
 
 ```bash
 npm install
-```
-
-Run commands directly with Node:
-
-```bash
-node ./bin/wp-api.js client list
-```
-
-Or link it as a local CLI:
-
-```bash
 npm link
 wp-api client list
 ```
@@ -61,6 +56,14 @@ wp-api client list
 wp-api client list --json
 ```
 
+Text output shows only the active marker and client name:
+
+```text
+Active client: prod
+* prod
+- staging
+```
+
 ## Clients
 
 Clients are stored locally in:
@@ -69,7 +72,7 @@ Clients are stored locally in:
 ~/.wp-api/config.json
 ```
 
-Each client contains:
+Saved client fields:
 
 - `name`
 - `siteUrl`
@@ -86,7 +89,7 @@ wp-api client use <name>
 wp-api client remove <name>
 ```
 
-`wp-api client` without a subcommand returns the currently active client.
+`wp-api client` without a subcommand returns the currently active client name in text mode, or the full client object with `--json`.
 
 ## Resource Commands
 
@@ -193,7 +196,6 @@ wp-api pages create \
 wp-api products create \
   --title "Widget A" \
   --status publish \
-  --categories 3,8 \
   --content-file ./product.md
 ```
 
@@ -213,13 +215,17 @@ wp-api products update 9 --content-file ./new-body.md
 
 Supported content flags:
 
-- `--title <text>`
-- `--slug <slug>`
-- `--status <status>`
-- `--excerpt <text>`
-- `--content <text>`
-- `--content-file <path>`
-- `--categories <id,id,...>`
+- Shared content flags:
+  - `--title <text>`
+  - `--slug <slug>`
+  - `--status <status>`
+  - `--excerpt <text>`
+  - `--content <text>`
+  - `--content-file <path>`
+- Post-oriented taxonomy flag:
+  - `--categories <id,id,...>`
+
+`products` currently use the native `product` REST endpoint, but there is no dedicated CLI flag yet for assigning `product_cat` terms directly on product create/update.
 
 Content precedence:
 
@@ -306,7 +312,7 @@ Product category deletion is permanent by default because taxonomy endpoints do 
 
 ## SEO
 
-The `seo` command reads or updates Rank Math meta fields for an existing supported resource.
+The `seo` command reads or updates Rank Math meta fields for an existing supported resource through the same native WordPress REST endpoint used by that resource.
 
 Command shape:
 
@@ -320,6 +326,21 @@ Supported SEO fields:
 - `rank_math_description`
 - `rank_math_focus_keyword`
 
+Supported SEO resources:
+
+- `posts`
+- `pages`
+- `products`
+- `categories`
+- `product-categories`
+
+REST requirements:
+
+- `posts` and `pages` usually work once the `rank_math_*` meta keys are exposed through REST
+- `products` must support `custom-fields` in its post type registration, otherwise WordPress will omit `meta` from the REST schema
+- taxonomy resources such as `categories` and `product-categories` must expose the same `rank_math_*` keys through term meta REST registration
+- if you use the local `jelly-seo` plugin, it can provide the REST whitelist for these keys
+
 ### Read SEO fields
 
 If no SEO flags are provided, the command fetches the current values.
@@ -327,6 +348,8 @@ If no SEO flags are provided, the command fetches the current values.
 ```bash
 wp-api seo posts 42
 wp-api seo pages 7
+wp-api seo products 9
+wp-api seo categories 15
 wp-api seo product-categories 15 --json
 ```
 
@@ -342,7 +365,15 @@ wp-api seo posts 42 \
 ```
 
 ```bash
+wp-api seo products 9 \
+  --title "Product SEO Title" \
+  --description "Product SEO Description" \
+  --focus-keyword "product keyword"
+```
+
+```bash
 wp-api seo categories 15 --description "Category SEO description"
+wp-api seo product-categories 15 --description "Product category SEO description"
 ```
 
 Supported SEO flags:
@@ -402,7 +433,7 @@ Run tests:
 npm test
 ```
 
-Current test coverage includes:
+Current automated coverage includes:
 
 - client persistence and active client switching
 - Application Password auth header generation
@@ -419,5 +450,8 @@ Current test coverage includes:
 - `products` is not WooCommerce. It is the native `/wp-json/wp/v2/product` route.
 - Product categories use the native `/wp-json/wp/v2/product_cat` taxonomy route.
 - The CLI currently targets only `posts`, `pages`, `products`, `categories`, and `product-categories`, including through `seo`.
+- `seo` depends on REST meta exposure. If a resource returns no `meta.rank_math_*` fields, fix the WordPress side first.
+- For custom post types like `product`, enabling `custom-fields` support is required for REST `meta` schema support.
+- On local HTTPS sites with a self-signed certificate, either trust the local CA and use `NODE_OPTIONS=--use-system-ca`, or temporarily use `--site-url http://...` for local verification.
 - There is no interactive prompt mode yet.
 - Configuration is stored in plain local JSON. Protect the machine and user account accordingly.
