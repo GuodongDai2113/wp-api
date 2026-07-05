@@ -1,5 +1,6 @@
 import { ConfigStore } from "./lib/config-store.js";
 import { resolveContentInput } from "./lib/content-input.js";
+import { addLinkToContent, extractPostContent } from "./lib/links.js";
 import { getResourceConfig, buildListQuery, buildResourceBody } from "./lib/resources.js";
 import { WordPressApiError, WordPressClient } from "./lib/wp-client.js";
 
@@ -193,6 +194,31 @@ function renderSeoPayload(payload, { updated = false } = {}) {
   ].join("\n") + "\n";
 }
 
+function buildLinksPayload({ id, text, href, result }) {
+  return {
+    id,
+    resource: "posts",
+    action: "links.add",
+    updated: result.updated,
+    status: result.status,
+    text,
+    href,
+    replacements: result.replacements
+  };
+}
+
+function renderLinksPayload(payload) {
+  if (payload.status === "updated") {
+    return `Link added to post ${payload.id}: ${payload.text} -> ${payload.href}\n`;
+  }
+
+  if (payload.status === "skipped_existing_link") {
+    return `Matching text is already inside a link in post ${payload.id}: ${payload.text}\n`;
+  }
+
+  return `No matching text found in post ${payload.id}: ${payload.text}\n`;
+}
+
 function buildSeoMeta(options) {
   const entries = Object.entries({
     rank_math_title: options.title,
@@ -318,6 +344,45 @@ async function handleSeoCommand(args, store, options) {
     : ok(renderSeoPayload(payload, { updated: isUpdate }), payload);
 }
 
+async function handleLinksCommand(args, store, options) {
+  const [subcommand, rawId] = args.positionals;
+
+  if (subcommand !== "add") {
+    return fail(`Unknown links subcommand: ${subcommand ?? "(missing)"}`);
+  }
+
+  if (!rawId) {
+    return fail("Post id is required.");
+  }
+
+  if (!args.options.text || !args.options.href) {
+    return fail("Missing required flags: --text, --href");
+  }
+
+  const id = Number(rawId);
+  const client = await resolveClient(args, store, options);
+  const entity = await client.get("posts", id);
+  const result = addLinkToContent(extractPostContent(entity), {
+    text: args.options.text,
+    href: args.options.href
+  });
+
+  if (result.updated) {
+    await client.update("posts", id, { content: result.content });
+  }
+
+  const payload = buildLinksPayload({
+    id,
+    text: args.options.text,
+    href: args.options.href,
+    result
+  });
+
+  return args.options.json
+    ? ok(renderJson(payload), payload)
+    : ok(renderLinksPayload(payload), payload);
+}
+
 export async function runCli(argv, options = {}) {
   const { command, args: parsed } = parseCommandLine(argv);
   const store = new ConfigStore({ configDir: options.configDir });
@@ -329,6 +394,10 @@ export async function runCli(argv, options = {}) {
 
     if (command === "seo") {
       return await handleSeoCommand(parsed, store, options);
+    }
+
+    if (command === "links") {
+      return await handleLinksCommand(parsed, store, options);
     }
 
     if (["posts", "pages", "products", "categories", "product-categories"].includes(command)) {
