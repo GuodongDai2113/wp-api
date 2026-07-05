@@ -62,6 +62,48 @@ test("links add requires text and href", async () => {
   });
 });
 
+test("links add rejects a value-less text flag", async () => {
+  await withClient(async (configDir) => {
+    const calls = [];
+
+    const result = await runCli(["links", "add", "42", "--text", "--href", "https://example.com/beta"], {
+      configDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 42, content: { raw: "Alpha Beta" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stderr, "Missing required flags: --text, --href\n");
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("links add rejects a value-less href flag", async () => {
+  await withClient(async (configDir) => {
+    const calls = [];
+
+    const result = await runCli(["links", "add", "42", "--text", "Beta", "--href"], {
+      configDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 42, content: { raw: "Alpha Beta" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stderr, "Missing required flags: --text, --href\n");
+    assert.equal(calls.length, 0);
+  });
+});
+
 test("links command requires the add subcommand", async () => {
   await withClient(async (configDir) => {
     const missing = await runCli(["links"], { configDir });

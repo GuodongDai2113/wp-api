@@ -355,7 +355,12 @@ async function handleLinksCommand(args, store, options) {
     return fail("Post id is required.");
   }
 
-  if (!args.options.text || !args.options.href) {
+  if (
+    typeof args.options.text !== "string" ||
+    args.options.text.length === 0 ||
+    typeof args.options.href !== "string" ||
+    args.options.href.length === 0
+  ) {
     return fail("Missing required flags: --text, --href");
   }
 
