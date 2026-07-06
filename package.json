@@ -1,6 +1,6 @@
 {
   "name": "wp-api",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "JellyDai",
   "description": "CLI for managing remote WordPress content through the native REST API",
   "type": "module",
