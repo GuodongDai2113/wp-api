@@ -461,6 +461,14 @@ Run tests:
 npm test
 ```
 
+Build compiled runtime files:
+
+```bash
+npm run build
+```
+
+Source files live under `src/**/*.ts`. Runtime entrypoints in `bin/` load compiled JavaScript from `dist/`.
+
 Current automated coverage includes:
 
 - client persistence and active client switching

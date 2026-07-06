@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
-import { runCli } from "../src/cli.js";
+import { runCli } from "../dist/cli.js";
 
 test("client add stores a client and client list returns it", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));

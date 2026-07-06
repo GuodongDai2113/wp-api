@@ -5,9 +5,20 @@
   "description": "CLI for managing remote WordPress content through the native REST API",
   "type": "module",
   "bin": {
-    "wp-api": "./bin/wp-api.js"
+    "wp-api": "./bin/wp-api.js",
+    "wp-api-mcp": "./bin/wp-api-mcp.js"
   },
   "scripts": {
-    "test": "node --test"
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test",
+    "test:unit": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3"
   }
 }

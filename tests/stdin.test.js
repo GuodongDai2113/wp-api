@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 
-import { readStdinText } from "../src/lib/stdin.js";
+import { readStdinText } from "../dist/lib/stdin.js";
 
 test("readStdinText returns undefined for tty-like stdin", async () => {
   const stream = new Readable({ read() {} });

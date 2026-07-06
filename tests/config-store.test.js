@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 
-import { ConfigStore } from "../src/lib/config-store.js";
+import { ConfigStore } from "../dist/lib/config-store.js";
 
 test("ConfigStore persists clients and active client selection", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));

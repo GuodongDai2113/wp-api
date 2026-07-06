@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { runCli } from "../src/cli.js";
-import { readStdinText } from "../src/lib/stdin.js";
+import { runCli } from "../dist/cli.js";
+import { readStdinText } from "../dist/lib/stdin.js";
 
 const result = await runCli(process.argv.slice(2), {
   stdinText: await readStdinText(process.stdin)

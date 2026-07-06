@@ -457,6 +457,14 @@ wp-api posts list
 npm test
 ```
 
+构建运行时 JavaScript 文件：
+
+```bash
+npm run build
+```
+
+源码位于 `src/**/*.ts`。`bin/` 下的运行入口会加载 `dist/` 中编译后的 JavaScript。
+
 当前测试覆盖包括：
 
 - client 持久化与切换

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { WordPressClient, WordPressApiError } from "../src/lib/wp-client.js";
+import { WordPressClient, WordPressApiError } from "../dist/lib/wp-client.js";
 
 test("WordPressClient sends Application Password auth and preserves pagination headers", async () => {
   const calls = [];

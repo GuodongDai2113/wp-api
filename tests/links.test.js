@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { addLinkToContent, extractPostContent } from "../src/lib/links.js";
+import { addLinkToContent, extractPostContent } from "../dist/lib/links.js";
 
 test("extractPostContent prefers raw content over rendered content", () => {
   assert.equal(
