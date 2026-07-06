@@ -21,6 +21,8 @@ const resourceBodyShape = {
     excerpt: z.string().optional().describe("Post, page, or product excerpt."),
     content: z.string().optional().describe("Post, page, or product body content."),
     contentFile: z.string().optional().describe("Local content file path readable by the MCP server process."),
+    // 是否在上传前把解析出的 HTML 正文转换为 Gutenberg 区块标记。
+    gutenberg: z.boolean().optional().describe("Convert resolved HTML content to WordPress Gutenberg block markup before upload."),
     categories: z.array(z.number()).optional().describe("Post category IDs."),
     name: z.string().optional().describe("Taxonomy term name."),
     description: z.string().optional().describe("Taxonomy term description."),

@@ -56,6 +56,27 @@ test("wp_resource_create maps content fields to existing CLI shape", async () =>
   );
 });
 
+test("wp_resource_create maps gutenberg flag to CLI option", async () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_resource_create", {
+      resource: "posts",
+      title: "Hello",
+      contentFile: "./article.html",
+      gutenberg: true
+    }),
+    [
+      "posts",
+      "create",
+      "--json",
+      "--title",
+      "Hello",
+      "--content-file",
+      "./article.html",
+      "--gutenberg"
+    ]
+  );
+});
+
 test("executeWpApiTool returns structured data from runCli", async () => {
   const result = await executeWpApiTool("wp_client_list", {}, {
     runCliImpl: async () => ({

@@ -119,6 +119,9 @@ function appendResourceBodyArgs(args, input) {
     appendOption(args, "--excerpt", readOptionalString(input, "excerpt"));
     appendOption(args, "--content", readOptionalString(input, "content"));
     appendOption(args, "--content-file", readOptionalString(input, "contentFile"));
+    if (readOptionalBoolean(input, "gutenberg")) {
+        args.push("--gutenberg");
+    }
     appendOption(args, "--categories", readOptionalNumberCsv(input, "categories"));
     appendOption(args, "--name", readOptionalString(input, "name"));
     appendOption(args, "--description", readOptionalString(input, "description"));
