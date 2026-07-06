@@ -193,6 +193,15 @@ wp-api pages create \
   --content-file ./about.md
 ```
 
+Create from a local HTML file and convert it to Gutenberg blocks before upload:
+
+```bash
+wp-api posts create \
+  --title "HTML Article" \
+  --content-file ./article.html \
+  --gutenberg
+```
+
 ```bash
 wp-api products create \
   --title "Widget A" \
@@ -223,6 +232,7 @@ Supported content flags:
   - `--excerpt <text>`
   - `--content <text>`
   - `--content-file <path>`
+  - `--gutenberg`
 - Post-oriented taxonomy flag:
   - `--categories <id,id,...>`
 
@@ -233,6 +243,10 @@ Content precedence:
 1. `--content`
 2. `--content-file`
 3. stdin
+
+`--gutenberg` is opt-in. When present, the final resolved content from `--content`, `--content-file`, or stdin is converted from HTML to WordPress Gutenberg block markup before the create or update request is sent. Without `--gutenberg`, content is submitted unchanged.
+
+MCP `wp_resource_create` and `wp_resource_update` accept the same behavior with `gutenberg: true`.
 
 ### Delete
 
@@ -479,6 +493,7 @@ Current automated coverage includes:
 - SEO read and update flows for post-type and taxonomy resources
 - CLI parsing and CRUD flows
 - stdin and file-based content input
+- opt-in Gutenberg conversion for resolved content input
 - WordPress and network error rendering
 
 ## Notes and Limits

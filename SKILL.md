@@ -182,6 +182,7 @@ Shared content flags:
 - `--excerpt <text>`
 - `--content <text>`
 - `--content-file <path>`
+- `--gutenberg`
 
 Additional post taxonomy flag:
 
@@ -203,6 +204,13 @@ wp-api pages update 7 \
 ```
 
 ```bash
+wp-api posts create \
+  --title "HTML Article" \
+  --content-file ./article.html \
+  --gutenberg
+```
+
+```bash
 echo "Long body content" | wp-api products create \
   --title "Widget A" \
   --status publish
@@ -215,6 +223,10 @@ Content precedence is fixed:
 3. stdin
 
 If multiple content sources are present, the earlier source wins.
+
+Use `--gutenberg` only when the caller explicitly wants resolved HTML converted into WordPress Gutenberg block markup before upload. The conversion applies after content precedence is resolved, so it works with `--content`, `--content-file`, and stdin. Without `--gutenberg`, submit content unchanged.
+
+For MCP tools, `wp_resource_create` and `wp_resource_update` expose the same behavior as `gutenberg: true`.
 
 ## Creating and Updating Taxonomy Resources
 
