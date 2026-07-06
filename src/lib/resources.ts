@@ -26,6 +26,12 @@ export type ResourceBody = Record<string, string | number | boolean | number[] |
 /** 资源列表查询提交给 WordPress REST API 的查询参数。 */
 export type ListQuery = Record<string, string | number | boolean | undefined>;
 
+/** 构造资源请求体时可选的内容后处理配置。 */
+export interface BuildResourceBodyOptions {
+  /** 在正文来源解析完成后对正文内容执行的转换函数。 */
+  transformContent?: (content: string) => string;
+}
+
 /** 根据 wp-api 资源名称返回对应的 WordPress REST 路由和行为配置。 */
 export function getResourceConfig(resourceName: string, client?: unknown): ResourceConfig {
   if (resourceName === "posts") {
@@ -84,7 +90,8 @@ function splitCsv(value: string | boolean): number[] {
 export async function buildResourceBody(
   kind: ResourceKind,
   options: ResourceOptions,
-  resolveContent: () => Promise<string | undefined>
+  resolveContent: () => Promise<string | undefined>,
+  bodyOptions: BuildResourceBodyOptions = {}
 ): Promise<ResourceBody> {
   if (kind === "taxonomy") {
     return compactObject({
@@ -95,12 +102,14 @@ export async function buildResourceBody(
     });
   }
 
+  const content = await resolveContent();
+
   return compactObject({
     title: options.title,
     slug: options.slug,
     status: options.status,
     excerpt: options.excerpt,
-    content: await resolveContent(),
+    content: content === undefined ? undefined : bodyOptions.transformContent?.(content) ?? content,
     categories: options.categories ? splitCsv(options.categories) : undefined
   });
 }

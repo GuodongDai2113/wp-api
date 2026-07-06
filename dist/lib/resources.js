@@ -46,7 +46,7 @@ function splitCsv(value) {
         .map((entry) => Number(entry));
 }
 /** 根据资源类型和 CLI 选项构造 WordPress REST 请求体。 */
-export async function buildResourceBody(kind, options, resolveContent) {
+export async function buildResourceBody(kind, options, resolveContent, bodyOptions = {}) {
     if (kind === "taxonomy") {
         return compactObject({
             name: options.name,
@@ -55,12 +55,13 @@ export async function buildResourceBody(kind, options, resolveContent) {
             parent: options.parent === undefined ? undefined : Number(options.parent)
         });
     }
+    const content = await resolveContent();
     return compactObject({
         title: options.title,
         slug: options.slug,
         status: options.status,
         excerpt: options.excerpt,
-        content: await resolveContent(),
+        content: content === undefined ? undefined : bodyOptions.transformContent?.(content) ?? content,
         categories: options.categories ? splitCsv(options.categories) : undefined
     });
 }

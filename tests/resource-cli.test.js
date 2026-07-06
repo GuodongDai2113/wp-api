@@ -226,6 +226,86 @@ test("pages create uses content fields and the native pages endpoint", async () 
   await rm(tempDir, { recursive: true, force: true });
 });
 
+test("posts create converts inline content to Gutenberg when --gutenberg is set", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const result = await runCli(
+    ["posts", "create", "--title", "Converted", "--content", "<h2>Hello</h2><p>Body</p>", "--gutenberg", "--json"],
+    {
+      configDir: tempDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 42, title: { rendered: "Converted" } }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  const body = JSON.parse(calls[0].init.body);
+  assert.match(body.content, /<!-- wp:heading \{"level":2\} -->/);
+  assert.match(body.content, /<h2 class="wp-block-heading">Hello<\/h2>/);
+  assert.match(body.content, /<!-- wp:paragraph -->\n<p>Body<\/p>\n<!-- \/wp:paragraph -->/);
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("posts create converts content file to Gutenberg when --gutenberg is set", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
+  const contentPath = path.join(tempDir, "article.html");
+  const calls = [];
+  await createClient(tempDir);
+  await import("node:fs/promises").then(({ writeFile }) => writeFile(contentPath, "<p>From file</p>", "utf8"));
+
+  const result = await runCli(
+    ["posts", "create", "--title", "File", "--content-file", contentPath, "--gutenberg", "--json"],
+    {
+      configDir: tempDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 43, title: { rendered: "File" } }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(calls[0].init.body).content, "<!-- wp:paragraph -->\n<p>From file</p>\n<!-- /wp:paragraph -->");
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("posts create leaves HTML content unchanged when --gutenberg is absent", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const result = await runCli(
+    ["posts", "create", "--title", "Raw", "--content", "<p>Raw body</p>", "--json"],
+    {
+      configDir: tempDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({ id: 44, title: { rendered: "Raw" } }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(calls[0].init.body).content, "<p>Raw body</p>");
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
 test("pages delete uses soft delete by default", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
   const calls = [];

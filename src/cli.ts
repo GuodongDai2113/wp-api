@@ -1,5 +1,6 @@
 import { ConfigStore, type StoredClient } from "./lib/config-store.js";
 import { resolveContentInput } from "./lib/content-input.js";
+import { convertHtmlToGutenberg } from "./lib/html-to-gutenberg.js";
 import { addLinkToContent, extractPostContent, type AddLinkResult } from "./lib/links.js";
 import { getResourceConfig, buildListQuery, buildResourceBody } from "./lib/resources.js";
 import { WordPressApiError, WordPressClient } from "./lib/wp-client.js";
@@ -163,7 +164,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 /** 解析完整命令行，把顶层命令前的选项视为全局选项。 */
 function parseCommandLine(argv: string[]): ParsedCommandLine {
-  const booleanOptions = new Set(["json", "verbose", "force"]);
+  const booleanOptions = new Set(["json", "verbose", "force", "gutenberg"]);
   const commandTokens: string[] = [];
   const localTokens: string[] = [];
   let command: string | undefined;
@@ -416,6 +417,9 @@ async function handleResourceCommand(command: string, args: ParsedArgs, store: C
   const selectedClient: StoredClient | null = await store.getResolvedClient(args.options.client);
   const config = getResourceConfig(command, selectedClient);
   const [subcommand, rawId] = args.positionals;
+  const bodyOptions = {
+    transformContent: args.options.gutenberg ? convertHtmlToGutenberg : undefined
+  };
 
   if (subcommand === "list") {
     const payload = await client.list<RenderableEntity>(config.route, buildListQuery(args.options));
@@ -435,24 +439,30 @@ async function handleResourceCommand(command: string, args: ParsedArgs, store: C
   }
 
   if (subcommand === "create") {
-    const body = await buildResourceBody(config.kind, args.options, () =>
-      resolveContentInput({
+    const body = await buildResourceBody(
+      config.kind,
+      args.options,
+      () => resolveContentInput({
         content: optionString(args.options.content),
         contentFile: optionString(args.options["content-file"]),
         stdinText: options.stdinText
-      })
+      }),
+      bodyOptions
     );
     const entity = await client.create<RenderableEntity>(config.route, body);
     return args.options.json ? ok(renderJson(entity), entity) : ok(renderEntity(command, entity), entity);
   }
 
   if (subcommand === "update") {
-    const body = await buildResourceBody(config.kind, args.options, () =>
-      resolveContentInput({
+    const body = await buildResourceBody(
+      config.kind,
+      args.options,
+      () => resolveContentInput({
         content: optionString(args.options.content),
         contentFile: optionString(args.options["content-file"]),
         stdinText: options.stdinText
-      })
+      }),
+      bodyOptions
     );
     const entity = await client.update<RenderableEntity>(config.route, Number(rawId), body);
     return args.options.json ? ok(renderJson(entity), entity) : ok(renderEntity(command, entity), entity);

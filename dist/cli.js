@@ -1,5 +1,6 @@
 import { ConfigStore } from "./lib/config-store.js";
 import { resolveContentInput } from "./lib/content-input.js";
+import { convertHtmlToGutenberg } from "./lib/html-to-gutenberg.js";
 import { addLinkToContent, extractPostContent } from "./lib/links.js";
 import { getResourceConfig, buildListQuery, buildResourceBody } from "./lib/resources.js";
 import { WordPressApiError, WordPressClient } from "./lib/wp-client.js";
@@ -26,7 +27,7 @@ function parseArgs(argv) {
 }
 /** 解析完整命令行，把顶层命令前的选项视为全局选项。 */
 function parseCommandLine(argv) {
-    const booleanOptions = new Set(["json", "verbose", "force"]);
+    const booleanOptions = new Set(["json", "verbose", "force", "gutenberg"]);
     const commandTokens = [];
     const localTokens = [];
     let command;
@@ -239,6 +240,9 @@ async function handleResourceCommand(command, args, store, options) {
     const selectedClient = await store.getResolvedClient(args.options.client);
     const config = getResourceConfig(command, selectedClient);
     const [subcommand, rawId] = args.positionals;
+    const bodyOptions = {
+        transformContent: args.options.gutenberg ? convertHtmlToGutenberg : undefined
+    };
     if (subcommand === "list") {
         const payload = await client.list(config.route, buildListQuery(args.options));
         const currentPage = Number(args.options["per-page"]) === -1
@@ -259,7 +263,7 @@ async function handleResourceCommand(command, args, store, options) {
             content: optionString(args.options.content),
             contentFile: optionString(args.options["content-file"]),
             stdinText: options.stdinText
-        }));
+        }), bodyOptions);
         const entity = await client.create(config.route, body);
         return args.options.json ? ok(renderJson(entity), entity) : ok(renderEntity(command, entity), entity);
     }
@@ -268,7 +272,7 @@ async function handleResourceCommand(command, args, store, options) {
             content: optionString(args.options.content),
             contentFile: optionString(args.options["content-file"]),
             stdinText: options.stdinText
-        }));
+        }), bodyOptions);
         const entity = await client.update(config.route, Number(rawId), body);
         return args.options.json ? ok(renderJson(entity), entity) : ok(renderEntity(command, entity), entity);
     }
