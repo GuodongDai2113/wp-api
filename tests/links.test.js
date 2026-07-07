@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { addLinkToContent, extractPostContent } from "../dist/lib/links.js";
+import { addLinkToContent, extractPostContent } from "../build/lib/links.js";
 
 test("extractPostContent prefers raw content over rendered content", () => {
   assert.equal(
@@ -82,3 +82,4 @@ test("addLinkToContent escapes href and anchor text", () => {
     content: 'Use <a href="https://example.com/?q=&quot;A&amp;B&quot;">A&amp;B</a>'
   });
 });
+

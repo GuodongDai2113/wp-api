@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCliArgsForTool, executeWpApiTool } from "../dist/mcp/wp-api-tools.js";
+import { buildCliArgsForTool, executeWpApiTool } from "../build/mcp/wp-api-tools.js";
 
 test("wp_resource_list maps MCP input to JSON CLI arguments", async () => {
   assert.deepEqual(
@@ -89,3 +89,4 @@ test("executeWpApiTool returns structured data from runCli", async () => {
 
   assert.deepEqual(result, { activeClient: null, clients: [] });
 });
+

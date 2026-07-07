@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { convertHtmlToGutenberg } from "../dist/lib/html-to-gutenberg.js";
+import { convertHtmlToGutenberg } from "../build/lib/html-to-gutenberg.js";
 
 test("convertHtmlToGutenberg converts common article HTML into Gutenberg blocks", () => {
   const result = convertHtmlToGutenberg("<h2>Title</h2><p>Body</p><ul><li>One</li></ul>");
@@ -24,3 +24,4 @@ test("convertHtmlToGutenberg strips full document shell and unsafe non-content b
 
   assert.equal(result, "<!-- wp:paragraph -->\n<p>Only body</p>\n<!-- /wp:paragraph -->");
 });
+

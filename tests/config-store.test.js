@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 
-import { ConfigStore } from "../dist/lib/config-store.js";
+import { ConfigStore } from "../build/lib/config-store.js";
 
 test("ConfigStore persists clients and active client selection", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
@@ -112,3 +112,4 @@ test("ConfigStore migrates legacy profile keys to client keys when re-saving", a
 
   await rm(tempDir, { recursive: true, force: true });
 });
+

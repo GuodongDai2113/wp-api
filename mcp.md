@@ -11,7 +11,7 @@
   "mcpServers": {
     "wp-api": {
       "command": "node",
-      "args": ["bin/wp-api-mcp.js"]
+      "args": ["build/bin/wp-api-mcp.js"]
     }
   }
 }
@@ -24,7 +24,7 @@
   "mcpServers": {
     "wp-api": {
       "command": "npx",
-      "args": ["-y", "tsx", "bin/wp-api-mcp.js"]
+      "args": ["-y", "tsx", "build/bin/wp-api-mcp.js"]
     }
   }
 }
@@ -51,7 +51,7 @@
   "mcpServers": {
     "wp-api": {
       "command": "node",
-      "args": ["J:\\project\\wp-api\\bin\\wp-api-mcp.js"]
+      "args": ["J:\\project\\wp-api\\build\\bin\\wp-api-mcp.js"]
     }
   }
 }

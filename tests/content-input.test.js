@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 
-import { resolveContentInput } from "../dist/lib/content-input.js";
+import { resolveContentInput } from "../build/lib/content-input.js";
 
 test("resolveContentInput prefers explicit --content over file or stdin", async () => {
   const value = await resolveContentInput({
@@ -32,3 +32,4 @@ test("resolveContentInput falls back to stdin text", async () => {
   const value = await resolveContentInput({ stdinText: "from stdin" });
   assert.equal(value, "from stdin");
 });
+

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
-import { runCli } from "../dist/cli.js";
+import { runCli } from "../build/cli.js";
 
 test("client add stores a client and client list returns it", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
@@ -149,3 +149,4 @@ test("client without subcommand returns the active client", async () => {
 
   await rm(tempDir, { recursive: true, force: true });
 });
+

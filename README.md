@@ -481,7 +481,7 @@ Build compiled runtime files:
 npm run build
 ```
 
-Source files live under `src/**/*.ts`. Runtime entrypoints in `bin/` load compiled JavaScript from `dist/`.
+Source files live under `src/**/*.ts`. Runtime entrypoints in `build/bin/` are compiled from TypeScript together with the rest of the library.
 
 Current automated coverage includes:
 

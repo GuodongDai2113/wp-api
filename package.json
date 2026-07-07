@@ -5,11 +5,12 @@
   "description": "CLI for managing remote WordPress content through the native REST API",
   "type": "module",
   "bin": {
-    "wp-api": "./bin/wp-api.js",
-    "wp-api-mcp": "./bin/wp-api-mcp.js"
+    "wp-api": "./build/bin/wp-api.js",
+    "wp-api-mcp": "./build/bin/wp-api-mcp.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"fs.rmSync('build',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "test": "npm run build && node --test",
     "test:unit": "node --test"
   },
@@ -18,7 +19,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/node": "^22.20.0",
+    "@types/node": "^24.0.10",
     "typescript": "^5.8.3"
   }
 }

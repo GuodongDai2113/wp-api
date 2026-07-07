@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
-import { runCli } from "../dist/cli.js";
+import { runCli } from "../build/cli.js";
 
 async function createClient(configDir) {
   await runCli(
@@ -814,3 +814,4 @@ test("seo update writes rank math fields through the WordPress taxonomy endpoint
 
   await rm(tempDir, { recursive: true, force: true });
 });
+

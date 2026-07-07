@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
-import { runCli } from "../dist/cli.js";
+import { runCli } from "../build/cli.js";
 
 async function createClient(configDir) {
   await runCli(
@@ -349,3 +349,4 @@ test("links add does not update when first match is already inside a link", asyn
     assert.equal(result.data.updated, false);
   });
 });
+
