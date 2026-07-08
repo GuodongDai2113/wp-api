@@ -11,6 +11,7 @@ English version: [README.md](./README.md)
 - `products`，映射到原生 `/wp/v2/product`
 - `categories`
 - `product-categories`，映射到原生 `/wp/v2/product_cat`
+- `media` 上传，映射到原生 `/wp/v2/media`
 - 多站点本地 client 管理
 
 认证方式使用原生 WordPress Application Password。
@@ -114,6 +115,7 @@ delete <id>
 ```bash
 seo <resource> <id>
 links add <post-id>
+media upload
 ```
 
 全局参数可以写在资源命令前面：
@@ -418,6 +420,33 @@ wp-api links add 42 --text "OpenAI" --href "https://openai.com" --json
 - 如果第一处匹配已经在 `<a>...</a>` 内，不发送更新请求。
 - `--href` 必须非空，但第一版不做 URL 规范化或协议限制。
 
+## Media
+
+`media upload` 用于把本地图片文件上传到 WordPress 媒体库。命令通过原生 `/wp/v2/media` 接口发送文件字节，并可在上传后写入媒体元数据。
+
+命令格式：
+
+```bash
+wp-api media upload --file <local-path>
+```
+
+示例：
+
+```bash
+wp-api media upload --file ./hero.png --title "Hero image" --alt "Hero image"
+wp-api media upload --file ./hero.png --caption "Homepage hero" --description "Uploaded from wp-api" --json
+```
+
+支持参数：
+
+- `--file <path>`：必填，本地图片路径
+- `--title <text>`：媒体标题
+- `--alt <text>`：替代文本，对应 WordPress `alt_text`
+- `--caption <text>`：说明文字
+- `--description <text>`：媒体描述
+
+MCP 的 `wp_media_upload` 提供同样能力，输入字段为 `filePath`、`title`、`altText`、`caption`、`description`。`filePath` 必须是 MCP server 进程能读取到的本地路径。
+
 ## 输出与错误
 
 默认输出为可读文本。
@@ -490,13 +519,14 @@ npm run build
 - CLI 解析与 CRUD 流程
 - stdin / 文件输入
 - 对解析后正文显式开启的古腾堡转换
+- 本地图片上传到 WordPress 媒体库
 - WordPress 与网络错误输出
 
 ## 说明与限制
 
 - `products` 不是 WooCommerce 端点，而是原生 `/wp-json/wp/v2/product`
 - `product-categories` 使用原生 `/wp-json/wp/v2/product_cat`
-- CLI 当前只支持 `posts`、`pages`、`products`、`categories`、`product-categories`，`seo` 也只支持这些资源
+- CLI 当前支持 `posts`、`pages`、`products`、`categories`、`product-categories` 和 `media upload`，`seo` 只支持内容和分类资源
 - `seo` 是否可用，取决于目标资源是否正确暴露 REST `meta`
 - 对 `product` 这类自定义 post type，必须启用 `custom-fields` 支持
 - 如果本地 HTTPS 使用自签名证书，可以信任本地 CA 后配合 `NODE_OPTIONS=--use-system-ca`，或者本地验证时临时改用 `--site-url http://...`

@@ -44,6 +44,25 @@
 }
 ```
 
+## 可用工具
+
+常用工具包括：
+
+- `wp_client_list`
+- `wp_client_add`
+- `wp_client_use`
+- `wp_resource_list`
+- `wp_resource_get`
+- `wp_resource_create`
+- `wp_resource_update`
+- `wp_resource_delete`
+- `wp_seo_get`
+- `wp_seo_update`
+- `wp_post_link_add`
+- `wp_media_upload`
+
+`wp_media_upload` 使用本地路径上传图片到 WordPress 媒体库。`filePath` 必须是 MCP server 进程可以读取的路径，可选字段包括 `title`、`altText`、`caption`、`description`。
+
 使用绝对路径指定项目内编译产物：
 
 ```json

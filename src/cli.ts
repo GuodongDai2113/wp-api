@@ -3,7 +3,7 @@ import { resolveContentInput } from "./lib/content-input.js";
 import { convertHtmlToGutenberg } from "./lib/html-to-gutenberg.js";
 import { addLinkToContent, extractPostContent, type AddLinkResult } from "./lib/links.js";
 import { getResourceConfig, buildListQuery, buildResourceBody } from "./lib/resources.js";
-import { WordPressApiError, WordPressClient } from "./lib/wp-client.js";
+import { WordPressApiError, WordPressClient, type UploadMediaOptions } from "./lib/wp-client.js";
 
 /** CLI 参数解析后的选项字典。 */
 export type CliOptions = Record<string, string | boolean | undefined>;
@@ -120,6 +120,18 @@ interface LinksPayload {
   href: string;
   /** 替换次数。 */
   replacements: number;
+}
+
+/** media upload 命令返回给 CLI 和 MCP 的最小结构。 */
+interface MediaPayload {
+  /** WordPress 媒体附件 ID。 */
+  id?: number;
+  /** WordPress 媒体附件源文件 URL。 */
+  source_url?: string;
+  /** WordPress 媒体附件标题。 */
+  title?: RenderedTitle;
+  /** WordPress 媒体附件 slug。 */
+  slug?: string;
 }
 
 /** links add 结构化结果构造参数。 */
@@ -365,6 +377,24 @@ function renderLinksPayload(payload: LinksPayload): string {
   return `No matching text found in post ${payload.id}: ${payload.text}\n`;
 }
 
+/** 根据 CLI 选项构造媒体上传元数据选项。 */
+function buildMediaUploadOptions(options: CliOptions): UploadMediaOptions {
+  return Object.fromEntries(
+    Object.entries({
+      title: optionString(options.title),
+      altText: optionString(options.alt),
+      caption: optionString(options.caption),
+      description: optionString(options.description)
+    }).filter(([, value]) => value !== undefined && value !== "")
+  ) as UploadMediaOptions;
+}
+
+/** 将媒体上传结果渲染为人类可读文本。 */
+function renderMediaPayload(payload: MediaPayload): string {
+  const label = payload.title?.rendered ?? payload.slug ?? payload.source_url ?? `(id:${payload.id})`;
+  return `media ${payload.id}: ${label}\n`;
+}
+
 /** 根据 CLI 选项构造 Rank Math meta 更新对象。 */
 function buildSeoMeta(options: CliOptions): Record<string, string | boolean> {
   const entries = Object.entries({
@@ -554,6 +584,25 @@ async function handleLinksCommand(args: ParsedArgs, store: ConfigStore, options:
     : ok(renderLinksPayload(payload), payload);
 }
 
+/** 处理 media 命令组。 */
+async function handleMediaCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
+  const [subcommand] = args.positionals;
+
+  if (subcommand !== "upload") {
+    return fail(`Unknown media subcommand: ${subcommand ?? "(missing)"}`);
+  }
+
+  if (typeof args.options.file !== "string" || args.options.file.length === 0) {
+    return fail("Missing required flag: --file");
+  }
+
+  const client = await resolveClient(args, store, options);
+  const payload = await client.uploadMediaFromFile<MediaPayload>(args.options.file, buildMediaUploadOptions(args.options));
+  return args.options.json
+    ? ok(renderJson(payload), payload)
+    : ok(renderMediaPayload(payload), payload);
+}
+
 /** 运行 wp-api CLI，并返回可供 bin 入口和 MCP 复用的结构化结果。 */
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<CliResult> {
   const { command, args: parsed } = parseCommandLine(argv);
@@ -570,6 +619,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
     if (command === "links") {
       return await handleLinksCommand(parsed, store, options);
+    }
+
+    if (command === "media") {
+      return await handleMediaCommand(parsed, store, options);
     }
 
     if (["posts", "pages", "products", "categories", "product-categories"].includes(command ?? "")) {

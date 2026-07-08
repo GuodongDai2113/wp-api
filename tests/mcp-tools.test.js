@@ -77,6 +77,36 @@ test("wp_resource_create maps gutenberg flag to CLI option", async () => {
   );
 });
 
+test("wp_media_upload maps MCP input to JSON CLI arguments", async () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_media_upload", {
+      client: "prod",
+      filePath: "./hero.png",
+      title: "Hero",
+      altText: "Hero alt",
+      caption: "Hero caption",
+      description: "Hero description"
+    }),
+    [
+      "--client",
+      "prod",
+      "media",
+      "upload",
+      "--json",
+      "--file",
+      "./hero.png",
+      "--title",
+      "Hero",
+      "--alt",
+      "Hero alt",
+      "--caption",
+      "Hero caption",
+      "--description",
+      "Hero description"
+    ]
+  );
+});
+
 test("executeWpApiTool returns structured data from runCli", async () => {
   const result = await executeWpApiTool("wp_client_list", {}, {
     runCliImpl: async () => ({

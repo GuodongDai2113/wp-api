@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { runCli } from "../build/cli.js";
 
@@ -811,6 +811,52 @@ test("seo update writes rank math fields through the WordPress taxonomy endpoint
   });
   assert.match(result.stdout, /SEO updated for product-categories 15/);
   assert.match(result.stdout, /Description: Taxonomy SEO Description/);
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("media upload sends a local file and returns JSON payload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-media-"));
+  const filePath = path.join(tempDir, "hero.png");
+  const calls = [];
+  await createClient(tempDir);
+  await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  const result = await runCli(
+    ["media", "upload", "--file", filePath, "--title", "Hero", "--alt", "Hero alt", "--json"],
+    {
+      configDir: tempDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        if (calls.length === 1) {
+          return new Response(JSON.stringify({ id: 55, source_url: "https://example.com/hero.png" }), {
+            status: 201,
+            headers: { "content-type": "application/json" }
+          });
+        }
+
+        return new Response(JSON.stringify({ id: 55, source_url: "https://example.com/hero.png", alt_text: "Hero alt" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].url, "https://example.com/wp-json/wp/v2/media");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers["Content-Type"], "image/png");
+  assert.equal(calls[1].url, "https://example.com/wp-json/wp/v2/media/55");
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    title: "Hero",
+    alt_text: "Hero alt"
+  });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    id: 55,
+    source_url: "https://example.com/hero.png",
+    alt_text: "Hero alt"
+  });
 
   await rm(tempDir, { recursive: true, force: true });
 });

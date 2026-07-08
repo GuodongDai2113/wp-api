@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { WordPressClient, WordPressApiError } from "../build/lib/wp-client.js";
 
@@ -137,5 +140,87 @@ test("WordPressClient list fetches all pages when per_page is -1", async () => {
   ]);
   assert.deepEqual(result.items, [{ id: 1 }, { id: 2 }, { id: 3 }]);
   assert.deepEqual(result.pagination, { total: 3, totalPages: 2 });
+});
+
+test("WordPressClient uploads a local image file to the media endpoint", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-"));
+  const filePath = path.join(tempDir, "hero image.png");
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const calls = [];
+  await writeFile(filePath, bytes);
+
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 33, source_url: "https://example.com/hero-image.png" }), {
+        status: 201,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  const result = await client.uploadMediaFromFile(filePath);
+
+  assert.equal(result.id, 33);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://example.com/wp-json/wp/v2/media");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers.Authorization, "Basic YWRtaW46c2VjcmV0");
+  assert.equal(calls[0].init.headers.Accept, "application/json");
+  assert.equal(calls[0].init.headers["Content-Type"], "image/png");
+  assert.equal(calls[0].init.headers["Content-Disposition"], 'attachment; filename="hero image.png"');
+  assert.deepEqual(Buffer.from(calls[0].init.body), bytes);
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("WordPressClient updates media metadata after uploading when provided", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-"));
+  const filePath = path.join(tempDir, "photo.jpg");
+  const calls = [];
+  await writeFile(filePath, Buffer.from([0xff, 0xd8, 0xff]));
+
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({ id: 44, source_url: "https://example.com/photo.jpg" }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      return new Response(JSON.stringify({ id: 44, title: { rendered: "Hero" }, alt_text: "Alt" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  const result = await client.uploadMediaFromFile(filePath, {
+    title: "Hero",
+    altText: "Alt",
+    caption: "Caption",
+    description: "Description"
+  });
+
+  assert.equal(result.id, 44);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, "https://example.com/wp-json/wp/v2/media/44");
+  assert.equal(calls[1].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    title: "Hero",
+    alt_text: "Alt",
+    caption: "Caption",
+    description: "Description"
+  });
+
+  await rm(tempDir, { recursive: true, force: true });
 });
 

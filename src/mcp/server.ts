@@ -224,6 +224,24 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     },
     createToolCallback("wp_post_link_add", context)
   );
+
+  server.registerTool(
+    "wp_media_upload",
+    {
+      title: "Upload WordPress media",
+      description: "Upload a local image file readable by the MCP server process to the WordPress media library.",
+      inputSchema: {
+        ...globalInputShape,
+        filePath: z.string().min(1).describe("Local image file path readable by the MCP server process."),
+        title: z.string().optional().describe("Media title."),
+        altText: z.string().optional().describe("Media alt text."),
+        caption: z.string().optional().describe("Media caption."),
+        description: z.string().optional().describe("Media description.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_media_upload", context)
+  );
 }
 
 /** 创建已经注册 wp-api 工具的 MCP server 实例。 */

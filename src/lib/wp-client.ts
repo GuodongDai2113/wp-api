@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
+
 /** WordPress REST 错误响应携带的扩展数据。 */
 export type WordPressErrorData = Record<string, unknown> | null;
 
@@ -31,6 +34,32 @@ export interface RequestOptions {
   query?: QueryParams;
   /** JSON 请求体。 */
   body?: unknown;
+}
+
+/** WordPress 媒体上传选项。 */
+export interface UploadMediaOptions {
+  /** 写入 WordPress 媒体库的标题。 */
+  title?: string;
+  /** 写入 WordPress 媒体库的替代文本。 */
+  altText?: string;
+  /** 写入 WordPress 媒体库的说明文字。 */
+  caption?: string;
+  /** 写入 WordPress 媒体库的描述。 */
+  description?: string;
+  /** 覆盖根据文件扩展名推断出的 MIME 类型。 */
+  contentType?: string;
+  /** 覆盖上传时发送给 WordPress 的文件名。 */
+  filename?: string;
+}
+
+/** WordPress 媒体上传请求选项。 */
+interface MediaUploadRequestOptions {
+  /** HTTP 方法。 */
+  method?: string;
+  /** 额外请求头。 */
+  headers?: Record<string, string>;
+  /** 二进制请求体。 */
+  body: BodyInit;
 }
 
 /** WordPress REST 查询参数。 */
@@ -96,6 +125,12 @@ interface ErrorWithCauseDetails {
   cause?: ErrorWithCauseDetails;
 }
 
+/** WordPress 媒体上传后需要读取 ID 的最小结构。 */
+interface MediaWithId {
+  /** WordPress 媒体附件 ID。 */
+  id?: number;
+}
+
 /** 规范化站点根地址，移除末尾斜杠。 */
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -118,6 +153,27 @@ function createAuthHeader(username: string, appPassword: string): string {
   return `Basic ${Buffer.from(`${username}:${appPassword}`).toString("base64")}`;
 }
 
+/** 根据文件扩展名推断常见图片 MIME 类型。 */
+function inferImageContentType(filePath: string): string {
+  const extension = extname(filePath).toLowerCase();
+  const contentTypes: Record<string, string> = {
+    ".avif": "image/avif",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp"
+  };
+
+  return contentTypes[extension] ?? "application/octet-stream";
+}
+
+/** 转义 Content-Disposition 文件名中的特殊字符。 */
+function escapeContentDispositionFilename(filename: string): string {
+  return filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 /** 判断未知值是否是对象。 */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -131,6 +187,27 @@ function asWordPressErrorPayload(payload: unknown): WordPressErrorPayload {
 /** 将未知错误缩窄为可读取消息、错误码和 cause 的结构。 */
 function asErrorWithCauseDetails(error: unknown): ErrorWithCauseDetails {
   return isObject(error) ? error : { message: String(error) };
+}
+
+/** 从媒体上传结果中读取附件 ID，缺失时抛出明确错误。 */
+function readMediaId(media: unknown): number {
+  const id = isObject(media) ? (media as MediaWithId).id : undefined;
+  if (typeof id !== "number" || !Number.isFinite(id)) {
+    throw new Error("WordPress media upload response did not include a numeric id.");
+  }
+  return id;
+}
+
+/** 构造媒体附件元数据更新请求体。 */
+function buildMediaMetadataBody(options: UploadMediaOptions): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries({
+      title: options.title,
+      alt_text: options.altText,
+      caption: options.caption,
+      description: options.description
+    }).filter(([, value]) => value !== undefined && value !== "")
+  ) as Record<string, string>;
 }
 
 /** 表示 WordPress REST API 返回的非 2xx 错误。 */
@@ -268,6 +345,56 @@ export class WordPressClient {
     };
   }
 
+  /** 直接请求 `wp-json/` 下的指定 API path，并发送非 JSON 请求体。 */
+  async requestApiPathWithRawBody<T = unknown>(
+    apiPath: string,
+    { method = "POST", headers: extraHeaders, body }: MediaUploadRequestOptions
+  ): Promise<RequestResult<T>> {
+    const url = joinApiUrl(this.baseUrl, apiPath);
+    const headers: Record<string, string> = {
+      Authorization: createAuthHeader(this.username, this.appPassword),
+      Accept: "application/json",
+      ...extraHeaders
+    };
+
+    if (this.verbose) {
+      this.logger.error?.(`[wp-api] ${method} ${url}`);
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method,
+        headers,
+        body
+      });
+    } catch (error) {
+      throw new WordPressNetworkError({ method, url, cause: error });
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    const isJson = contentType.includes("application/json");
+    const payload = isJson ? await response.json() as unknown : await response.text();
+
+    if (!response.ok) {
+      const errorPayload = asWordPressErrorPayload(payload);
+      throw new WordPressApiError({
+        status: response.status,
+        code: errorPayload.code,
+        message: errorPayload.message ?? `Request failed with HTTP ${response.status}`,
+        data: errorPayload.data
+      });
+    }
+
+    return {
+      data: payload as T,
+      pagination: {
+        total: Number(response.headers.get("x-wp-total") ?? 0),
+        totalPages: Number(response.headers.get("x-wp-totalpages") ?? 0)
+      }
+    };
+  }
+
   /** 请求 WordPress `wp/v2` route。 */
   async request<T = unknown>(route: string, options: RequestOptions = {}): Promise<RequestResult<T>> {
     return this.requestApiPath<T>(`wp/v2/${route}`, options);
@@ -328,6 +455,29 @@ export class WordPressClient {
   async create<T = unknown>(route: string, body: unknown): Promise<T> {
     const result = await this.request<T>(route, { method: "POST", body });
     return result.data;
+  }
+
+  /** 从本地路径读取文件，并上传到 WordPress 媒体库。 */
+  async uploadMediaFromFile<T = unknown>(filePath: string, options: UploadMediaOptions = {}): Promise<T> {
+    const fileBytes = await readFile(filePath);
+    const filename = options.filename ?? basename(filePath);
+    const result = await this.requestApiPathWithRawBody<T>("wp/v2/media", {
+      method: "POST",
+      headers: {
+        "Content-Type": options.contentType ?? inferImageContentType(filePath),
+        "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(filename)}"`
+      },
+      body: fileBytes
+    });
+    const metadataBody = buildMediaMetadataBody(options);
+
+    if (Object.keys(metadataBody).length === 0) {
+      return result.data;
+    }
+
+    const mediaId = readMediaId(result.data);
+    const updated = await this.update<T>("media", mediaId, metadataBody);
+    return updated;
   }
 
   /** 更新指定 ID 的资源。 */

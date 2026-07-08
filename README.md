@@ -11,6 +11,7 @@ Current scope:
 - `products` mapped to the native `/wp/v2/product` endpoint
 - `categories`
 - `product-categories` mapped to the native `/wp/v2/product_cat` endpoint
+- `media` upload mapped to the native `/wp/v2/media` endpoint
 - local client management for multiple WordPress sites
 
 Authentication uses native WordPress Application Passwords.
@@ -118,6 +119,7 @@ Additional command group:
 ```bash
 seo <resource> <id>
 links add <post-id>
+media upload
 ```
 
 Global flags can be placed before the resource command:
@@ -424,6 +426,33 @@ Behavior:
 - If the first match is already inside an `<a>...</a>` element, no update is sent.
 - `--href` must be non-empty but is not normalized or scheme-restricted.
 
+## Media
+
+`media upload` uploads a local image file to the WordPress media library. The command sends the file bytes through the native `/wp/v2/media` endpoint and can update media metadata after upload.
+
+Command format:
+
+```bash
+wp-api media upload --file <local-path>
+```
+
+Examples:
+
+```bash
+wp-api media upload --file ./hero.png --title "Hero image" --alt "Hero image"
+wp-api media upload --file ./hero.png --caption "Homepage hero" --description "Uploaded from wp-api" --json
+```
+
+Supported flags:
+
+- `--file <path>`: required local image path
+- `--title <text>`: media title
+- `--alt <text>`: alt text, mapped to WordPress `alt_text`
+- `--caption <text>`: media caption
+- `--description <text>`: media description
+
+MCP `wp_media_upload` provides the same behavior with `filePath`, `title`, `altText`, `caption`, and `description` fields. `filePath` must be readable by the MCP server process.
+
 ## Output and Errors
 
 Default output is human-readable.
@@ -494,13 +523,14 @@ Current automated coverage includes:
 - CLI parsing and CRUD flows
 - stdin and file-based content input
 - opt-in Gutenberg conversion for resolved content input
+- local image upload to the WordPress media library
 - WordPress and network error rendering
 
 ## Notes and Limits
 
 - `products` is not WooCommerce. It is the native `/wp-json/wp/v2/product` route.
 - Product categories use the native `/wp-json/wp/v2/product_cat` taxonomy route.
-- The CLI currently targets only `posts`, `pages`, `products`, `categories`, and `product-categories`, including through `seo`.
+- The CLI currently targets `posts`, `pages`, `products`, `categories`, `product-categories`, and `media upload`; `seo` supports only content and taxonomy resources.
 - `seo` depends on REST meta exposure. If a resource returns no `meta.rank_math_*` fields, fix the WordPress side first.
 - For custom post types like `product`, enabling `custom-fields` support is required for REST `meta` schema support.
 - On local HTTPS sites with a self-signed certificate, either trust the local CA and use `NODE_OPTIONS=--use-system-ca`, or temporarily use `--site-url http://...` for local verification.

@@ -12,7 +12,8 @@ export type WpApiToolName =
   | "wp_resource_delete"
   | "wp_seo_get"
   | "wp_seo_update"
-  | "wp_post_link_add";
+  | "wp_post_link_add"
+  | "wp_media_upload";
 
 /** MCP 工具收到的原始输入对象。 */
 export type WpApiToolInput = Record<string, unknown>;
@@ -253,6 +254,18 @@ function buildPostLinkAddArgs(input: WpApiToolInput): string[] {
   return args;
 }
 
+/** 根据 MCP 工具输入构造媒体上传的 CLI 参数。 */
+function buildMediaUploadArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("media", "upload", "--json", "--file", readRequiredString(input, "filePath"));
+  appendOption(args, "--title", readOptionalString(input, "title"));
+  appendOption(args, "--alt", readOptionalString(input, "altText"));
+  appendOption(args, "--caption", readOptionalString(input, "caption"));
+  appendOption(args, "--description", readOptionalString(input, "description"));
+  return args;
+}
+
 /** 将 MCP 工具名和输入对象转换为现有 CLI 可以消费的 argv 数组。 */
 export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInput = {}): string[] {
   switch (toolName) {
@@ -278,6 +291,8 @@ export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInp
       return buildSeoUpdateArgs(input);
     case "wp_post_link_add":
       return buildPostLinkAddArgs(input);
+    case "wp_media_upload":
+      return buildMediaUploadArgs(input);
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);
   }
