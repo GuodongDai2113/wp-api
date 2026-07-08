@@ -231,6 +231,7 @@ wp-api products update 9 --content-file ./new-body.md
   - `--content <text>`
   - `--content-file <path>`
   - `--gutenberg`
+  - `--featured-media <id>`：作为特色图片使用的 WordPress 媒体附件 ID
 - 面向文章分类的参数：
   - `--categories <id,id,...>`
 
@@ -244,7 +245,7 @@ wp-api products update 9 --content-file ./new-body.md
 
 `--gutenberg` 是显式开启参数。传入后，会把最终解析出的正文从 HTML 转换为 WordPress Gutenberg 区块标记，再发送 create 或 update 请求；它对 `--content`、`--content-file` 和 stdin 都生效。不传 `--gutenberg` 时，正文保持原样提交。
 
-MCP 的 `wp_resource_create` 和 `wp_resource_update` 可通过 `gutenberg: true` 启用同样行为。
+MCP 的 `wp_resource_create` 和 `wp_resource_update` 可通过 `gutenberg: true` 启用同样行为，也可通过 `featuredMedia` 写入 WordPress 的 `featured_media` 字段。
 
 ### Delete
 

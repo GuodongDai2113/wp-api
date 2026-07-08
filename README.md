@@ -235,6 +235,7 @@ Supported content flags:
   - `--content <text>`
   - `--content-file <path>`
   - `--gutenberg`
+  - `--featured-media <id>`: WordPress media attachment ID used as the featured image
 - Post-oriented taxonomy flag:
   - `--categories <id,id,...>`
 
@@ -248,7 +249,7 @@ Content precedence:
 
 `--gutenberg` is opt-in. When present, the final resolved content from `--content`, `--content-file`, or stdin is converted from HTML to WordPress Gutenberg block markup before the create or update request is sent. Without `--gutenberg`, content is submitted unchanged.
 
-MCP `wp_resource_create` and `wp_resource_update` accept the same behavior with `gutenberg: true`.
+MCP `wp_resource_create` and `wp_resource_update` accept the same behavior with `gutenberg: true`. They also accept `featuredMedia` for the WordPress `featured_media` field.
 
 ### Delete
 

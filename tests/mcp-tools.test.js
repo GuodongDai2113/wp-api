@@ -107,6 +107,24 @@ test("wp_media_upload maps MCP input to JSON CLI arguments", async () => {
   );
 });
 
+test("wp_resource_update maps featuredMedia to featured media CLI option", async () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_resource_update", {
+      resource: "posts",
+      id: 42,
+      featuredMedia: 55
+    }),
+    [
+      "posts",
+      "update",
+      "42",
+      "--json",
+      "--featured-media",
+      "55"
+    ]
+  );
+});
+
 test("executeWpApiTool returns structured data from runCli", async () => {
   const result = await executeWpApiTool("wp_client_list", {}, {
     runCliImpl: async () => ({

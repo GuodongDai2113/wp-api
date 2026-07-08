@@ -306,6 +306,36 @@ test("posts create leaves HTML content unchanged when --gutenberg is absent", as
   await rm(tempDir, { recursive: true, force: true });
 });
 
+test("posts update sends featured media when --featured-media is provided", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const result = await runCli(["posts", "update", "42", "--featured-media", "55", "--json"], {
+    configDir: tempDir,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 42, featured_media: 55 }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].url, "https://example.com/wp-json/wp/v2/posts/42");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    featured_media: 55
+  });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    id: 42,
+    featured_media: 55
+  });
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
 test("pages delete uses soft delete by default", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-cli-"));
   const calls = [];

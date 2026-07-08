@@ -185,6 +185,7 @@ function appendResourceBodyArgs(args: string[], input: WpApiToolInput): void {
   if (readOptionalBoolean(input, "gutenberg")) {
     args.push("--gutenberg");
   }
+  appendOption(args, "--featured-media", readOptionalNumber(input, "featuredMedia"));
   appendOption(args, "--categories", readOptionalNumberCsv(input, "categories"));
   appendOption(args, "--name", readOptionalString(input, "name"));
   appendOption(args, "--description", readOptionalString(input, "description"));

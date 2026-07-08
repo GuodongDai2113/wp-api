@@ -110,6 +110,7 @@ export async function buildResourceBody(
     status: options.status,
     excerpt: options.excerpt,
     content: content === undefined ? undefined : bodyOptions.transformContent?.(content) ?? content,
+    featured_media: options["featured-media"] === undefined ? undefined : Number(options["featured-media"]),
     categories: options.categories ? splitCsv(options.categories) : undefined
   });
 }
