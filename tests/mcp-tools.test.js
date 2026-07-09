@@ -107,6 +107,85 @@ test("wp_media_upload maps MCP input to JSON CLI arguments", async () => {
   );
 });
 
+test("wp_elementor_export maps MCP input to Elementor CLI arguments", async () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_elementor_export", {
+      client: "prod",
+      postId: 12
+    }),
+    [
+      "--client",
+      "prod",
+      "elementor",
+      "export",
+      "12",
+      "--json"
+    ]
+  );
+});
+
+test("wp_elementor_import maps raw tree data to Elementor CLI arguments", async () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_elementor_import", {
+      postId: 12,
+      data: [{ id: "aaaaaaa", elType: "widget", settings: {}, elements: [] }]
+    }),
+    [
+      "elementor",
+      "import",
+      "12",
+      "--json",
+      "--data-json",
+      "[{\"id\":\"aaaaaaa\",\"elType\":\"widget\",\"settings\":{},\"elements\":[]}]"
+    ]
+  );
+});
+
+test("wp_elementor_get_element maps element lookup to Elementor CLI arguments", async () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_elementor_get_element", {
+      postId: 42,
+      elementId: "aaaaaaa"
+    }),
+    [
+      "elementor",
+      "get-element",
+      "42",
+      "--json",
+      "--element-id",
+      "aaaaaaa"
+    ]
+  );
+});
+
+test("wp_elementor construction tools are not exposed by wp-api MCP", async () => {
+  for (const toolName of [
+    "wp_elementor_add_container",
+    "wp_elementor_add_widget",
+    "wp_elementor_update_element",
+    "wp_elementor_batch_update",
+    "wp_elementor_reorder",
+    "wp_elementor_move",
+    "wp_elementor_remove",
+    "wp_elementor_duplicate"
+  ]) {
+    assert.throws(
+      () => buildCliArgsForTool(toolName, { postId: 42 }),
+      /Unknown MCP tool/
+    );
+  }
+});
+
+test("wp_elementor tools reject resource input", async () => {
+  assert.throws(
+    () => buildCliArgsForTool("wp_elementor_export", {
+      resource: "pages",
+      postId: 42
+    }),
+    /Elementor MCP tools do not accept resource/
+  );
+});
+
 test("wp_resource_update maps featuredMedia to featured media CLI option", async () => {
   assert.deepEqual(
     buildCliArgsForTool("wp_resource_update", {

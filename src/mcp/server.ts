@@ -35,6 +35,18 @@ const resourceBodyShape = {
   parent: z.number().optional().describe("Parent taxonomy term ID.")
 };
 
+/** Elementor MCP 工具共用的输入字段。 */
+const elementorBaseShape = {
+  ...globalInputShape,
+  postId: z.number().int().positive().describe("WordPress page ID.")
+};
+
+/** Elementor settings 对象 schema。 */
+const elementorSettingsSchema = z.record(z.unknown()).describe("Elementor settings object.");
+
+/** Elementor 元素数组 schema。 */
+const elementorDataSchema = z.array(z.record(z.unknown())).describe("Elementor element tree array.");
+
 /** 将任意结构化数据包装为 MCP 工具响应。 */
 function toToolResult(data: unknown) {
   return {
@@ -53,6 +65,27 @@ function toToolResult(data: unknown) {
 /** 创建一个绑定具体工具名和上下文的 MCP 工具回调。 */
 function createToolCallback(toolName: WpApiToolName, context: WpApiToolContext) {
   return async (input: WpApiToolInput) => toToolResult(await executeWpApiTool(toolName, input, context));
+}
+
+/** 注册一个 Elementor MCP 工具。 */
+function registerElementorTool(
+  server: McpServer,
+  context: WpApiToolContext,
+  toolName: WpApiToolName,
+  title: string,
+  description: string,
+  inputSchema: Record<string, z.ZodTypeAny>
+): void {
+  server.registerTool(
+    toolName,
+    {
+      title,
+      description,
+      inputSchema,
+      outputSchema
+    },
+    createToolCallback(toolName, context)
+  );
 }
 
 /** 在 MCP server 上注册 wp-api 的全部工具。 */
@@ -242,6 +275,77 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       outputSchema
     },
     createToolCallback("wp_media_upload", context)
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_init",
+    "Initialize Elementor page data",
+    "Enable Elementor metadata on an existing page and optionally set initial element data.",
+    {
+      ...elementorBaseShape,
+      data: elementorDataSchema.optional(),
+      pageSettings: elementorSettingsSchema.optional()
+    }
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_export",
+    "Export Elementor data",
+    "Read the raw Elementor element tree from a page.",
+    elementorBaseShape
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_import",
+    "Import Elementor data",
+    "Replace a page Elementor element tree with a provided array.",
+    {
+      ...elementorBaseShape,
+      data: elementorDataSchema
+    }
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_structure",
+    "Get Elementor structure",
+    "Read a lightweight Elementor page structure with IDs, element types, widget types, and key settings.",
+    elementorBaseShape
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_get_element",
+    "Get Elementor element settings",
+    "Read settings for one Elementor element by ID.",
+    {
+      ...elementorBaseShape,
+      elementId: z.string().min(1).describe("Elementor element ID.")
+    }
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_find",
+    "Find Elementor elements",
+    "Search Elementor elements by element type, widget type, text, setting key, or setting value.",
+    {
+      ...elementorBaseShape,
+      widgetType: z.string().optional().describe("Widget type filter."),
+      elementType: z.string().optional().describe("Element type filter."),
+      searchText: z.string().optional().describe("Case-insensitive text search across string settings."),
+      settingKey: z.string().optional().describe("Required setting key."),
+      settingValue: z.string().optional().describe("Required setting value.")
+    }
   );
 }
 

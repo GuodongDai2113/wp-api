@@ -13,7 +13,13 @@ export type WpApiToolName =
   | "wp_seo_get"
   | "wp_seo_update"
   | "wp_post_link_add"
-  | "wp_media_upload";
+  | "wp_media_upload"
+  | "wp_elementor_init"
+  | "wp_elementor_export"
+  | "wp_elementor_import"
+  | "wp_elementor_structure"
+  | "wp_elementor_get_element"
+  | "wp_elementor_find";
 
 /** MCP 工具收到的原始输入对象。 */
 export type WpApiToolInput = Record<string, unknown>;
@@ -61,6 +67,15 @@ function appendOption(args: string[], flag: string, value: unknown): void {
   }
 
   args.push(flag, String(value));
+}
+
+/** 将一个可选结构化命令行参数序列化为 JSON 并追加到参数列表。 */
+function appendJsonOption(args: string[], flag: string, value: unknown): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  args.push(flag, JSON.stringify(value));
 }
 
 /** 读取必填字符串字段，缺失或类型错误时抛出明确错误。 */
@@ -127,6 +142,13 @@ function readOptionalNumberCsv(input: WpApiToolInput, key: string): string | und
     throw new Error(`Expected number array field: ${key}`);
   }
   return value.map((entry) => String(entry)).join(",");
+}
+
+/** 校验 Elementor MCP 工具不接受资源字段。 */
+function rejectElementorResourceInput(input: WpApiToolInput): void {
+  if (input.resource !== undefined) {
+    throw new Error("Elementor MCP tools do not accept resource; pages is always used.");
+  }
 }
 
 /** 根据 MCP 工具输入构造 client list 的 CLI 参数。 */
@@ -267,6 +289,58 @@ function buildMediaUploadArgs(input: WpApiToolInput): string[] {
   return args;
 }
 
+/** 根据 MCP 工具输入构造 Elementor 命令的基础 CLI 参数。 */
+function buildElementorBaseArgs(input: WpApiToolInput, subcommand: string): string[] {
+  const args: string[] = [];
+  rejectElementorResourceInput(input);
+  appendGlobalArgs(args, input);
+  args.push("elementor", subcommand, String(readRequiredNumber(input, "postId")), "--json");
+  return args;
+}
+
+/** 根据 MCP 工具输入构造 Elementor 初始化 CLI 参数。 */
+function buildElementorInitArgs(input: WpApiToolInput): string[] {
+  const args = buildElementorBaseArgs(input, "init");
+  appendJsonOption(args, "--data-json", input.data);
+  appendJsonOption(args, "--page-settings-json", input.pageSettings);
+  return args;
+}
+
+/** 根据 MCP 工具输入构造 Elementor 导出 CLI 参数。 */
+function buildElementorExportArgs(input: WpApiToolInput): string[] {
+  return buildElementorBaseArgs(input, "export");
+}
+
+/** 根据 MCP 工具输入构造 Elementor 导入 CLI 参数。 */
+function buildElementorImportArgs(input: WpApiToolInput): string[] {
+  const args = buildElementorBaseArgs(input, "import");
+  appendJsonOption(args, "--data-json", input.data);
+  return args;
+}
+
+/** 根据 MCP 工具输入构造 Elementor 结构读取 CLI 参数。 */
+function buildElementorStructureArgs(input: WpApiToolInput): string[] {
+  return buildElementorBaseArgs(input, "structure");
+}
+
+/** 根据 MCP 工具输入构造 Elementor 单元素读取 CLI 参数。 */
+function buildElementorGetElementArgs(input: WpApiToolInput): string[] {
+  const args = buildElementorBaseArgs(input, "get-element");
+  appendOption(args, "--element-id", readRequiredString(input, "elementId"));
+  return args;
+}
+
+/** 根据 MCP 工具输入构造 Elementor 元素查找 CLI 参数。 */
+function buildElementorFindArgs(input: WpApiToolInput): string[] {
+  const args = buildElementorBaseArgs(input, "find");
+  appendOption(args, "--widget-type", readOptionalString(input, "widgetType"));
+  appendOption(args, "--element-type", readOptionalString(input, "elementType"));
+  appendOption(args, "--search-text", readOptionalString(input, "searchText"));
+  appendOption(args, "--setting-key", readOptionalString(input, "settingKey"));
+  appendOption(args, "--setting-value", readOptionalString(input, "settingValue"));
+  return args;
+}
+
 /** 将 MCP 工具名和输入对象转换为现有 CLI 可以消费的 argv 数组。 */
 export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInput = {}): string[] {
   switch (toolName) {
@@ -294,6 +368,18 @@ export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInp
       return buildPostLinkAddArgs(input);
     case "wp_media_upload":
       return buildMediaUploadArgs(input);
+    case "wp_elementor_init":
+      return buildElementorInitArgs(input);
+    case "wp_elementor_export":
+      return buildElementorExportArgs(input);
+    case "wp_elementor_import":
+      return buildElementorImportArgs(input);
+    case "wp_elementor_structure":
+      return buildElementorStructureArgs(input);
+    case "wp_elementor_get_element":
+      return buildElementorGetElementArgs(input);
+    case "wp_elementor_find":
+      return buildElementorFindArgs(input);
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);
   }

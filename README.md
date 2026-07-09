@@ -12,6 +12,7 @@ Current scope:
 - `categories`
 - `product-categories` mapped to the native `/wp/v2/product_cat` endpoint
 - `media` upload mapped to the native `/wp/v2/media` endpoint
+- base Elementor JSON communication for `pages` through REST `meta`
 - local client management for multiple WordPress sites
 
 Authentication uses native WordPress Application Passwords.
@@ -120,6 +121,7 @@ Additional command group:
 seo <resource> <id>
 links add <post-id>
 media upload
+elementor <action> <post-id>
 ```
 
 Global flags can be placed before the resource command:
@@ -454,6 +456,46 @@ Supported flags:
 
 MCP `wp_media_upload` provides the same behavior with `filePath`, `title`, `altText`, `caption`, and `description` fields. `filePath` must be readable by the MCP server process.
 
+## Elementor
+
+`elementor` commands manage basic Elementor page data for `pages` by reading and writing the standard WordPress REST `meta` payload.
+The `pages` resource is implicit; `elementor` CLI commands do not accept `--resource`, and MCP `wp_elementor_*` tools do not accept a `resource` field.
+Elementor JSON construction is intentionally out of scope for `wp-api`; produce the tree outside this API, then pass that raw tree to `init` or `import`.
+
+REST requirement:
+
+- The target site must expose `_elementor_data`, `_elementor_edit_mode`, `_elementor_template_type`, and `_elementor_page_settings` through REST `meta`.
+- These commands do not install Elementor, regenerate Elementor CSS, validate live widget schemas, or provide Elementor Pro / Atomic / Theme Builder features.
+
+Examples:
+
+```bash
+wp-api elementor init 12 --json
+wp-api elementor export 12 --json
+wp-api elementor import 12 --data-json "[...]" --json
+wp-api elementor structure 12 --json
+wp-api elementor get-element 12 --element-id bbbbbbb --json
+wp-api elementor find 12 --search-text "Hero" --json
+```
+
+Supported actions:
+
+- `init`
+- `export`
+- `import`
+- `structure`
+- `get-element`
+- `find`
+
+MCP tools provide the same communication workflow:
+
+- `wp_elementor_init`
+- `wp_elementor_export`
+- `wp_elementor_import`
+- `wp_elementor_structure`
+- `wp_elementor_get_element`
+- `wp_elementor_find`
+
 ## Output and Errors
 
 Default output is human-readable.
@@ -525,14 +567,17 @@ Current automated coverage includes:
 - stdin and file-based content input
 - opt-in Gutenberg conversion for resolved content input
 - local image upload to the WordPress media library
+- base Elementor JSON import, export, structure, and query operations for pages
 - WordPress and network error rendering
 
 ## Notes and Limits
 
 - `products` is not WooCommerce. It is the native `/wp-json/wp/v2/product` route.
 - Product categories use the native `/wp-json/wp/v2/product_cat` taxonomy route.
-- The CLI currently targets `posts`, `pages`, `products`, `categories`, `product-categories`, and `media upload`; `seo` supports only content and taxonomy resources.
+- The CLI currently targets `posts`, `pages`, `products`, `categories`, `product-categories`, `media upload`, and base `elementor` operations for `pages`; `seo` supports only content and taxonomy resources.
 - `seo` depends on REST meta exposure. If a resource returns no `meta.rank_math_*` fields, fix the WordPress side first.
+- `elementor` depends on REST exposure for Elementor private meta keys. If a resource returns no `meta._elementor_data`, fix the WordPress side first.
+- `elementor` writes JSON data through REST meta only. It does not run Elementor's PHP document save pipeline or CSS regeneration.
 - For custom post types like `product`, enabling `custom-fields` support is required for REST `meta` schema support.
 - On local HTTPS sites with a self-signed certificate, either trust the local CA and use `NODE_OPTIONS=--use-system-ca`, or temporarily use `--site-url http://...` for local verification.
 - There is no interactive prompt mode yet.

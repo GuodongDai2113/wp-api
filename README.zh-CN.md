@@ -12,6 +12,7 @@ English version: [README.md](./README.md)
 - `categories`
 - `product-categories`，映射到原生 `/wp/v2/product_cat`
 - `media` 上传，映射到原生 `/wp/v2/media`
+- 面向 `pages` 的基础 Elementor JSON 通讯，通过 REST `meta` 读写
 - 多站点本地 client 管理
 
 认证方式使用原生 WordPress Application Password。
@@ -116,6 +117,7 @@ delete <id>
 seo <resource> <id>
 links add <post-id>
 media upload
+elementor <action> <post-id>
 ```
 
 全局参数可以写在资源命令前面：
@@ -448,6 +450,46 @@ wp-api media upload --file ./hero.png --caption "Homepage hero" --description "U
 
 MCP 的 `wp_media_upload` 提供同样能力，输入字段为 `filePath`、`title`、`altText`、`caption`、`description`。`filePath` 必须是 MCP server 进程能读取到的本地路径。
 
+## Elementor
+
+`elementor` 命令用于管理 `pages` 的基础 Elementor 页面数据。实现方式是读取并写入 WordPress REST 的标准 `meta` payload。
+`pages` 是固定资源；`elementor` CLI 命令不接受 `--resource`，MCP 的 `wp_elementor_*` 工具也不接受 `resource` 字段。
+Elementor JSON 构建不再由 `wp-api` 负责；请在 API 外部生成 JSON tree，再交给 `init` 或 `import` 写入。
+
+REST 前提：
+
+- 目标站点必须把 `_elementor_data`、`_elementor_edit_mode`、`_elementor_template_type`、`_elementor_page_settings` 暴露到 REST `meta`。
+- 这些命令不会安装 Elementor，不会重新生成 Elementor CSS，不会校验实时 widget schema，也不包含 Elementor Pro、Atomic、Theme Builder 等高级能力。
+
+示例：
+
+```bash
+wp-api elementor init 12 --json
+wp-api elementor export 12 --json
+wp-api elementor import 12 --data-json "[...]" --json
+wp-api elementor structure 12 --json
+wp-api elementor get-element 12 --element-id bbbbbbb --json
+wp-api elementor find 12 --search-text "Hero" --json
+```
+
+支持的 action：
+
+- `init`
+- `export`
+- `import`
+- `structure`
+- `get-element`
+- `find`
+
+MCP 提供同样的通讯流程：
+
+- `wp_elementor_init`
+- `wp_elementor_export`
+- `wp_elementor_import`
+- `wp_elementor_structure`
+- `wp_elementor_get_element`
+- `wp_elementor_find`
+
 ## 输出与错误
 
 默认输出为可读文本。
@@ -521,14 +563,17 @@ npm run build
 - stdin / 文件输入
 - 对解析后正文显式开启的古腾堡转换
 - 本地图片上传到 WordPress 媒体库
+- 面向 pages 的基础 Elementor JSON 导入、导出、结构与查询操作
 - WordPress 与网络错误输出
 
 ## 说明与限制
 
 - `products` 不是 WooCommerce 端点，而是原生 `/wp-json/wp/v2/product`
 - `product-categories` 使用原生 `/wp-json/wp/v2/product_cat`
-- CLI 当前支持 `posts`、`pages`、`products`、`categories`、`product-categories` 和 `media upload`，`seo` 只支持内容和分类资源
+- CLI 当前支持 `posts`、`pages`、`products`、`categories`、`product-categories`、`media upload`，以及仅面向 `pages` 的基础 `elementor` 操作；`seo` 只支持内容和分类资源
 - `seo` 是否可用，取决于目标资源是否正确暴露 REST `meta`
+- `elementor` 是否可用，取决于目标资源是否正确暴露 Elementor 私有 meta key；如果资源没有返回 `meta._elementor_data`，需要先修复 WordPress 侧
+- `elementor` 只通过 REST meta 写入 JSON 数据，不会运行 Elementor PHP document save 流程或 CSS 重新生成流程
 - 对 `product` 这类自定义 post type，必须启用 `custom-fields` 支持
 - 如果本地 HTTPS 使用自签名证书，可以信任本地 CA 后配合 `NODE_OPTIONS=--use-system-ca`，或者本地验证时临时改用 `--site-url http://...`
 - 当前没有交互式提示模式
