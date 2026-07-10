@@ -210,6 +210,16 @@ function buildMediaMetadataBody(options: UploadMediaOptions): Record<string, str
   ) as Record<string, string>;
 }
 
+/** 读取 HTTP 响应体，并将空 JSON 响应规范化为 null。 */
+async function readResponsePayload(response: Response): Promise<unknown> {
+  const text = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return text;
+  }
+  return text === "" ? null : JSON.parse(text) as unknown;
+}
+
 /** 表示 WordPress REST API 返回的非 2xx 错误。 */
 export class WordPressApiError extends Error {
   /** HTTP 状态码。 */
@@ -322,9 +332,7 @@ export class WordPressClient {
       throw new WordPressNetworkError({ method, url, cause: error });
     }
 
-    const contentType = response.headers.get("content-type") ?? "";
-    const isJson = contentType.includes("application/json");
-    const payload = isJson ? await response.json() as unknown : await response.text();
+    const payload = await readResponsePayload(response);
 
     if (!response.ok) {
       const errorPayload = asWordPressErrorPayload(payload);
@@ -372,9 +380,7 @@ export class WordPressClient {
       throw new WordPressNetworkError({ method, url, cause: error });
     }
 
-    const contentType = response.headers.get("content-type") ?? "";
-    const isJson = contentType.includes("application/json");
-    const payload = isJson ? await response.json() as unknown : await response.text();
+    const payload = await readResponsePayload(response);
 
     if (!response.ok) {
       const errorPayload = asWordPressErrorPayload(payload);

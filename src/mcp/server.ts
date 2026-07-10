@@ -347,6 +347,27 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       settingValue: z.string().optional().describe("Required setting value.")
     }
   );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_get_tokens",
+    "Get Elementor global tokens",
+    "Read _elementor_page_settings from the site's default Elementor Kit.",
+    globalInputShape
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_set_tokens",
+    "Set Elementor global tokens",
+    "Read, shallowly merge, and write default Kit page settings, then clear Elementor cache.",
+    {
+      ...globalInputShape,
+      tokens: elementorSettingsSchema.describe("Top-level Elementor token settings to shallowly merge.")
+    }
+  );
 }
 
 /** 创建已经注册 wp-api 工具的 MCP server 实例。 */

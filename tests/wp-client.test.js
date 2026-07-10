@@ -224,3 +224,19 @@ test("WordPressClient updates media metadata after uploading when provided", asy
   await rm(tempDir, { recursive: true, force: true });
 });
 
+test("WordPressClient accepts a successful empty JSON response", async () => {
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async () => new Response("", {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    })
+  });
+
+  const result = await client.requestApiPath("elementor/v1/cache", { method: "DELETE" });
+
+  assert.equal(result.data, null);
+});
+

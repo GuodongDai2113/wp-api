@@ -60,8 +60,12 @@
 - `wp_seo_update`
 - `wp_post_link_add`
 - `wp_media_upload`
+- `wp_elementor_get_tokens`
+- `wp_elementor_set_tokens`
 
 `wp_media_upload` 使用本地路径上传图片到 WordPress 媒体库。`filePath` 必须是 MCP server 进程可以读取的路径，可选字段包括 `title`、`altText`、`caption`、`description`。
+
+`wp_elementor_get_tokens` 读取 Elementor 默认 Kit 的 `_elementor_page_settings`。`wp_elementor_set_tokens` 接收必填 `tokens` 对象，按 read → 顶层浅 merge → write 的顺序更新，写入成功后调用 `DELETE /wp-json/elementor/v1/cache`。两个工具均不接受 `postId` 或 `resource`。
 
 使用绝对路径指定项目内编译产物：
 

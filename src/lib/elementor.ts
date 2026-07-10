@@ -257,6 +257,37 @@ export function readElementorDataFromEntity(entity: unknown): ElementorElement[]
   return parseElementorData(entity.meta._elementor_data);
 }
 
+/** 从 Elementor 默认 Kit 列表响应中读取第一个有效的正整数 ID。 */
+export function readDefaultKitId(entities: unknown): number {
+  if (!Array.isArray(entities) || !isObject(entities[0])) {
+    throw new Error("Default Elementor Kit was not found.");
+  }
+
+  const id = entities[0].id;
+  if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) {
+    throw new Error("Default Elementor Kit was not found.");
+  }
+
+  return id;
+}
+
+/** 从 WordPress REST 实体中安全读取 Elementor 页面级设置。 */
+export function readElementorPageSettings(entity: unknown): ElementorSettings {
+  if (!isObject(entity) || !isObject(entity.meta) || !isObject(entity.meta._elementor_page_settings)) {
+    return {};
+  }
+
+  return entity.meta._elementor_page_settings;
+}
+
+/** 对当前 Elementor 页面设置和更新值执行顶层浅合并。 */
+export function mergeElementorPageSettings(
+  current: ElementorSettings,
+  updates: ElementorSettings
+): ElementorSettings {
+  return { ...current, ...updates };
+}
+
 /** 构造写回 WordPress REST API 的 Elementor meta 请求体。 */
 export function buildElementorMeta(
   data: ElementorElement[],

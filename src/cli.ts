@@ -5,7 +5,10 @@ import {
   countElements,
   findElementById,
   findElements,
+  mergeElementorPageSettings,
+  readDefaultKitId,
   readElementorDataFromEntity,
+  readElementorPageSettings,
   simplifyElementorStructure,
   type ElementorElement,
   type ElementorSettings
@@ -160,6 +163,14 @@ interface ElementorPayload {
   resource: "pages";
   /** 其他命令特定字段。 */
   [key: string]: unknown;
+}
+
+/** Elementor 默认 Kit tokens 命令返回的结构化数据。 */
+interface ElementorTokensPayload {
+  /** Elementor 默认 Kit ID。 */
+  kit_id: number;
+  /** 默认 Kit 的 `_elementor_page_settings` 设置。 */
+  tokens: ElementorSettings;
 }
 
 /** links add 结构化结果构造参数。 */
@@ -516,6 +527,31 @@ async function saveElementorTree(
   );
 }
 
+/** 查询默认 Elementor Kit，并读取其 edit 上下文实体和页面设置。 */
+async function readDefaultElementorKit(client: WordPressClient): Promise<{
+  /** 默认 Elementor Kit ID。 */
+  kitId: number;
+  /** 默认 Kit 当前页面设置。 */
+  tokens: ElementorSettings;
+}> {
+  const listResult = await client.request<RenderableEntity[]>("elementor_library", {
+    query: { slug: "default-kit" }
+  });
+  const kitId = readDefaultKitId(listResult.data);
+  const kitResult = await client.request<RenderableEntity>(`elementor_library/${kitId}`, {
+    query: { context: "edit" }
+  });
+  return {
+    kitId,
+    tokens: readElementorPageSettings(kitResult.data)
+  };
+}
+
+/** 将 Elementor 默认 Kit tokens payload 渲染为人类可读文本。 */
+function renderElementorTokensPayload(payload: ElementorTokensPayload): string {
+  return `Elementor default kit ${payload.kit_id}: ${Object.keys(payload.tokens).length} token groups\n`;
+}
+
 /** 将 Elementor payload 渲染为人类可读文本。 */
 function renderElementorPayload(payload: ElementorPayload): string {
   if (payload.element_id) {
@@ -741,11 +777,31 @@ async function handleMediaCommand(args: ParsedArgs, store: ConfigStore, options:
 /** 处理 Elementor 页面通讯命令组。 */
 async function handleElementorCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
   const [subcommand, rawId] = args.positionals;
-  const postId = readElementorPostId(rawId);
   rejectElementorResourceOption(args);
+  const client = await resolveClient(args, store, options);
+
+  if (subcommand === "get-tokens") {
+    const { kitId, tokens } = await readDefaultElementorKit(client);
+    const payload: ElementorTokensPayload = { kit_id: kitId, tokens };
+    return args.options.json ? ok(renderJson(payload), payload) : ok(renderElementorTokensPayload(payload), payload);
+  }
+
+  if (subcommand === "set-tokens") {
+    const updates = parseJsonObjectOption(args.options["tokens-json"]);
+    const { kitId, tokens: currentTokens } = await readDefaultElementorKit(client);
+    const tokens = mergeElementorPageSettings(currentTokens, updates);
+    await client.request(`elementor_library/${kitId}`, {
+      method: "POST",
+      body: { meta: { _elementor_page_settings: tokens } }
+    });
+    await client.requestApiPath("elementor/v1/cache", { method: "DELETE" });
+    const payload: ElementorTokensPayload = { kit_id: kitId, tokens };
+    return args.options.json ? ok(renderJson(payload), payload) : ok(renderElementorTokensPayload(payload), payload);
+  }
+
+  const postId = readElementorPostId(rawId);
   const resourceName = "pages" as const;
   const config = getResourceConfig(resourceName);
-  const client = await resolveClient(args, store, options);
 
   if (subcommand === "init") {
     const data = parseJsonArrayOption(args.options["data-json"]).map((entry) => entry as ElementorElement);

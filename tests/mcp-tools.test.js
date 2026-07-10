@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildCliArgsForTool, executeWpApiTool } from "../build/mcp/wp-api-tools.js";
+import { registerWpApiTools } from "../build/mcp/server.js";
 
 test("wp_resource_list maps MCP input to JSON CLI arguments", async () => {
   assert.deepEqual(
@@ -156,6 +157,47 @@ test("wp_elementor_get_element maps element lookup to Elementor CLI arguments", 
       "aaaaaaa"
     ]
   );
+});
+
+test("wp_elementor_get_tokens maps to a default kit CLI read", () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_elementor_get_tokens", { client: "prod" }),
+    ["--client", "prod", "elementor", "get-tokens", "--json"]
+  );
+});
+
+test("wp_elementor_set_tokens maps token updates to JSON CLI input", () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_elementor_set_tokens", {
+      tokens: { system_colors: [{ _id: "primary", color: "#112233" }] }
+    }),
+    [
+      "elementor",
+      "set-tokens",
+      "--json",
+      "--tokens-json",
+      "{\"system_colors\":[{\"_id\":\"primary\",\"color\":\"#112233\"}]}"
+    ]
+  );
+});
+
+test("Elementor token MCP tools are registered with required token settings", () => {
+  const registrations = new Map();
+  const server = {
+    registerTool(name, definition) {
+      registrations.set(name, definition);
+    }
+  };
+
+  registerWpApiTools(server);
+
+  assert.ok(registrations.has("wp_elementor_get_tokens"));
+  assert.ok(registrations.has("wp_elementor_set_tokens"));
+  const setDefinition = registrations.get("wp_elementor_set_tokens");
+  assert.equal(setDefinition.inputSchema.postId, undefined);
+  assert.equal(setDefinition.inputSchema.resource, undefined);
+  assert.equal(setDefinition.inputSchema.tokens.safeParse(undefined).success, false);
+  assert.equal(setDefinition.inputSchema.tokens.safeParse({}).success, true);
 });
 
 test("wp_elementor construction tools are not exposed by wp-api MCP", async () => {

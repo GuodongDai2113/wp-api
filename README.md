@@ -476,6 +476,8 @@ wp-api elementor import 12 --data-json "[...]" --json
 wp-api elementor structure 12 --json
 wp-api elementor get-element 12 --element-id bbbbbbb --json
 wp-api elementor find 12 --search-text "Hero" --json
+wp-api elementor get-tokens --json
+wp-api elementor set-tokens --tokens-json '{"system_colors":[]}' --json
 ```
 
 Supported actions:
@@ -486,6 +488,8 @@ Supported actions:
 - `structure`
 - `get-element`
 - `find`
+- `get-tokens`
+- `set-tokens`
 
 MCP tools provide the same communication workflow:
 
@@ -495,6 +499,10 @@ MCP tools provide the same communication workflow:
 - `wp_elementor_structure`
 - `wp_elementor_get_element`
 - `wp_elementor_find`
+- `wp_elementor_get_tokens`
+- `wp_elementor_set_tokens`
+
+The token tools target the Elementor Library entity with slug `default-kit`, so they do not accept `postId`. `wp_elementor_get_tokens` returns its `meta._elementor_page_settings`. `wp_elementor_set_tokens` requires a `tokens` object and always reads the current settings, shallowly merges the supplied top-level fields, writes the merged object, and then clears `/elementor/v1/cache`. Matching nested objects and arrays are replaced as complete top-level values.
 
 ## Output and Errors
 
@@ -582,3 +590,16 @@ Current automated coverage includes:
 - On local HTTPS sites with a self-signed certificate, either trust the local CA and use `NODE_OPTIONS=--use-system-ca`, or temporarily use `--site-url http://...` for local verification.
 - There is no interactive prompt mode yet.
 - Configuration is stored in plain local JSON. Protect the machine and user account accordingly.
+
+
+GET /wp-json/wp/v2/elementor_library?slug=default-kit 获取 kit id
+
+GET /wp-json/wp/v2/elementor_library/23?context=edit 获取 meta
+
+新增工具 wp_elementor_get_tokens，输出meta._elementor_page_settings
+
+POST /wp-json/wp/v2/elementor_library/23
+
+新增工具 wp_elementor_set_tokens，必须 read → merge → write
+
+设置完成后 DELETE /wp-json/elementor/v1/cache

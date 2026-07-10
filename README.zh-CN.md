@@ -470,6 +470,8 @@ wp-api elementor import 12 --data-json "[...]" --json
 wp-api elementor structure 12 --json
 wp-api elementor get-element 12 --element-id bbbbbbb --json
 wp-api elementor find 12 --search-text "Hero" --json
+wp-api elementor get-tokens --json
+wp-api elementor set-tokens --tokens-json '{"system_colors":[]}' --json
 ```
 
 支持的 action：
@@ -480,6 +482,8 @@ wp-api elementor find 12 --search-text "Hero" --json
 - `structure`
 - `get-element`
 - `find`
+- `get-tokens`
+- `set-tokens`
 
 MCP 提供同样的通讯流程：
 
@@ -489,6 +493,10 @@ MCP 提供同样的通讯流程：
 - `wp_elementor_structure`
 - `wp_elementor_get_element`
 - `wp_elementor_find`
+- `wp_elementor_get_tokens`
+- `wp_elementor_set_tokens`
+
+tokens 工具固定操作 slug 为 `default-kit` 的 Elementor Library 实体，因此不接受 `postId`。`wp_elementor_get_tokens` 返回其 `meta._elementor_page_settings`；`wp_elementor_set_tokens` 必须传入 `tokens` 对象，并始终执行读取当前设置 → 顶层浅合并 → 写入合并结果 → 清理 `/elementor/v1/cache`。同名嵌套对象和数组会作为完整顶层值替换。
 
 ## 输出与错误
 

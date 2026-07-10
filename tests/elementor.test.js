@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import {
   buildElementorMeta,
   findElements,
+  mergeElementorPageSettings,
   parseElementorData,
+  readDefaultKitId,
+  readElementorPageSettings,
   simplifyElementorStructure
 } from "../build/lib/elementor.js";
 
@@ -91,5 +94,33 @@ test("buildElementorMeta serializes Elementor data and required flags", () => {
         hide_title: "yes"
       }
     }
+  });
+});
+
+test("readDefaultKitId returns the first default kit id", () => {
+  assert.equal(readDefaultKitId([{ id: 23 }, { id: 24 }]), 23);
+});
+
+test("readDefaultKitId rejects missing or invalid default kits", () => {
+  assert.throws(() => readDefaultKitId([]), /Default Elementor Kit was not found/);
+  assert.throws(() => readDefaultKitId([{ id: "23" }]), /Default Elementor Kit was not found/);
+});
+
+test("readElementorPageSettings returns settings or an empty object", () => {
+  assert.deepEqual(readElementorPageSettings({
+    meta: { _elementor_page_settings: { system_colors: [{ _id: "primary" }] } }
+  }), { system_colors: [{ _id: "primary" }] });
+  assert.deepEqual(readElementorPageSettings({ meta: {} }), {});
+  assert.deepEqual(readElementorPageSettings({ meta: { _elementor_page_settings: [] } }), {});
+});
+
+test("mergeElementorPageSettings shallowly replaces matching top-level values", () => {
+  assert.deepEqual(mergeElementorPageSettings(
+    { keep: true, nested: { old: 1 }, list: [1, 2] },
+    { nested: { next: 2 }, list: [3] }
+  ), {
+    keep: true,
+    nested: { next: 2 },
+    list: [3]
   });
 });

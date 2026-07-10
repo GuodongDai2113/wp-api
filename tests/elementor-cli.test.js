@@ -283,6 +283,138 @@ test("elementor import replaces the full Elementor tree only through raw data", 
   await rm(tempDir, { recursive: true, force: true });
 });
 
+test("elementor get-tokens discovers the default kit and returns page settings", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const result = await runCli(["elementor", "get-tokens", "--json"], {
+    configDir: tempDir,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      const payload = calls.length === 1
+        ? [{ id: 23, slug: "default-kit" }]
+        : { id: 23, meta: { _elementor_page_settings: { system_colors: [{ _id: "primary" }] } } };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].url, "https://example.com/wp-json/wp/v2/elementor_library?slug=default-kit");
+  assert.equal(calls[1].url, "https://example.com/wp-json/wp/v2/elementor_library/23?context=edit");
+  assert.deepEqual(JSON.parse(result.stdout), {
+    kit_id: 23,
+    tokens: { system_colors: [{ _id: "primary" }] }
+  });
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("elementor set-tokens reads, shallowly merges, writes, then clears cache", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const updates = { nested: { next: 2 }, list: [3] };
+  const result = await runCli(["elementor", "set-tokens", "--tokens-json", JSON.stringify(updates), "--json"], {
+    configDir: tempDir,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      const payloads = [
+        [{ id: 23 }],
+        { id: 23, meta: { _elementor_page_settings: { keep: true, nested: { old: 1 }, list: [1, 2] } } },
+        { id: 23 },
+        { success: true }
+      ];
+      return new Response(JSON.stringify(payloads[calls.length - 1]), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(calls.map((call) => [call.init.method, call.url]), [
+    ["GET", "https://example.com/wp-json/wp/v2/elementor_library?slug=default-kit"],
+    ["GET", "https://example.com/wp-json/wp/v2/elementor_library/23?context=edit"],
+    ["POST", "https://example.com/wp-json/wp/v2/elementor_library/23"],
+    ["DELETE", "https://example.com/wp-json/elementor/v1/cache"]
+  ]);
+  assert.deepEqual(JSON.parse(calls[2].init.body), {
+    meta: {
+      _elementor_page_settings: { keep: true, nested: { next: 2 }, list: [3] }
+    }
+  });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    kit_id: 23,
+    tokens: { keep: true, nested: { next: 2 }, list: [3] }
+  });
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("elementor set-tokens does not clear cache when the kit write fails", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const result = await runCli(["elementor", "set-tokens", "--tokens-json", "{}", "--json"], {
+    configDir: tempDir,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 3) {
+        return new Response(JSON.stringify({ code: "write_failed", message: "Write failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify(calls.length === 1 ? [{ id: 23 }] : { id: 23, meta: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(calls.length, 3);
+  assert.match(result.stderr, /write_failed/);
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("elementor set-tokens reports cache clear failures after writing", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-cli-"));
+  const calls = [];
+  await createClient(tempDir);
+
+  const result = await runCli(["elementor", "set-tokens", "--tokens-json", "{}", "--json"], {
+    configDir: tempDir,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 4) {
+        return new Response(JSON.stringify({ code: "cache_failed", message: "Cache failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const payload = calls.length === 1 ? [{ id: 23 }] : { id: 23, meta: {} };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(calls.length, 4);
+  assert.match(result.stderr, /cache_failed/);
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
 test("elementor construction commands are not available in wp-api", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-cli-"));
   const calls = [];

@@ -19,7 +19,9 @@ export type WpApiToolName =
   | "wp_elementor_import"
   | "wp_elementor_structure"
   | "wp_elementor_get_element"
-  | "wp_elementor_find";
+  | "wp_elementor_find"
+  | "wp_elementor_get_tokens"
+  | "wp_elementor_set_tokens";
 
 /** MCP 工具收到的原始输入对象。 */
 export type WpApiToolInput = Record<string, unknown>;
@@ -85,6 +87,15 @@ function readRequiredString(input: WpApiToolInput, key: string): string {
     throw new Error(`Missing required string field: ${key}`);
   }
   return value;
+}
+
+/** 读取必填普通对象字段，缺失、数组或类型错误时抛出明确错误。 */
+function readRequiredObject(input: WpApiToolInput, key: string): Record<string, unknown> {
+  const value = input[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Missing required object field: ${key}`);
+  }
+  return value as Record<string, unknown>;
 }
 
 /** 读取可选字符串字段，未提供时返回 undefined。 */
@@ -341,6 +352,25 @@ function buildElementorFindArgs(input: WpApiToolInput): string[] {
   return args;
 }
 
+/** 根据 MCP 工具输入构造 Elementor 默认 Kit tokens 读取参数。 */
+function buildElementorGetTokensArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  rejectElementorResourceInput(input);
+  appendGlobalArgs(args, input);
+  args.push("elementor", "get-tokens", "--json");
+  return args;
+}
+
+/** 根据 MCP 工具输入构造 Elementor 默认 Kit tokens 更新参数。 */
+function buildElementorSetTokensArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  rejectElementorResourceInput(input);
+  appendGlobalArgs(args, input);
+  args.push("elementor", "set-tokens", "--json");
+  appendJsonOption(args, "--tokens-json", readRequiredObject(input, "tokens"));
+  return args;
+}
+
 /** 将 MCP 工具名和输入对象转换为现有 CLI 可以消费的 argv 数组。 */
 export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInput = {}): string[] {
   switch (toolName) {
@@ -380,6 +410,10 @@ export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInp
       return buildElementorGetElementArgs(input);
     case "wp_elementor_find":
       return buildElementorFindArgs(input);
+    case "wp_elementor_get_tokens":
+      return buildElementorGetTokensArgs(input);
+    case "wp_elementor_set_tokens":
+      return buildElementorSetTokensArgs(input);
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);
   }
