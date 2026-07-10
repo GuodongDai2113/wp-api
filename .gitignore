@@ -2,6 +2,6 @@
 node_modules/
 .worktrees/
 build/
-bin/
+build/bin/
 package-lock.json
-docs
+docs/
