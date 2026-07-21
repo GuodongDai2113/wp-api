@@ -368,6 +368,65 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       tokens: elementorSettingsSchema.describe("Top-level Elementor token settings to shallowly merge.")
     }
   );
+
+  server.registerTool(
+    "wp_plugin_list",
+    {
+      title: "List WordPress plugins",
+      description: "List installed WordPress plugins through native REST endpoints.",
+      inputSchema: {
+        ...globalInputShape,
+        status: z.string().optional().describe("Filter by status: active or inactive."),
+        search: z.string().optional().describe("Search text.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_plugin_list", context)
+  );
+
+  server.registerTool(
+    "wp_plugin_get",
+    {
+      title: "Get WordPress plugin",
+      description: "Get a single installed WordPress plugin by its plugin slug.",
+      inputSchema: {
+        ...globalInputShape,
+        plugin: z.string().describe("Plugin slug (e.g., akismet/akismet).")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_plugin_get", context)
+  );
+
+  server.registerTool(
+    "wp_plugin_update",
+    {
+      title: "Update WordPress plugin",
+      description: "Activate or deactivate a WordPress plugin.",
+      inputSchema: {
+        ...globalInputShape,
+        plugin: z.string().describe("Plugin slug (e.g., akismet/akismet)."),
+        status: z.string().describe("New status: active or inactive.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_plugin_update", context)
+  );
+
+  server.registerTool(
+    "wp_plugin_install",
+    {
+      title: "Install or update WordPress plugin",
+      description: "Install or update a WordPress plugin from a local zip file path or a remote URL.",
+      inputSchema: {
+        ...globalInputShape,
+        file: z.string().optional().describe("Local file path to the plugin .zip file readable by the MCP server process."),
+        url: z.string().url().optional().describe("Remote URL to download the plugin .zip file from.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_plugin_install", context)
+  );
 }
 
 /** 创建已经注册 wp-api 工具的 MCP server 实例。 */

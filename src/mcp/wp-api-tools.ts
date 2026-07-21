@@ -21,7 +21,11 @@ export type WpApiToolName =
   | "wp_elementor_get_element"
   | "wp_elementor_find"
   | "wp_elementor_get_tokens"
-  | "wp_elementor_set_tokens";
+  | "wp_elementor_set_tokens"
+  | "wp_plugin_list"
+  | "wp_plugin_get"
+  | "wp_plugin_update"
+  | "wp_plugin_install";
 
 /** MCP 工具收到的原始输入对象。 */
 export type WpApiToolInput = Record<string, unknown>;
@@ -371,6 +375,53 @@ function buildElementorSetTokensArgs(input: WpApiToolInput): string[] {
   return args;
 }
 
+/** 根据 MCP 工具输入构造插件列表查询的 CLI 参数。 */
+function buildPluginListArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("plugins", "list", "--json");
+  appendOption(args, "--status", readOptionalString(input, "status"));
+  appendOption(args, "--search", readOptionalString(input, "search"));
+  return args;
+}
+
+/** 根据 MCP 工具输入构造单个插件读取的 CLI 参数。 */
+function buildPluginGetArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("plugins", "get", readRequiredString(input, "plugin"), "--json");
+  return args;
+}
+
+/** 根据 MCP 工具输入构造插件更新的 CLI 参数。 */
+function buildPluginUpdateArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("plugins", "update", readRequiredString(input, "plugin"), "--json");
+  appendOption(args, "--status", readOptionalString(input, "status"));
+  return args;
+}
+
+/** 根据 MCP 工具输入构造插件安装的 CLI 参数。 */
+function buildPluginInstallArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("plugins", "install", "--json");
+  const file = readOptionalString(input, "file");
+  const url = readOptionalString(input, "url");
+  if (file && url) {
+    throw new Error("Provide only one of: file or url.");
+  }
+  if (file) {
+    appendOption(args, "--file", file);
+  } else if (url) {
+    appendOption(args, "--url", url);
+  } else {
+    throw new Error("Missing required field: provide either file or url.");
+  }
+  return args;
+}
+
 /** 将 MCP 工具名和输入对象转换为现有 CLI 可以消费的 argv 数组。 */
 export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInput = {}): string[] {
   switch (toolName) {
@@ -414,6 +465,14 @@ export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInp
       return buildElementorGetTokensArgs(input);
     case "wp_elementor_set_tokens":
       return buildElementorSetTokensArgs(input);
+    case "wp_plugin_list":
+      return buildPluginListArgs(input);
+    case "wp_plugin_get":
+      return buildPluginGetArgs(input);
+    case "wp_plugin_update":
+      return buildPluginUpdateArgs(input);
+    case "wp_plugin_install":
+      return buildPluginInstallArgs(input);
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);
   }

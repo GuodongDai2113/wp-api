@@ -34,6 +34,8 @@ export interface RequestOptions {
   query?: QueryParams;
   /** JSON 请求体。 */
   body?: unknown;
+  /** 自定义请求头，与默认头合并。 */
+  headers?: Record<string, string>;
 }
 
 /** WordPress 媒体上传选项。 */
@@ -306,11 +308,12 @@ export class WordPressClient {
   }
 
   /** 直接请求 `wp-json/` 下的指定 API path。 */
-  async requestApiPath<T = unknown>(apiPath: string, { method = "GET", query, body }: RequestOptions = {}): Promise<RequestResult<T>> {
+  async requestApiPath<T = unknown>(apiPath: string, { method = "GET", query, body, headers: extraHeaders }: RequestOptions = {}): Promise<RequestResult<T>> {
     const url = joinApiUrl(this.baseUrl, apiPath, query);
     const headers: Record<string, string> = {
       Authorization: createAuthHeader(this.username, this.appPassword),
-      Accept: "application/json"
+      Accept: "application/json",
+      ...extraHeaders
     };
 
     if (body !== undefined) {
@@ -484,6 +487,71 @@ export class WordPressClient {
     const mediaId = readMediaId(result.data);
     const updated = await this.update<T>("media", mediaId, metadataBody);
     return updated;
+  }
+
+  /** 使用 jelly-core REST API 从远程包 URL 安装或更新插件。 */
+  async jellyCorePluginInstall<T = unknown>(pluginSlug: string, packageUrl: string): Promise<T> {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = Buffer.from(`jellycore${timestamp}`).toString("base64");
+
+    const result = await this.requestApiPath<T>("jelly-core/v1/plugins/update", {
+      method: "POST",
+      body: { plugin_name: pluginSlug, package_url: packageUrl },
+      headers: {
+        "X-Jelly-Timestamp": timestamp,
+        "X-Jelly-Signature": signature
+      }
+    });
+    return result.data;
+  }
+
+  /** 从本地 .zip 文件上传到媒体库，再通过 jelly-core 安装或更新插件。 */
+  async uploadPluginFromFile<T = unknown>(filePath: string): Promise<T> {
+    const fileBytes = await readFile(filePath);
+    const filename = basename(filePath);
+    return this.installPluginZipViaMedia<T>(fileBytes, filename);
+  }
+
+  /** 从远程 URL 下载 .zip 文件，再通过 jelly-core 安装或更新插件。 */
+  async installPluginFromUrl<T = unknown>(url: string): Promise<T> {
+    const response = await this.fetchImpl(url);
+    if (!response.ok) {
+      throw new Error(`Failed to download plugin from ${url}: HTTP ${response.status}`);
+    }
+    const fileBytes = Buffer.from(await response.arrayBuffer());
+    const filename = basename(new URL(url).pathname) || "plugin.zip";
+    return this.installPluginZipViaMedia<T>(fileBytes, filename);
+  }
+
+  /** 上传 zip 到媒体库获取 URL，再调用 jelly-core 安装。 */
+  private async installPluginZipViaMedia<T = unknown>(data: Buffer, filename: string): Promise<T> {
+    const mediaResult = await this.requestApiPathWithRawBody<{ id: number; source_url?: string }>("wp/v2/media", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(filename)}"`
+      },
+      body: data as BodyInit
+    });
+    const media = mediaResult.data;
+    const mediaId = media.id;
+    const packageUrl = media.source_url;
+
+    if (!packageUrl) {
+      throw new Error("Media upload did not return a source URL.");
+    }
+
+    const pluginSlug = filename.replace(/\.zip$/i, "");
+
+    try {
+      return await this.jellyCorePluginInstall<T>(pluginSlug, packageUrl);
+    } finally {
+      try {
+        await this.delete("media", mediaId, { force: true });
+      } catch {
+        // 忽略媒体清理错误
+      }
+    }
   }
 
   /** 更新指定 ID 的资源。 */

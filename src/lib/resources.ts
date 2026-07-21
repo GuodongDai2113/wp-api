@@ -1,8 +1,8 @@
 /** wp-api 支持的资源名称。 */
-export type ResourceName = "posts" | "pages" | "products" | "categories" | "product-categories";
+export type ResourceName = "posts" | "pages" | "products" | "categories" | "product-categories" | "plugins";
 
 /** 资源请求体的类型分类。 */
-export type ResourceKind = "content" | "taxonomy";
+export type ResourceKind = "content" | "taxonomy" | "plugin";
 
 /** 删除资源时的默认删除模式。 */
 export type DeleteMode = "trash" | "force";
@@ -70,6 +70,14 @@ export function getResourceConfig(resourceName: string, client?: unknown): Resou
     return {
       route: "product_cat",
       kind: "taxonomy",
+      deleteMode: "force"
+    };
+  }
+
+  if (resourceName === "plugins") {
+    return {
+      route: "plugins",
+      kind: "plugin",
       deleteMode: "force"
     };
   }

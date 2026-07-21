@@ -135,6 +135,34 @@ interface LinksPayload {
   replacements: number;
 }
 
+/** jelly-core 插件安装/更新响应结构。 */
+interface JellyPluginInstallResult {
+  success: boolean;
+  action: string;
+  plugin_name: string;
+  plugin_file: string;
+  plugin_exists_before: boolean;
+  was_active: boolean;
+  is_active: boolean;
+  message: string;
+}
+
+/** WordPress 插件实体的最小字段集合。 */
+interface PluginEntity {
+  plugin: string;
+  status: string;
+  name: string;
+  version: string;
+  description: string;
+  plugin_uri?: string;
+  author?: string;
+  author_uri?: string;
+  requires_wp?: string;
+  requires_php?: string;
+  network_only?: boolean;
+  text_domain?: string;
+}
+
 /** media upload 命令返回给 CLI 和 MCP 的最小结构。 */
 interface MediaPayload {
   /** WordPress 媒体附件 ID。 */
@@ -432,6 +460,25 @@ function buildMediaUploadOptions(options: CliOptions): UploadMediaOptions {
 function renderMediaPayload(payload: MediaPayload): string {
   const label = payload.title?.rendered ?? payload.slug ?? payload.source_url ?? `(id:${payload.id})`;
   return `media ${payload.id}: ${label}\n`;
+}
+
+/** 将 jelly-core 安装结果渲染为人类可读文本。 */
+function renderJellyInstallResult(result: JellyPluginInstallResult): string {
+  const action = result.action === "updated" ? "更新" : "安装";
+  return `${result.plugin_name} (${result.plugin_file}) ${action}成功，状态：${result.is_active ? "启用" : "停用"}\n`;
+}
+
+/** 将单个插件实体渲染为人类可读的一行文本。 */
+function renderPluginEntity(entity: PluginEntity): string {
+  return `${entity.plugin}: ${entity.name} (${entity.status}, v${entity.version})\n`;
+}
+
+/** 将插件列表渲染为人类可读文本。 */
+function renderPluginList(payload: ListPayload): string {
+  const items = payload.items as PluginEntity[];
+  const lines = items.map((item) => `${item.plugin}\t${item.name}\t${item.status}\tv${item.version}`);
+  const footer = `Total ${payload.pagination.total}, ${payload.pagination.totalPages} pages`;
+  return `${["plugins:", ...lines, footer].join("\n")}\n`;
 }
 
 /** 读取必填 CLI 选项字符串。 */
@@ -888,6 +935,67 @@ async function handleElementorCommand(args: ParsedArgs, store: ConfigStore, opti
   return fail(`Unknown elementor subcommand: ${subcommand ?? "(missing)"}`);
 }
 
+/** 处理 plugins 命令组。 */
+async function handlePluginCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
+  const client = await resolveClient(args, store, options);
+  const [subcommand, pluginId] = args.positionals;
+
+  if (subcommand === "list") {
+    const payload = await client.list<PluginEntity>("plugins", buildListQuery(args.options));
+    return args.options.json
+      ? ok(renderJson(payload), payload)
+      : ok(renderPluginList(payload), payload);
+  }
+
+  if (subcommand === "get") {
+    if (!pluginId) {
+      return fail("Plugin slug is required.");
+    }
+    const result = await client.request<PluginEntity>(`plugins/${pluginId}`);
+    const entity = result.data;
+    return args.options.json
+      ? ok(renderJson(entity), entity)
+      : ok(renderPluginEntity(entity), entity);
+  }
+
+  if (subcommand === "update") {
+    if (!pluginId) {
+      return fail("Plugin slug is required.");
+    }
+    const body: Record<string, unknown> = {};
+    if (args.options.status) {
+      body.status = args.options.status;
+    }
+    if (Object.keys(body).length === 0) {
+      return fail("No update options provided. Use --status to activate/deactivate.");
+    }
+    const result = await client.request<PluginEntity>(`plugins/${pluginId}`, { method: "PUT", body });
+    const entity = result.data;
+    return args.options.json
+      ? ok(renderJson(entity), entity)
+      : ok(renderPluginEntity(entity), entity);
+  }
+
+  if (subcommand === "install") {
+    const file = optionString(args.options.file);
+    const url = optionString(args.options.url);
+    if (!file && !url) {
+      return fail("Provide --file <path> or --url <remote-url> to install the plugin zip.");
+    }
+    if (file && url) {
+      return fail("Provide only one of: --file or --url.");
+    }
+    const result = file
+      ? await client.uploadPluginFromFile<JellyPluginInstallResult>(file)
+      : await client.installPluginFromUrl<JellyPluginInstallResult>(url!);
+    return args.options.json
+      ? ok(renderJson(result), result)
+      : ok(renderJellyInstallResult(result), result);
+  }
+
+  return fail(`Unknown plugins subcommand: ${subcommand ?? "(missing)"}`);
+}
+
 /** 运行 wp-api CLI，并返回可供 bin 入口和 MCP 复用的结构化结果。 */
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<CliResult> {
   const { command, args: parsed } = parseCommandLine(argv);
@@ -912,6 +1020,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
     if (command === "elementor") {
       return await handleElementorCommand(parsed, store, options);
+    }
+
+    if (command === "plugins") {
+      return await handlePluginCommand(parsed, store, options);
     }
 
     if (["posts", "pages", "products", "categories", "product-categories"].includes(command ?? "")) {
