@@ -512,6 +512,59 @@ export class WordPressClient {
     return this.installPluginZipViaMedia<T>(fileBytes, filename);
   }
 
+  /** 读取本地主题 ZIP 文件并直接推送到 jelly-core 安装或覆盖更新。 */
+  async uploadThemeFromFile<T = unknown>(filePath: string): Promise<T> {
+    const fileBytes = await readFile(filePath);
+    const filename = basename(filePath);
+
+    if (!/\.zip$/i.test(filename)) {
+      throw new Error("Theme package must be a .zip file.");
+    }
+
+    const themeSlug = filename.replace(/\.zip$/i, "");
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = Buffer.from(`jellycore${timestamp}`).toString("base64");
+    const result = await this.requestApiPathWithRawBody<T>("jelly-core/v1/themes/install", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(filename)}"`,
+        "X-Jelly-Theme-Slug": themeSlug,
+        "X-Jelly-Timestamp": timestamp,
+        "X-Jelly-Signature": signature
+      },
+      body: fileBytes
+    });
+
+    return result.data;
+  }
+
+  /** 通过 jelly-core 激活或切换主题状态。 */
+  async updateThemeStatus<T = unknown>(
+    themeSlug: string,
+    status: "active" | "inactive",
+    replacementTheme?: string
+  ): Promise<T> {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = Buffer.from(`jellycore${timestamp}`).toString("base64");
+    const result = await this.requestApiPath<T>(
+      `jelly-core/v1/themes/${encodeURIComponent(themeSlug)}/status`,
+      {
+        method: "POST",
+        body: {
+          status,
+          ...(replacementTheme ? { replacement_theme: replacementTheme } : {})
+        },
+        headers: {
+          "X-Jelly-Timestamp": timestamp,
+          "X-Jelly-Signature": signature
+        }
+      }
+    );
+
+    return result.data;
+  }
+
   /** 从远程 URL 下载 .zip 文件，再通过 jelly-core 安装或更新插件。 */
   async installPluginFromUrl<T = unknown>(url: string): Promise<T> {
     const response = await this.fetchImpl(url);

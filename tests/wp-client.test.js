@@ -240,3 +240,105 @@ test("WordPressClient accepts a successful empty JSON response", async () => {
   assert.equal(result.data, null);
 });
 
+test("WordPressClient pushes a local theme zip directly to jelly-core", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-theme-"));
+  const filePath = path.join(tempDir, "jelly-theme.zip");
+  const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  const calls = [];
+  await writeFile(filePath, bytes);
+
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({
+        success: true,
+        action: "installed",
+        theme_name: "Jelly Theme",
+        theme_slug: "jelly-theme",
+        theme_version: "1.0.0",
+        is_active: false
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  const result = await client.uploadThemeFromFile(filePath);
+
+  assert.equal(result.theme_slug, "jelly-theme");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://example.com/wp-json/jelly-core/v1/themes/install");
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers["Content-Type"], "application/zip");
+  assert.equal(calls[0].init.headers["X-Jelly-Theme-Slug"], "jelly-theme");
+  assert.match(calls[0].init.headers["X-Jelly-Timestamp"], /^\d+$/);
+  assert.ok(calls[0].init.headers["X-Jelly-Signature"]);
+  assert.deepEqual(Buffer.from(calls[0].init.body), bytes);
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("WordPressClient activates a theme through jelly-core", async () => {
+  const calls = [];
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({
+        success: true,
+        action: "activated",
+        theme_slug: "jelly-theme",
+        is_active: true
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  const result = await client.updateThemeStatus("jelly-theme", "active");
+
+  assert.equal(result.is_active, true);
+  assert.equal(calls[0].url, "https://example.com/wp-json/jelly-core/v1/themes/jelly-theme/status");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { status: "active" });
+  assert.match(calls[0].init.headers["X-Jelly-Timestamp"], /^\d+$/);
+  assert.ok(calls[0].init.headers["X-Jelly-Signature"]);
+});
+
+test("WordPressClient deactivates a theme by sending a replacement theme", async () => {
+  const calls = [];
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({
+        success: true,
+        action: "deactivated",
+        theme_slug: "jelly-theme",
+        active_theme_slug: "twentytwentyfive",
+        is_active: false
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  const result = await client.updateThemeStatus("jelly-theme", "inactive", "twentytwentyfive");
+
+  assert.equal(result.is_active, false);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    status: "inactive",
+    replacement_theme: "twentytwentyfive"
+  });
+});
+
