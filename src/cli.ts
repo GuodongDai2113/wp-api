@@ -193,6 +193,34 @@ interface ElementorPayload {
   [key: string]: unknown;
 }
 
+/** jelly-core 主题安装或更新响应结构。 */
+interface JellyThemeInstallResult {
+  /** 操作是否成功。 */
+  success: boolean;
+  /** 实际执行的操作。 */
+  action: string;
+  /** 主题显示名称。 */
+  theme_name: string;
+  /** 主题目录 slug。 */
+  theme_slug: string;
+  /** 主题版本。 */
+  theme_version: string;
+  /** 主题当前是否启用。 */
+  is_active: boolean;
+}
+
+/** WordPress 原生主题 REST 实体。 */
+interface ThemeEntity {
+  /** 主题目录 slug。 */
+  stylesheet: string;
+  /** 主题显示名称。 */
+  name?: { rendered?: string } | string;
+  /** 主题版本。 */
+  version?: string;
+  /** 主题激活状态。 */
+  status?: string;
+}
+
 /** Elementor 默认 Kit tokens 命令返回的结构化数据。 */
 interface ElementorTokensPayload {
   /** Elementor 默认 Kit ID。 */
@@ -572,6 +600,26 @@ async function saveElementorTree(
       pageSettings
     })
   );
+}
+
+/** 将 jelly-core 主题推送结果渲染为人类可读文本。 */
+function renderJellyThemeInstallResult(result: JellyThemeInstallResult): string {
+  const action = result.action === "updated" ? "更新" : "安装";
+  const version = result.theme_version ? ` v${result.theme_version}` : "";
+  return `${result.theme_name}${version} (${result.theme_slug}) ${action}成功，状态：${result.is_active ? "启用" : "未启用"}\n`;
+}
+
+/** 将单个主题实体渲染为人类可读文本。 */
+function renderThemeEntity(theme: ThemeEntity): string {
+  const name = typeof theme.name === "string" ? theme.name : theme.name?.rendered ?? theme.stylesheet;
+  return `${theme.stylesheet}\t${name}\t${theme.status ?? "unknown"}\tv${theme.version ?? ""}\n`;
+}
+
+/** 将主题列表渲染为人类可读文本。 */
+function renderThemeList(payload: { items: ThemeEntity[] }): string {
+  const themes = payload.items;
+  const lines = themes.map((theme) => renderThemeEntity(theme).trimEnd());
+  return `${["themes:", ...lines, `Total ${themes.length}`].join("\n")}\n`;
 }
 
 /** 查询默认 Elementor Kit，并读取其 edit 上下文实体和页面设置。 */
@@ -996,6 +1044,61 @@ async function handlePluginCommand(args: ParsedArgs, store: ConfigStore, options
   return fail(`Unknown plugins subcommand: ${subcommand ?? "(missing)"}`);
 }
 
+/** 处理 themes 命令组，通过本地 ZIP 文件推送主题。 */
+async function handleThemeCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
+  const [subcommand, themeSlug] = args.positionals;
+  const client = await resolveClient(args, store, options);
+
+  if (subcommand === "list") {
+    const payload = await client.list<ThemeEntity>("themes", buildListQuery(args.options));
+    return args.options.json ? ok(renderJson(payload), payload) : ok(renderThemeList(payload), payload);
+  }
+
+  if (subcommand === "get") {
+    if (!themeSlug) {
+      return fail("Theme slug is required.");
+    }
+    const result = await client.request<ThemeEntity>(`themes/${themeSlug}`);
+    return args.options.json ? ok(renderJson(result.data), result.data) : ok(renderThemeEntity(result.data), result.data);
+  }
+
+  if (["push", "install", "update"].includes(subcommand ?? "")) {
+    const file = optionString(args.options.file);
+    if (!file) {
+      return fail("Missing required flag: --file");
+    }
+
+    const result = await client.uploadThemeFromFile<JellyThemeInstallResult>(file);
+    return args.options.json
+      ? ok(renderJson(result), result)
+      : ok(renderJellyThemeInstallResult(result), result);
+  }
+
+  if (subcommand === "activate") {
+    if (!themeSlug) {
+      return fail("Theme slug is required.");
+    }
+    const result = await client.updateThemeStatus(themeSlug, "active");
+    return args.options.json ? ok(renderJson(result), result) : ok(`Theme ${themeSlug} activated.\n`, result);
+  }
+
+  if (subcommand === "deactivate") {
+    if (!themeSlug) {
+      return fail("Theme slug is required.");
+    }
+    const replacementTheme = optionString(args.options["replacement-theme"]);
+    if (!replacementTheme) {
+      return fail("Missing required flag: --replacement-theme");
+    }
+    const result = await client.updateThemeStatus(themeSlug, "inactive", replacementTheme);
+    return args.options.json
+      ? ok(renderJson(result), result)
+      : ok(`Theme ${themeSlug} deactivated; active theme is ${replacementTheme}.\n`, result);
+  }
+
+  return fail(`Unknown themes subcommand: ${subcommand ?? "(missing)"}`);
+}
+
 /** 运行 wp-api CLI，并返回可供 bin 入口和 MCP 复用的结构化结果。 */
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<CliResult> {
   const { command, args: parsed } = parseCommandLine(argv);
@@ -1024,6 +1127,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
     if (command === "plugins") {
       return await handlePluginCommand(parsed, store, options);
+    }
+
+    if (command === "themes") {
+      return await handleThemeCommand(parsed, store, options);
     }
 
     if (["posts", "pages", "products", "categories", "product-categories"].includes(command ?? "")) {

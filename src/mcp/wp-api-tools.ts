@@ -20,12 +20,12 @@ export type WpApiToolName =
   | "wp_elementor_structure"
   | "wp_elementor_get_element"
   | "wp_elementor_find"
-  | "wp_elementor_get_tokens"
-  | "wp_elementor_set_tokens"
-  | "wp_plugin_list"
-  | "wp_plugin_get"
-  | "wp_plugin_update"
-  | "wp_plugin_install";
+  | "wp_package_list"
+  | "wp_package_get"
+  | "wp_package_install"
+  | "wp_package_update"
+  | "wp_package_activate"
+  | "wp_package_deactivate";
 
 /** MCP 工具收到的原始输入对象。 */
 export type WpApiToolInput = Record<string, unknown>;
@@ -91,6 +91,16 @@ function readRequiredString(input: WpApiToolInput, key: string): string {
     throw new Error(`Missing required string field: ${key}`);
   }
   return value;
+}
+
+/** WordPress 插件列表中用于识别 Jelly Core 的最小实体结构。 */
+interface PackagePluginEntity {
+  /** WordPress 插件文件标识。 */
+  plugin?: string;
+  /** 插件目录 slug。 */
+  slug?: string;
+  /** 插件激活状态。 */
+  status?: string;
 }
 
 /** 读取必填普通对象字段，缺失、数组或类型错误时抛出明确错误。 */
@@ -356,70 +366,145 @@ function buildElementorFindArgs(input: WpApiToolInput): string[] {
   return args;
 }
 
-/** 根据 MCP 工具输入构造 Elementor 默认 Kit tokens 读取参数。 */
-function buildElementorGetTokensArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  rejectElementorResourceInput(input);
-  appendGlobalArgs(args, input);
-  args.push("elementor", "get-tokens", "--json");
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 Elementor 默认 Kit tokens 更新参数。 */
-function buildElementorSetTokensArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  rejectElementorResourceInput(input);
-  appendGlobalArgs(args, input);
-  args.push("elementor", "set-tokens", "--json");
-  appendJsonOption(args, "--tokens-json", readRequiredObject(input, "tokens"));
-  return args;
-}
-
 /** 根据 MCP 工具输入构造插件列表查询的 CLI 参数。 */
-function buildPluginListArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("plugins", "list", "--json");
-  appendOption(args, "--status", readOptionalString(input, "status"));
-  appendOption(args, "--search", readOptionalString(input, "search"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造单个插件读取的 CLI 参数。 */
-function buildPluginGetArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("plugins", "get", readRequiredString(input, "plugin"), "--json");
-  return args;
-}
-
-/** 根据 MCP 工具输入构造插件更新的 CLI 参数。 */
-function buildPluginUpdateArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("plugins", "update", readRequiredString(input, "plugin"), "--json");
-  appendOption(args, "--status", readOptionalString(input, "status"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造插件安装的 CLI 参数。 */
-function buildPluginInstallArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("plugins", "install", "--json");
-  const file = readOptionalString(input, "file");
-  const url = readOptionalString(input, "url");
-  if (file && url) {
-    throw new Error("Provide only one of: file or url.");
+/** 读取并校验统一软件包工具的类型。 */
+function readPackageType(input: WpApiToolInput): "plugin" | "theme" {
+  const packageType = readRequiredString(input, "packageType");
+  if (packageType !== "plugin" && packageType !== "theme") {
+    throw new Error("packageType must be plugin or theme.");
   }
-  if (file) {
-    appendOption(args, "--file", file);
-  } else if (url) {
-    appendOption(args, "--url", url);
+  return packageType;
+}
+
+/** 根据软件包类型返回内部 CLI 命令组名称。 */
+function packageCommand(packageType: "plugin" | "theme"): "plugins" | "themes" {
+  return packageType === "plugin" ? "plugins" : "themes";
+}
+
+/** 根据 MCP 工具输入构造插件或主题列表的 CLI 参数。 */
+function buildPackageListArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  const packageType = readPackageType(input);
+  appendGlobalArgs(args, input);
+  args.push(packageCommand(packageType), "list", "--json");
+  appendOption(args, "--status", readOptionalString(input, "status"));
+  if (packageType === "plugin") {
+    appendOption(args, "--search", readOptionalString(input, "search"));
+  }
+  return args;
+}
+
+/** 根据 MCP 工具输入构造单个插件或主题读取的 CLI 参数。 */
+function buildPackageGetArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  const packageType = readPackageType(input);
+  appendGlobalArgs(args, input);
+  args.push(packageCommand(packageType), "get", readRequiredString(input, "package"), "--json");
+  return args;
+}
+
+/** 根据 MCP 工具输入构造插件或主题 ZIP 安装、更新的 CLI 参数。 */
+function buildPackageMutationArgs(input: WpApiToolInput, action: "install" | "update"): string[] {
+  const args: string[] = [];
+  const packageType = readPackageType(input);
+  appendGlobalArgs(args, input);
+  args.push(packageCommand(packageType), packageType === "plugin" ? "install" : action, "--json");
+  appendOption(args, "--file", readRequiredString(input, "file"));
+  return args;
+}
+
+/** 根据 MCP 工具输入构造插件或主题激活的 CLI 参数。 */
+function buildPackageActivateArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  const packageType = readPackageType(input);
+  const packageName = readRequiredString(input, "package");
+  appendGlobalArgs(args, input);
+  if (packageType === "plugin") {
+    args.push("plugins", "update", packageName, "--json", "--status", "active");
   } else {
-    throw new Error("Missing required field: provide either file or url.");
+    args.push("themes", "activate", packageName, "--json");
   }
   return args;
+}
+
+/** 根据 MCP 工具输入构造插件禁用的 CLI 参数，并拒绝主题禁用。 */
+function buildPackageDeactivateArgs(input: WpApiToolInput): string[] {
+  const packageType = readPackageType(input);
+  if (packageType === "theme") {
+    throw new Error("Themes cannot be deactivated through wp_package_deactivate.");
+  }
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("plugins", "update", readRequiredString(input, "package"), "--json", "--status", "inactive");
+  return args;
+}
+
+/** 判断指定软件包操作是否依赖 Jelly Core 自定义 REST 接口。 */
+function packageOperationRequiresJellyCore(toolName: WpApiToolName, input: WpApiToolInput): boolean {
+  if (toolName === "wp_package_install" || toolName === "wp_package_update") {
+    return true;
+  }
+
+  return toolName === "wp_package_activate" && readPackageType(input) === "theme";
+}
+
+/** 构造读取已激活插件列表的 CLI 参数，用于 Jelly Core 前置检查。 */
+function buildActivePluginListArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push("plugins", "list", "--json", "--status", "active");
+  return args;
+}
+
+/** 判断 CLI 返回的插件列表中是否包含已激活的 Jelly Core。 */
+function hasActiveJellyCore(data: unknown): boolean {
+  if (typeof data !== "object" || data === null || !("items" in data)) {
+    return false;
+  }
+
+  const items = (data as { items?: unknown }).items;
+  if (!Array.isArray(items)) {
+    return false;
+  }
+
+  return items.some((item) => {
+    if (typeof item !== "object" || item === null) {
+      return false;
+    }
+
+    const plugin = item as PackagePluginEntity;
+    const identifier = plugin.plugin ?? plugin.slug ?? "";
+    return plugin.status === "active"
+      && (
+        identifier === "jelly-core"
+        || identifier === "jelly-core/jelly-core"
+        || identifier === "jelly-core/jelly-core.php"
+      );
+  });
+}
+
+/** 在执行依赖 Jelly Core 的操作前确认目标站点已经激活核心插件。 */
+async function assertJellyCoreIsActive(
+  input: WpApiToolInput,
+  runCliImpl: RunCliImpl,
+  context: WpApiToolContext
+): Promise<void> {
+  const result = await runCliImpl(buildActivePluginListArgs(input), {
+    configDir: context.configDir,
+    fetchImpl: context.fetchImpl,
+    logger: context.logger
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || "Unable to check whether Jelly Core is active.");
+  }
+
+  if (!hasActiveJellyCore(result.data)) {
+    throw new Error(
+      "Jelly Core is not installed and active on the target site. "
+      + "This operation requires Jelly Core, so no install, update, or theme activation was attempted."
+    );
+  }
 }
 
 /** 将 MCP 工具名和输入对象转换为现有 CLI 可以消费的 argv 数组。 */
@@ -461,18 +546,18 @@ export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInp
       return buildElementorGetElementArgs(input);
     case "wp_elementor_find":
       return buildElementorFindArgs(input);
-    case "wp_elementor_get_tokens":
-      return buildElementorGetTokensArgs(input);
-    case "wp_elementor_set_tokens":
-      return buildElementorSetTokensArgs(input);
-    case "wp_plugin_list":
-      return buildPluginListArgs(input);
-    case "wp_plugin_get":
-      return buildPluginGetArgs(input);
-    case "wp_plugin_update":
-      return buildPluginUpdateArgs(input);
-    case "wp_plugin_install":
-      return buildPluginInstallArgs(input);
+    case "wp_package_list":
+      return buildPackageListArgs(input);
+    case "wp_package_get":
+      return buildPackageGetArgs(input);
+    case "wp_package_install":
+      return buildPackageMutationArgs(input, "install");
+    case "wp_package_update":
+      return buildPackageMutationArgs(input, "update");
+    case "wp_package_activate":
+      return buildPackageActivateArgs(input);
+    case "wp_package_deactivate":
+      return buildPackageDeactivateArgs(input);
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);
   }
@@ -485,6 +570,11 @@ export async function executeWpApiTool(
   context: WpApiToolContext = {}
 ): Promise<unknown> {
   const runCliImpl = context.runCliImpl ?? (runCli as unknown as RunCliImpl);
+
+  if (packageOperationRequiresJellyCore(toolName, input)) {
+    await assertJellyCoreIsActive(input, runCliImpl, context);
+  }
+
   const result = await runCliImpl(buildCliArgsForTool(toolName, input), {
     configDir: context.configDir,
     fetchImpl: context.fetchImpl,

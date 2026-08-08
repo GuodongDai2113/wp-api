@@ -60,12 +60,18 @@
 - `wp_seo_update`
 - `wp_post_link_add`
 - `wp_media_upload`
-- `wp_elementor_get_tokens`
-- `wp_elementor_set_tokens`
+- `wp_package_list`
+- `wp_package_get`
+- `wp_package_install`
+- `wp_package_update`
+- `wp_package_activate`
+- `wp_package_deactivate`
 
 `wp_media_upload` 使用本地路径上传图片到 WordPress 媒体库。`filePath` 必须是 MCP server 进程可以读取的路径，可选字段包括 `title`、`altText`、`caption`、`description`。
 
-`wp_elementor_get_tokens` 读取 Elementor 默认 Kit 的 `_elementor_page_settings`。`wp_elementor_set_tokens` 接收必填 `tokens` 对象，按 read → 顶层浅 merge → write 的顺序更新，写入成功后调用 `DELETE /wp-json/elementor/v1/cache`。两个工具均不接受 `postId` 或 `resource`。
+`wp_package_*` 使用必填的 `packageType` 区分 `plugin` 和 `theme`。列表、详情、ZIP 安装、ZIP 更新和激活同时支持插件与主题；`wp_package_deactivate` 仅支持插件。安装与更新的 `file` 必须是 MCP server 进程可以读取的本地 ZIP 路径。
+
+安装或更新插件、安装或更新主题以及激活主题依赖目标站点已经安装并激活 Jelly Core。MCP 会先读取目标站点的活动插件列表；如果没有找到活动状态的 `jelly-core/jelly-core.php`，会向 Agent 返回明确错误并终止操作，不会上传文件或发送后续变更请求。列表、详情以及插件激活和禁用使用 WordPress 原生接口，不依赖 Jelly Core。
 
 使用绝对路径指定项目内编译产物：
 

@@ -348,84 +348,87 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     }
   );
 
-  registerElementorTool(
-    server,
-    context,
-    "wp_elementor_get_tokens",
-    "Get Elementor global tokens",
-    "Read _elementor_page_settings from the site's default Elementor Kit.",
-    globalInputShape
-  );
-
-  registerElementorTool(
-    server,
-    context,
-    "wp_elementor_set_tokens",
-    "Set Elementor global tokens",
-    "Read, shallowly merge, and write default Kit page settings, then clear Elementor cache.",
-    {
-      ...globalInputShape,
-      tokens: elementorSettingsSchema.describe("Top-level Elementor token settings to shallowly merge.")
-    }
-  );
+  const packageTypeSchema = z.enum(["plugin", "theme"]).describe("WordPress package type.");
 
   server.registerTool(
-    "wp_plugin_list",
+    "wp_package_list",
     {
-      title: "List WordPress plugins",
-      description: "List installed WordPress plugins through native REST endpoints.",
+      title: "List WordPress packages",
+      description: "List installed plugins or themes.",
       inputSchema: {
         ...globalInputShape,
-        status: z.string().optional().describe("Filter by status: active or inactive."),
-        search: z.string().optional().describe("Search text.")
+        packageType: packageTypeSchema,
+        status: z.enum(["active", "inactive"]).optional().describe("Optional activation status filter."),
+        search: z.string().optional().describe("Optional plugin search text; ignored for themes.")
       },
       outputSchema
     },
-    createToolCallback("wp_plugin_list", context)
+    createToolCallback("wp_package_list", context)
   );
 
   server.registerTool(
-    "wp_plugin_get",
+    "wp_package_get",
     {
-      title: "Get WordPress plugin",
-      description: "Get a single installed WordPress plugin by its plugin slug.",
+      title: "Get WordPress package",
+      description: "Get an installed plugin or theme.",
       inputSchema: {
         ...globalInputShape,
-        plugin: z.string().describe("Plugin slug (e.g., akismet/akismet).")
+        packageType: packageTypeSchema,
+        package: z.string().describe("Plugin file slug or theme stylesheet slug.")
       },
       outputSchema
     },
-    createToolCallback("wp_plugin_get", context)
+    createToolCallback("wp_package_get", context)
+  );
+
+  for (const [toolName, title, description] of [
+    ["wp_package_install", "Install WordPress package", "Install a plugin or theme from a local zip file."],
+    ["wp_package_update", "Update WordPress package", "Update a plugin or theme from a local zip file."]
+  ] as const) {
+    server.registerTool(
+      toolName,
+      {
+        title,
+        description,
+        inputSchema: {
+          ...globalInputShape,
+          packageType: packageTypeSchema,
+          file: z.string().describe("Local .zip path readable by the MCP server process.")
+        },
+        outputSchema
+      },
+      createToolCallback(toolName, context)
+    );
+  }
+
+  server.registerTool(
+    "wp_package_activate",
+    {
+      title: "Activate WordPress package",
+      description: "Activate an installed plugin or switch to an installed theme.",
+      inputSchema: {
+        ...globalInputShape,
+        packageType: packageTypeSchema,
+        package: z.string().describe("Plugin file slug or theme stylesheet slug.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_package_activate", context)
   );
 
   server.registerTool(
-    "wp_plugin_update",
+    "wp_package_deactivate",
     {
-      title: "Update WordPress plugin",
-      description: "Activate or deactivate a WordPress plugin.",
+      title: "Deactivate WordPress plugin",
+      description: "Deactivate an installed plugin. Themes are not supported by this operation.",
       inputSchema: {
         ...globalInputShape,
-        plugin: z.string().describe("Plugin slug (e.g., akismet/akismet)."),
-        status: z.string().describe("New status: active or inactive.")
+        packageType: z.literal("plugin").describe("Must be plugin; themes do not support deactivation."),
+        package: z.string().describe("Plugin file slug.")
       },
       outputSchema
     },
-    createToolCallback("wp_plugin_update", context)
-  );
-
-  server.registerTool(
-    "wp_plugin_install",
-    {
-      title: "Install or update WordPress plugin",
-      description: "Install or update a WordPress plugin from a local zip file path or a remote URL.",
-      inputSchema: {
-        ...globalInputShape,
-        file: z.string().optional().describe("Local file path to the plugin .zip file readable by the MCP server process."),
-        url: z.string().url().optional().describe("Remote URL to download the plugin .zip file from.")
-      },
-      outputSchema
-    },
-    createToolCallback("wp_plugin_install", context)
+    createToolCallback("wp_package_deactivate", context)
   );
 }
 

@@ -159,29 +159,7 @@ test("wp_elementor_get_element maps element lookup to Elementor CLI arguments", 
   );
 });
 
-test("wp_elementor_get_tokens maps to a default kit CLI read", () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_elementor_get_tokens", { client: "prod" }),
-    ["--client", "prod", "elementor", "get-tokens", "--json"]
-  );
-});
-
-test("wp_elementor_set_tokens maps token updates to JSON CLI input", () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_elementor_set_tokens", {
-      tokens: { system_colors: [{ _id: "primary", color: "#112233" }] }
-    }),
-    [
-      "elementor",
-      "set-tokens",
-      "--json",
-      "--tokens-json",
-      "{\"system_colors\":[{\"_id\":\"primary\",\"color\":\"#112233\"}]}"
-    ]
-  );
-});
-
-test("Elementor token MCP tools are registered with required token settings", () => {
+test("Elementor token MCP tools are removed while other Elementor tools remain", () => {
   const registrations = new Map();
   const server = {
     registerTool(name, definition) {
@@ -191,13 +169,21 @@ test("Elementor token MCP tools are registered with required token settings", ()
 
   registerWpApiTools(server);
 
-  assert.ok(registrations.has("wp_elementor_get_tokens"));
-  assert.ok(registrations.has("wp_elementor_set_tokens"));
-  const setDefinition = registrations.get("wp_elementor_set_tokens");
-  assert.equal(setDefinition.inputSchema.postId, undefined);
-  assert.equal(setDefinition.inputSchema.resource, undefined);
-  assert.equal(setDefinition.inputSchema.tokens.safeParse(undefined).success, false);
-  assert.equal(setDefinition.inputSchema.tokens.safeParse({}).success, true);
+  assert.equal(registrations.has("wp_elementor_get_tokens"), false);
+  assert.equal(registrations.has("wp_elementor_set_tokens"), false);
+  assert.throws(() => buildCliArgsForTool("wp_elementor_get_tokens", {}), /Unknown MCP tool/);
+  assert.throws(() => buildCliArgsForTool("wp_elementor_set_tokens", {}), /Unknown MCP tool/);
+
+  for (const toolName of [
+    "wp_elementor_init",
+    "wp_elementor_export",
+    "wp_elementor_import",
+    "wp_elementor_structure",
+    "wp_elementor_get_element",
+    "wp_elementor_find"
+  ]) {
+    assert.ok(registrations.has(toolName), `${toolName} should remain registered`);
+  }
 });
 
 test("wp_elementor construction tools are not exposed by wp-api MCP", async () => {
@@ -257,5 +243,268 @@ test("executeWpApiTool returns structured data from runCli", async () => {
   });
 
   assert.deepEqual(result, { activeClient: null, clients: [] });
+});
+
+test("wp_package tools map plugin and theme operations to existing CLI commands", () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_list", {
+      client: "prod",
+      packageType: "theme",
+      status: "inactive"
+    }),
+    ["--client", "prod", "themes", "list", "--json", "--status", "inactive"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_get", {
+      packageType: "theme",
+      package: "twentytwentyfive"
+    }),
+    ["themes", "get", "twentytwentyfive", "--json"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_install", {
+      packageType: "theme",
+      file: "theme.zip"
+    }),
+    ["themes", "install", "--json", "--file", "theme.zip"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_update", {
+      packageType: "plugin",
+      file: "plugin.zip"
+    }),
+    ["plugins", "install", "--json", "--file", "plugin.zip"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_activate", {
+      packageType: "theme",
+      package: "theme"
+    }),
+    ["themes", "activate", "theme", "--json"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_activate", {
+      packageType: "plugin",
+      package: "akismet/akismet"
+    }),
+    ["plugins", "update", "akismet/akismet", "--json", "--status", "active"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_package_deactivate", {
+      packageType: "plugin",
+      package: "akismet/akismet"
+    }),
+    ["plugins", "update", "akismet/akismet", "--json", "--status", "inactive"]
+  );
+});
+
+test("wp_package tools are registered and package type is required", () => {
+  const registrations = new Map();
+  const server = {
+    registerTool(name, definition) {
+      registrations.set(name, definition);
+    }
+  };
+
+  registerWpApiTools(server);
+
+  for (const toolName of [
+    "wp_package_list",
+    "wp_package_get",
+    "wp_package_install",
+    "wp_package_update",
+    "wp_package_activate",
+    "wp_package_deactivate"
+  ]) {
+    assert.ok(registrations.has(toolName), `${toolName} should be registered`);
+  }
+
+  assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse(undefined).success, false);
+  assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse("plugin").success, true);
+  assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse("theme").success, true);
+  assert.equal(registrations.get("wp_package_install").inputSchema.file.safeParse(undefined).success, false);
+  assert.equal(registrations.get("wp_package_deactivate").inputSchema.packageType.safeParse("theme").success, false);
+});
+
+test("legacy plugin and theme MCP tools are removed", () => {
+  const registrations = new Map();
+  const server = {
+    registerTool(name, definition) {
+      registrations.set(name, definition);
+    }
+  };
+
+  registerWpApiTools(server);
+
+  for (const toolName of [
+    "wp_theme_push",
+    "wp_theme_list",
+    "wp_theme_get",
+    "wp_theme_install",
+    "wp_theme_update",
+    "wp_theme_activate",
+    "wp_theme_deactivate",
+    "wp_plugin_list",
+    "wp_plugin_get",
+    "wp_plugin_update",
+    "wp_plugin_install"
+  ]) {
+    assert.equal(registrations.has(toolName), false, `${toolName} should be removed`);
+    assert.throws(() => buildCliArgsForTool(toolName, {}), /Unknown MCP tool/);
+  }
+});
+
+test("wp_package_deactivate rejects themes", () => {
+  assert.throws(
+    () => buildCliArgsForTool("wp_package_deactivate", {
+      packageType: "theme",
+      package: "theme"
+    }),
+    /Themes cannot be deactivated/
+  );
+});
+
+test("package install checks active Jelly Core before executing the mutation", async () => {
+  const calls = [];
+  const result = await executeWpApiTool("wp_package_install", {
+    client: "prod",
+    packageType: "theme",
+    file: "theme.zip"
+  }, {
+    runCliImpl: async (args) => {
+      calls.push(args);
+      if (calls.length === 1) {
+        return {
+          exitCode: 0,
+          stdout: "{}\n",
+          stderr: "",
+          data: {
+            items: [
+              {
+                plugin: "jelly-core/jelly-core",
+                status: "active"
+              }
+            ],
+            pagination: { total: 1, totalPages: 1 }
+          }
+        };
+      }
+
+      return {
+        exitCode: 0,
+        stdout: "{}\n",
+        stderr: "",
+        data: { success: true }
+      };
+    }
+  });
+
+  assert.deepEqual(calls, [
+    ["--client", "prod", "plugins", "list", "--json", "--status", "active"],
+    ["--client", "prod", "themes", "install", "--json", "--file", "theme.zip"]
+  ]);
+  assert.deepEqual(result, { success: true });
+});
+
+test("package mutation stops before work when Jelly Core is missing or inactive", async () => {
+  const calls = [];
+
+  await assert.rejects(
+    () => executeWpApiTool("wp_package_update", {
+      packageType: "plugin",
+      file: "plugin.zip"
+    }, {
+      runCliImpl: async (args) => {
+        calls.push(args);
+        return {
+          exitCode: 0,
+          stdout: "{}\n",
+          stderr: "",
+          data: {
+            items: [
+              {
+                plugin: "jelly-core/jelly-core.php",
+                status: "inactive"
+              }
+            ],
+            pagination: { total: 1, totalPages: 1 }
+          }
+        };
+      }
+    }),
+    /Jelly Core is not installed and active/
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ["plugins", "list", "--json", "--status", "active"]);
+});
+
+test("theme activation requires Jelly Core but plugin activation uses native WordPress directly", async () => {
+  const themeCalls = [];
+  await assert.rejects(
+    () => executeWpApiTool("wp_package_activate", {
+      packageType: "theme",
+      package: "theme"
+    }, {
+      runCliImpl: async (args) => {
+        themeCalls.push(args);
+        return {
+          exitCode: 0,
+          stdout: "{}\n",
+          stderr: "",
+          data: { items: [], pagination: { total: 0, totalPages: 0 } }
+        };
+      }
+    }),
+    /Jelly Core is not installed and active/
+  );
+  assert.equal(themeCalls.length, 1);
+
+  const pluginCalls = [];
+  const pluginResult = await executeWpApiTool("wp_package_activate", {
+    packageType: "plugin",
+    package: "akismet/akismet"
+  }, {
+    runCliImpl: async (args) => {
+      pluginCalls.push(args);
+      return {
+        exitCode: 0,
+        stdout: "{}\n",
+        stderr: "",
+        data: { plugin: "akismet/akismet", status: "active" }
+      };
+    }
+  });
+
+  assert.equal(pluginCalls.length, 1);
+  assert.deepEqual(pluginCalls[0], [
+    "plugins",
+    "update",
+    "akismet/akismet",
+    "--json",
+    "--status",
+    "active"
+  ]);
+  assert.equal(pluginResult.status, "active");
+});
+
+test("package list and get do not require Jelly Core", async () => {
+  const calls = [];
+  await executeWpApiTool("wp_package_list", {
+    packageType: "theme"
+  }, {
+    runCliImpl: async (args) => {
+      calls.push(args);
+      return {
+        exitCode: 0,
+        stdout: "{}\n",
+        stderr: "",
+        data: { items: [], pagination: { total: 0, totalPages: 0 } }
+      };
+    }
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ["themes", "list", "--json"]);
 });
 
