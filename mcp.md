@@ -58,7 +58,7 @@
 - `wp_resource_delete`
 - `wp_seo_get`
 - `wp_seo_update`
-- `wp_post_link_add`
+- `wp_post_link` (`action`: `list`, `add`, `update`, or `remove`)
 - `wp_media_upload`
 - `wp_package_list`
 - `wp_package_get`
@@ -66,10 +66,14 @@
 - `wp_package_update`
 - `wp_package_activate`
 - `wp_package_deactivate`
+- `wp_package_pack_theme`
+- `wp_package_pack_plugin`
 
 `wp_media_upload` 使用本地路径上传图片到 WordPress 媒体库。`filePath` 必须是 MCP server 进程可以读取的路径，可选字段包括 `title`、`altText`、`caption`、`description`。
 
 `wp_package_*` 使用必填的 `packageType` 区分 `plugin` 和 `theme`。列表、详情、ZIP 安装、ZIP 更新和激活同时支持插件与主题；`wp_package_deactivate` 仅支持插件。安装与更新的 `file` 必须是 MCP server 进程可以读取的本地 ZIP 路径。
+
+`wp_package_pack_theme` 和 `wp_package_pack_plugin` 是纯本地打包工具。两者都接收必填的 `folderPath`；可选 `outputPath` 必须以 `.zip` 结尾，未提供时会在源文件夹同级生成 `<文件夹名>.zip`。ZIP 内保留源文件夹作为顶层目录，可直接用于 WordPress 安装；输出文件不允许位于源文件夹内部。
 
 安装或更新插件、安装或更新主题以及激活主题依赖目标站点已经安装并激活 Jelly Core。MCP 会先读取目标站点的活动插件列表；如果没有找到活动状态的 `jelly-core/jelly-core.php`，会向 Agent 返回明确错误并终止操作，不会上传文件或发送后续变更请求。列表、详情以及插件激活和禁用使用 WordPress 原生接口，不依赖 Jelly Core。
 

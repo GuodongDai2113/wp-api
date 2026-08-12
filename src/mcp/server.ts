@@ -244,19 +244,38 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
-    "wp_post_link_add",
+    "wp_post_link",
     {
-      title: "Add link to WordPress post",
-      description: "Replace the first exact matching text in a post with an anchor tag.",
+      title: "Manage links in WordPress post content",
+      description: "List, add, update, or remove links in the editable raw content of a WordPress post.",
       inputSchema: {
         ...globalInputShape,
+        action: z.enum(["list", "add", "update", "remove"]).describe("Link operation to perform."),
         postId: z.number().int().positive().describe("Post ID."),
-        text: z.string().min(1).describe("Exact text to link."),
-        href: z.string().min(1).describe("Link href.")
+        text: z.string().min(1).optional().describe("Add: exact visible text to link. Update/remove: optional anchor text filter."),
+        href: z.string().min(1).optional().describe("Add: new link URL. Update/remove: existing link URL to locate."),
+        newHref: z.string().min(1).optional().describe("Update: replacement link URL."),
+        newText: z.string().min(1).optional().describe("Update: replacement anchor text.")
       },
       outputSchema
     },
-    createToolCallback("wp_post_link_add", context)
+    createToolCallback("wp_post_link", context)
+  );
+
+  server.registerTool(
+    "wp_post_content_replace",
+    {
+      title: "Replace text in WordPress post content",
+      description: "Replace every exact occurrence of text in a post's content, for example to fix a misspelled word.",
+      inputSchema: {
+        ...globalInputShape,
+        postId: z.number().int().positive().describe("Post ID."),
+        text: z.string().min(1).describe("Exact text to find in the post content."),
+        replacement: z.string().min(1).describe("Text that replaces every exact match.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_post_content_replace", context)
   );
 
   server.registerTool(
@@ -430,6 +449,25 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     },
     createToolCallback("wp_package_deactivate", context)
   );
+
+  for (const [toolName, title, description] of [
+    ["wp_package_pack_theme", "Package WordPress theme", "Package a local theme folder as a WordPress-installable zip file."],
+    ["wp_package_pack_plugin", "Package WordPress plugin", "Package a local plugin folder as a WordPress-installable zip file."]
+  ] as const) {
+    server.registerTool(
+      toolName,
+      {
+        title,
+        description,
+        inputSchema: {
+          folderPath: z.string().min(1).describe("Local theme or plugin folder path readable by the MCP server process."),
+          outputPath: z.string().min(1).optional().describe("Optional output .zip path. Defaults to <folder-name>.zip beside the source folder.")
+        },
+        outputSchema
+      },
+      createToolCallback(toolName, context)
+    );
+  }
 }
 
 /** 创建已经注册 wp-api 工具的 MCP server 实例。 */

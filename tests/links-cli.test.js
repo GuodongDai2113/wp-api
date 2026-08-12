@@ -159,12 +159,12 @@ test("links add rejects a value-less href flag", async () => {
 test("links command requires the add subcommand", async () => {
   await withClient(async (configDir) => {
     const missing = await runCli(["links"], { configDir });
-    const unknown = await runCli(["links", "remove", "42"], { configDir });
+    const unknown = await runCli(["links", "duplicate", "42"], { configDir });
 
     assert.equal(missing.exitCode, 1);
     assert.equal(missing.stderr, "Unknown links subcommand: (missing)\n");
     assert.equal(unknown.exitCode, 1);
-    assert.equal(unknown.stderr, "Unknown links subcommand: remove\n");
+    assert.equal(unknown.stderr, "Unknown links subcommand: duplicate\n");
   });
 });
 
@@ -217,7 +217,7 @@ test("links add fetches a post then updates raw content", async () => {
 
     assert.equal(result.exitCode, 0);
     assert.equal(calls.length, 2);
-    assert.equal(calls[0].url, "https://example.com/wp-json/wp/v2/posts/42");
+    assert.equal(calls[0].url, "https://example.com/wp-json/wp/v2/posts/42?context=edit");
     assert.equal(calls[0].init.method, "GET");
     assert.equal(calls[1].url, "https://example.com/wp-json/wp/v2/posts/42");
     assert.equal(calls[1].init.method, "POST");
@@ -237,7 +237,7 @@ test("links add fetches a post then updates raw content", async () => {
   });
 });
 
-test("links add uses rendered content when raw content is unavailable", async () => {
+test("links add refuses to write rendered content when raw content is unavailable", async () => {
   await withClient(async (configDir) => {
     const calls = [];
 
@@ -261,19 +261,13 @@ test("links add uses rendered content when raw content is unavailable", async ()
           );
         }
 
-        return new Response(JSON.stringify({ id: 42 }), {
-          status: 200,
-          headers: { "content-type": "application/json" }
-        });
+        throw new Error("An update request must not be sent.");
       }
     });
 
-    assert.equal(result.exitCode, 0);
-    assert.equal(calls.length, 2);
-    assert.deepEqual(JSON.parse(calls[1].init.body), {
-      content: '<p>Alpha <a href="https://example.com/beta">Beta</a></p>'
-    });
-    assert.equal(result.stdout, "Link added to post 42: Beta -> https://example.com/beta\n");
+    assert.equal(result.exitCode, 1);
+    assert.equal(calls.length, 1);
+    assert.match(result.stderr, /Editable raw post content is unavailable/);
   });
 });
 
@@ -327,7 +321,7 @@ test("links add reports no matching text in text output", async () => {
   });
 });
 
-test("links add does not update when first match is already inside a link", async () => {
+test("links add skips an existing first match and updates the next plain-text match", async () => {
   await withClient(async (configDir) => {
     const calls = [];
 
@@ -335,7 +329,10 @@ test("links add does not update when first match is already inside a link", asyn
       configDir,
       fetchImpl: async (url, init) => {
         calls.push({ url, init });
-        return new Response(JSON.stringify({ id: 42, content: { raw: '<a href="/old">Beta</a> Beta' } }), {
+        const responseContent = init.body
+          ? JSON.parse(init.body).content
+          : '<a href="/old">Beta</a> Beta';
+        return new Response(JSON.stringify({ id: 42, content: { raw: responseContent } }), {
           status: 200,
           headers: { "content-type": "application/json" }
         });
@@ -343,10 +340,90 @@ test("links add does not update when first match is already inside a link", asyn
     });
 
     assert.equal(result.exitCode, 0);
+    assert.equal(calls.length, 2);
+    assert.equal(result.stdout, "Link added to post 42: Beta -> https://example.com/beta\n");
+    assert.deepEqual(JSON.parse(calls[1].init.body), {
+      content: '<a href="/old">Beta</a> <a href="https://example.com/beta">Beta</a>'
+    });
+    assert.equal(result.data.updated, true);
+  });
+});
+
+test("links add rejects unsafe href protocols before reading the post", async () => {
+  await withTempConfig(async (configDir) => {
+    const calls = [];
+    const result = await runCli(
+      ["links", "add", "42", "--text", "Beta", "--href", "javascript:alert(1)"],
+      { configDir, fetchImpl: async (...args) => calls.push(args) }
+    );
+
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /HTTP\(S\) URL or a relative URL/);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("links list returns all links without updating the post", async () => {
+  await withClient(async (configDir) => {
+    const calls = [];
+    const result = await runCli(["links", "list", "42", "--json"], {
+      configDir,
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(JSON.stringify({
+          id: 42,
+          content: { raw: '<p><a href="/one">One</a> and <a href="/two">Two</a></p>' }
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+
+    assert.equal(result.exitCode, 0);
     assert.equal(calls.length, 1);
-    assert.equal(result.stdout, "Matching text is already inside a link in post 42: Beta\n");
-    assert.equal(result.data.status, "skipped_existing_link");
-    assert.equal(result.data.updated, false);
+    assert.deepEqual(result.data.links, [
+      { index: 0, href: "/one", text: "One" },
+      { index: 1, href: "/two", text: "Two" }
+    ]);
+  });
+});
+
+test("links update changes the selected link and links remove unwraps it", async () => {
+  await withClient(async (configDir) => {
+    let content = '<p><a href="/old"><strong>Old</strong> Link</a></p>';
+    const fetchImpl = async (url, init) => {
+      if (init.body) {
+        content = JSON.parse(init.body).content;
+      }
+      return new Response(JSON.stringify({ id: 42, content: { raw: content } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    const updated = await runCli([
+      "links", "update", "42", "--href", "/old", "--text", "Old Link",
+      "--new-href", "/new", "--new-text", "New Link", "--json"
+    ], { configDir, fetchImpl });
+    assert.equal(updated.exitCode, 0);
+    assert.equal(content, '<p><a href="/new">New Link</a></p>');
+
+    const removed = await runCli([
+      "links", "remove", "42", "--href", "/new", "--text", "New Link", "--json"
+    ], { configDir, fetchImpl });
+    assert.equal(removed.exitCode, 0);
+    assert.equal(content, "<p>New Link</p>");
+  });
+});
+
+test("links update requires at least one new value before reading the post", async () => {
+  await withTempConfig(async (configDir) => {
+    const calls = [];
+    const result = await runCli(["links", "update", "42", "--href", "/old"], {
+      configDir,
+      fetchImpl: async (...args) => calls.push(args)
+    });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /--new-href or --new-text/);
+    assert.equal(calls.length, 0);
   });
 });
 

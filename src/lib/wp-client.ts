@@ -454,9 +454,9 @@ export class WordPressClient {
     };
   }
 
-  /** 读取指定 ID 的单个资源。 */
-  async get<T = unknown>(route: string, id: number): Promise<T> {
-    const result = await this.request<T>(`${route}/${id}`);
+  /** 读取指定 ID 的单个资源，并允许传入上下文等查询参数。 */
+  async get<T = unknown>(route: string, id: number, query?: QueryParams): Promise<T> {
+    const result = await this.request<T>(`${route}/${id}`, { query });
     return result.data;
   }
 

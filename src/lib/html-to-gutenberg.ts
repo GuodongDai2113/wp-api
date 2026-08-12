@@ -455,7 +455,7 @@ function appendClassAttribute(attrs: string, className: string): string {
   if (!classes.includes(className)) {
     classes.unshift(className);
   }
-  return source.replace(classMatch[0], ` class="${classes.join(" ")}"`).trimStart();
+  return source.replace(classMatch[0], ` class="${classes.join(" ")}"`);
 }
 
 /** 从标签属性字符串中读取指定属性值。 */

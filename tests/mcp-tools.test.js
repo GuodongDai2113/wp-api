@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import { buildCliArgsForTool, executeWpApiTool } from "../build/mcp/wp-api-tools.js";
 import { registerWpApiTools } from "../build/mcp/server.js";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 test("wp_resource_list maps MCP input to JSON CLI arguments", async () => {
   assert.deepEqual(
@@ -232,6 +235,74 @@ test("wp_resource_update maps featuredMedia to featured media CLI option", async
   );
 });
 
+test("wp_post_content_replace maps exact text replacement to CLI arguments", () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_post_content_replace", {
+      client: "prod",
+      postId: 42,
+      text: "teh",
+      replacement: "the"
+    }),
+    [
+      "--client",
+      "prod",
+      "content",
+      "replace",
+      "42",
+      "--json",
+      "--text",
+      "teh",
+      "--replacement",
+      "the"
+    ]
+  );
+});
+
+test("wp_post_link maps all actions through one MCP entry point", () => {
+  assert.deepEqual(
+    buildCliArgsForTool("wp_post_link", { action: "list", postId: 42 }),
+    ["links", "list", "42", "--json"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_post_link", { action: "add", postId: 42, text: "Beta", href: "/beta" }),
+    ["links", "add", "42", "--json", "--text", "Beta", "--href", "/beta"]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_post_link", {
+      action: "update", postId: 42, href: "/old", text: "Old", newHref: "/new", newText: "New"
+    }),
+    [
+      "links", "update", "42", "--json", "--href", "/old", "--text", "Old",
+      "--new-href", "/new", "--new-text", "New"
+    ]
+  );
+  assert.deepEqual(
+    buildCliArgsForTool("wp_post_link", { action: "remove", postId: 42, href: "/old" }),
+    ["links", "remove", "42", "--json", "--href", "/old"]
+  );
+  assert.throws(() => buildCliArgsForTool("wp_post_link_add", {}), /Unknown MCP tool/);
+});
+
+test("wp_post_link is registered as the only post link MCP entry point", () => {
+  const registrations = new Map();
+  const server = { registerTool(name, definition) { registrations.set(name, definition); } };
+  registerWpApiTools(server);
+  assert.equal(registrations.has("wp_post_link"), true);
+  assert.equal(registrations.has("wp_post_link_add"), false);
+});
+
+test("wp_post_content_replace is registered with the MCP server", () => {
+  const registrations = new Map();
+  const server = {
+    registerTool(name, definition) {
+      registrations.set(name, definition);
+    }
+  };
+
+  registerWpApiTools(server);
+  assert.ok(registrations.has("wp_post_content_replace"));
+});
+
 test("executeWpApiTool returns structured data from runCli", async () => {
   const result = await executeWpApiTool("wp_client_list", {}, {
     runCliImpl: async () => ({
@@ -314,7 +385,9 @@ test("wp_package tools are registered and package type is required", () => {
     "wp_package_install",
     "wp_package_update",
     "wp_package_activate",
-    "wp_package_deactivate"
+    "wp_package_deactivate",
+    "wp_package_pack_theme",
+    "wp_package_pack_plugin"
   ]) {
     assert.ok(registrations.has(toolName), `${toolName} should be registered`);
   }
@@ -324,6 +397,30 @@ test("wp_package tools are registered and package type is required", () => {
   assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse("theme").success, true);
   assert.equal(registrations.get("wp_package_install").inputSchema.file.safeParse(undefined).success, false);
   assert.equal(registrations.get("wp_package_deactivate").inputSchema.packageType.safeParse("theme").success, false);
+});
+
+test("package folder tools create WordPress zip files without invoking the CLI", async () => {
+  const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-package-"));
+  const themeDirectory = path.join(tempDirectory, "sample-theme");
+  const outputFile = path.join(tempDirectory, "dist", "sample-theme.zip");
+  await mkdir(themeDirectory);
+  await writeFile(path.join(themeDirectory, "style.css"), "/* Theme Name: Sample */\n");
+
+  const result = await executeWpApiTool("wp_package_pack_theme", {
+    folderPath: themeDirectory,
+    outputPath: outputFile
+  }, {
+    runCliImpl: async () => {
+      throw new Error("The CLI must not be called for local packaging.");
+    }
+  });
+
+  const archive = await readFile(outputFile);
+  assert.equal(result.packageType, "theme");
+  assert.equal(result.outputFile, outputFile);
+  assert.ok(result.size > 0);
+  assert.equal(archive.subarray(0, 4).toString("hex"), "504b0304");
+  assert.ok(archive.includes(Buffer.from("sample-theme/style.css")));
 });
 
 test("legacy plugin and theme MCP tools are removed", () => {

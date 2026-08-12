@@ -1,4 +1,5 @@
 import { runCli } from "../cli.js";
+import { createPackageArchive } from "../lib/package-archive.js";
 
 /** wp-api MCP 服务支持的工具名称。 */
 export type WpApiToolName =
@@ -12,7 +13,8 @@ export type WpApiToolName =
   | "wp_resource_delete"
   | "wp_seo_get"
   | "wp_seo_update"
-  | "wp_post_link_add"
+  | "wp_post_link"
+  | "wp_post_content_replace"
   | "wp_media_upload"
   | "wp_elementor_init"
   | "wp_elementor_export"
@@ -25,7 +27,9 @@ export type WpApiToolName =
   | "wp_package_install"
   | "wp_package_update"
   | "wp_package_activate"
-  | "wp_package_deactivate";
+  | "wp_package_deactivate"
+  | "wp_package_pack_theme"
+  | "wp_package_pack_plugin";
 
 /** MCP 工具收到的原始输入对象。 */
 export type WpApiToolInput = Record<string, unknown>;
@@ -285,20 +289,33 @@ function buildSeoUpdateArgs(input: WpApiToolInput): string[] {
   return args;
 }
 
-/** 根据 MCP 工具输入构造文章链接添加的 CLI 参数。 */
-function buildPostLinkAddArgs(input: WpApiToolInput): string[] {
+/** 读取并校验统一文章内链工具的动作。 */
+function readPostLinkAction(input: WpApiToolInput): "list" | "add" | "update" | "remove" {
+  const action = readRequiredString(input, "action");
+  if (action !== "list" && action !== "add" && action !== "update" && action !== "remove") {
+    throw new Error("action must be list, add, update, or remove.");
+  }
+  return action;
+}
+
+/** 根据 MCP 工具输入构造统一文章内链 CLI 参数。 */
+function buildPostLinkArgs(input: WpApiToolInput): string[] {
   const args: string[] = [];
+  const action = readPostLinkAction(input);
   appendGlobalArgs(args, input);
-  args.push(
-    "links",
-    "add",
-    String(readRequiredNumber(input, "postId")),
-    "--json",
-    "--text",
-    readRequiredString(input, "text"),
-    "--href",
-    readRequiredString(input, "href")
-  );
+  args.push("links", action, String(readRequiredNumber(input, "postId")), "--json");
+  if (action === "add") {
+    appendOption(args, "--text", readRequiredString(input, "text"));
+    appendOption(args, "--href", readRequiredString(input, "href"));
+  } else if (action === "update") {
+    appendOption(args, "--href", readRequiredString(input, "href"));
+    appendOption(args, "--text", readOptionalString(input, "text"));
+    appendOption(args, "--new-href", readOptionalString(input, "newHref"));
+    appendOption(args, "--new-text", readOptionalString(input, "newText"));
+  } else if (action === "remove") {
+    appendOption(args, "--href", readRequiredString(input, "href"));
+    appendOption(args, "--text", readOptionalString(input, "text"));
+  }
   return args;
 }
 
@@ -363,6 +380,23 @@ function buildElementorFindArgs(input: WpApiToolInput): string[] {
   appendOption(args, "--search-text", readOptionalString(input, "searchText"));
   appendOption(args, "--setting-key", readOptionalString(input, "settingKey"));
   appendOption(args, "--setting-value", readOptionalString(input, "settingValue"));
+  return args;
+}
+
+/** 根据 MCP 工具输入构造文章正文文本替换的 CLI 参数。 */
+function buildPostContentReplaceArgs(input: WpApiToolInput): string[] {
+  const args: string[] = [];
+  appendGlobalArgs(args, input);
+  args.push(
+    "content",
+    "replace",
+    String(readRequiredNumber(input, "postId")),
+    "--json",
+    "--text",
+    readRequiredString(input, "text"),
+    "--replacement",
+    readRequiredString(input, "replacement")
+  );
   return args;
 }
 
@@ -530,8 +564,10 @@ export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInp
       return buildSeoGetArgs(input);
     case "wp_seo_update":
       return buildSeoUpdateArgs(input);
-    case "wp_post_link_add":
-      return buildPostLinkAddArgs(input);
+    case "wp_post_link":
+      return buildPostLinkArgs(input);
+    case "wp_post_content_replace":
+      return buildPostContentReplaceArgs(input);
     case "wp_media_upload":
       return buildMediaUploadArgs(input);
     case "wp_elementor_init":
@@ -569,6 +605,14 @@ export async function executeWpApiTool(
   input: WpApiToolInput = {},
   context: WpApiToolContext = {}
 ): Promise<unknown> {
+  if (toolName === "wp_package_pack_theme" || toolName === "wp_package_pack_plugin") {
+    return createPackageArchive(
+      toolName === "wp_package_pack_theme" ? "theme" : "plugin",
+      readRequiredString(input, "folderPath"),
+      readOptionalString(input, "outputPath")
+    );
+  }
+
   const runCliImpl = context.runCliImpl ?? (runCli as unknown as RunCliImpl);
 
   if (packageOperationRequiresJellyCore(toolName, input)) {

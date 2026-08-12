@@ -1,5 +1,6 @@
 import { ConfigStore, type StoredClient } from "./lib/config-store.js";
 import { resolveContentInput } from "./lib/content-input.js";
+import { replaceContentText, type ReplaceContentTextResult } from "./lib/content-replace.js";
 import {
   buildElementorMeta,
   countElements,
@@ -14,7 +15,15 @@ import {
   type ElementorSettings
 } from "./lib/elementor.js";
 import { convertHtmlToGutenberg } from "./lib/html-to-gutenberg.js";
-import { addLinkToContent, extractPostContent, type AddLinkResult } from "./lib/links.js";
+import {
+  addLinkToContent,
+  extractPostContent,
+  isSafeLinkHref,
+  listLinksInContent,
+  removeLinkFromContent,
+  updateLinkInContent,
+  type PostLinkEntry
+} from "./lib/links.js";
 import { getResourceConfig, buildListQuery, buildResourceBody } from "./lib/resources.js";
 import { WordPressApiError, WordPressClient, type UploadMediaOptions } from "./lib/wp-client.js";
 
@@ -115,24 +124,30 @@ interface SeoPayload {
   rank_math_focus_keyword: string;
 }
 
-/** links add 命令返回给 CLI 和 MCP 的结构化字段。 */
+/** links 命令返回给 CLI 和 MCP 的统一结构化字段。 */
 interface LinksPayload {
   /** 文章 ID。 */
   id: number;
   /** 固定资源名称。 */
   resource: "posts";
-  /** 固定动作名称。 */
-  action: "links.add";
+  /** 实际执行的链接动作。 */
+  action: "links.list" | "links.add" | "links.update" | "links.remove";
   /** 是否实际更新文章。 */
   updated: boolean;
-  /** 链接添加结果状态。 */
-  status: AddLinkResult["status"];
+  /** 链接操作结果状态。 */
+  status: "listed" | "updated" | "not_found" | "skipped_existing_link";
   /** 被匹配的文本。 */
-  text: string;
-  /** 链接目标地址。 */
-  href: string;
+  text?: string;
+  /** 原链接或新增链接的目标地址。 */
+  href?: string;
+  /** 更新后的链接目标地址。 */
+  newHref?: string;
+  /** 更新后的锚文本。 */
+  newText?: string;
   /** 替换次数。 */
   replacements: number;
+  /** 列表动作返回的全部链接。 */
+  links?: PostLinkEntry[];
 }
 
 /** jelly-core 插件安装/更新响应结构。 */
@@ -193,6 +208,28 @@ interface ElementorPayload {
   [key: string]: unknown;
 }
 
+/** content replace 命令返回给 CLI 和 MCP 的结构化字段。 */
+interface ContentReplacePayload {
+  /** 文章 ID。 */
+  id: number;
+  /** 固定资源名称。 */
+  resource: "posts";
+  /** 固定动作名称。 */
+  action: "content.replace";
+  /** 是否实际更新文章。 */
+  updated: boolean;
+  /** 文本替换结果状态。 */
+  status: ReplaceContentTextResult["status"];
+  /** 被匹配的原文本。 */
+  text: string;
+  /** 用于替换的新文本。 */
+  replacement: string;
+  /** 实际替换次数。 */
+  replacements: number;
+  /** 列表动作返回的全部链接。 */
+  links?: PostLinkEntry[];
+}
+
 /** jelly-core 主题安装或更新响应结构。 */
 interface JellyThemeInstallResult {
   /** 操作是否成功。 */
@@ -227,18 +264,6 @@ interface ElementorTokensPayload {
   kit_id: number;
   /** 默认 Kit 的 `_elementor_page_settings` 设置。 */
   tokens: ElementorSettings;
-}
-
-/** links add 结构化结果构造参数。 */
-interface BuildLinksPayloadOptions {
-  /** 文章 ID。 */
-  id: number;
-  /** 被匹配的文本。 */
-  text: string;
-  /** 链接目标地址。 */
-  href: string;
-  /** 链接添加底层结果。 */
-  result: AddLinkResult;
 }
 
 /** 将 argv token 解析为位置参数和命名选项。 */
@@ -445,24 +470,18 @@ function renderSeoPayload(payload: SeoPayload, { updated = false }: { updated?: 
   ].join("\n") + "\n";
 }
 
-/** 根据链接添加结果构造结构化 payload。 */
-function buildLinksPayload({ id, text, href, result }: BuildLinksPayloadOptions): LinksPayload {
-  return {
-    id,
-    resource: "posts",
-    action: "links.add",
-    updated: result.updated,
-    status: result.status,
-    text,
-    href,
-    replacements: result.replacements
-  };
-}
-
-/** 将 links add 结构化结果渲染为人类可读文本。 */
+/** 将 links 结构化结果渲染为人类可读文本。 */
 function renderLinksPayload(payload: LinksPayload): string {
+  if (payload.action === "links.list") {
+    return `Found ${payload.links?.length ?? 0} link(s) in post ${payload.id}.\n`;
+  }
   if (payload.status === "updated") {
-    return `Link added to post ${payload.id}: ${payload.text} -> ${payload.href}\n`;
+    if (payload.action === "links.add") {
+      return `Link added to post ${payload.id}: ${payload.text} -> ${payload.href}\n`;
+    }
+    return payload.action === "links.update"
+      ? `Link updated in post ${payload.id}: ${payload.href}\n`
+      : `Link removed from post ${payload.id}: ${payload.href}\n`;
   }
 
   if (payload.status === "skipped_existing_link") {
@@ -600,6 +619,13 @@ async function saveElementorTree(
       pageSettings
     })
   );
+}
+
+/** 将正文文本替换结果渲染为人类可读文本。 */
+function renderContentReplacePayload(payload: ContentReplacePayload): string {
+  return payload.updated
+    ? `Replaced ${payload.replacements} occurrence(s) in post ${payload.id}.\n`
+    : `No matching text found in post ${payload.id}: ${payload.text}\n`;
 }
 
 /** 将 jelly-core 主题推送结果渲染为人类可读文本。 */
@@ -805,7 +831,7 @@ async function handleSeoCommand(args: ParsedArgs, store: ConfigStore, options: R
 async function handleLinksCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
   const [subcommand, rawId] = args.positionals;
 
-  if (subcommand !== "add") {
+  if (!subcommand || !["list", "add", "update", "remove"].includes(subcommand)) {
     return fail(`Unknown links subcommand: ${subcommand ?? "(missing)"}`);
   }
 
@@ -818,32 +844,49 @@ async function handleLinksCommand(args: ParsedArgs, store: ConfigStore, options:
     return fail("Post id must be a positive integer.");
   }
 
-  if (
-    typeof args.options.text !== "string" ||
-    args.options.text.length === 0 ||
-    typeof args.options.href !== "string" ||
-    args.options.href.length === 0
-  ) {
-    return fail("Missing required flags: --text, --href");
+  const href = optionString(args.options.href);
+  const text = optionString(args.options.text);
+  if (subcommand !== "list" && (!href || (subcommand === "add" && !text))) {
+    return fail(subcommand === "add" ? "Missing required flags: --text, --href" : "Missing required flag: --href");
+  }
+  const newHref = optionString(args.options["new-href"]);
+  const newText = optionString(args.options["new-text"]);
+  for (const candidate of [href, newHref].filter((value): value is string => value !== undefined)) {
+    if (!isSafeLinkHref(candidate)) {
+      return fail("Link href must be an HTTP(S) URL or a relative URL without control characters.");
+    }
+  }
+  if (subcommand === "update" && newHref === undefined && newText === undefined) {
+    return fail("Missing update flag: --new-href or --new-text");
   }
 
   const client = await resolveClient(args, store, options);
-  const entity = await client.get<RenderableEntity>("posts", id);
-  const result = addLinkToContent(extractPostContent(entity), {
-    text: args.options.text,
-    href: args.options.href
-  });
+  const entity = await client.get<RenderableEntity>("posts", id, { context: "edit" });
+  const content = extractPostContent(entity);
+  if (subcommand === "list") {
+    const links = listLinksInContent(content);
+    const payload: LinksPayload = {
+      id, resource: "posts", action: "links.list", updated: false,
+      status: "listed", replacements: 0, links
+    };
+    return args.options.json ? ok(renderJson(payload), payload) : ok(renderLinksPayload(payload), payload);
+  }
+
+  const result = subcommand === "add"
+    ? addLinkToContent(content, { text: text as string, href: href as string })
+    : subcommand === "update"
+      ? updateLinkInContent(content, { href: href as string, text, newHref, newText })
+      : removeLinkFromContent(content, { href: href as string, text });
 
   if (result.updated) {
     await client.update("posts", id, { content: result.content });
   }
 
-  const payload = buildLinksPayload({
-    id,
-    text: args.options.text,
-    href: args.options.href,
-    result
-  });
+  const payload: LinksPayload = {
+    id, resource: "posts", action: `links.${subcommand}` as LinksPayload["action"],
+    updated: result.updated, status: result.status, text, href, newHref, newText,
+    replacements: result.replacements
+  };
 
   return args.options.json
     ? ok(renderJson(payload), payload)
@@ -1044,6 +1087,47 @@ async function handlePluginCommand(args: ParsedArgs, store: ConfigStore, options
   return fail(`Unknown plugins subcommand: ${subcommand ?? "(missing)"}`);
 }
 
+/** 处理 content replace 命令，读取文章正文后执行精确文本替换。 */
+async function handleContentCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
+  const [subcommand, rawId] = args.positionals;
+  if (subcommand !== "replace") {
+    return fail(`Unknown content subcommand: ${subcommand ?? "(missing)"}`);
+  }
+
+  const id = Number(rawId);
+  if (!rawId) {
+    return fail("Post id is required.");
+  }
+  if (!Number.isInteger(id) || id <= 0) {
+    return fail("Post id must be a positive integer.");
+  }
+
+  const text = optionString(args.options.text);
+  const replacement = optionString(args.options.replacement);
+  if (!text || replacement === undefined) {
+    return fail("Missing required flags: --text, --replacement");
+  }
+
+  const client = await resolveClient(args, store, options);
+  const entity = await client.get<RenderableEntity>("posts", id, { context: "edit" });
+  const result = replaceContentText(extractPostContent(entity), { text, replacement });
+  if (result.updated) {
+    await client.update("posts", id, { content: result.content });
+  }
+
+  const payload: ContentReplacePayload = {
+    id,
+    resource: "posts",
+    action: "content.replace",
+    updated: result.updated,
+    status: result.status,
+    text,
+    replacement,
+    replacements: result.replacements
+  };
+  return args.options.json ? ok(renderJson(payload), payload) : ok(renderContentReplacePayload(payload), payload);
+}
+
 /** 处理 themes 命令组，通过本地 ZIP 文件推送主题。 */
 async function handleThemeCommand(args: ParsedArgs, store: ConfigStore, options: RunCliOptions): Promise<CliResult> {
   const [subcommand, themeSlug] = args.positionals;
@@ -1115,6 +1199,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
     if (command === "links") {
       return await handleLinksCommand(parsed, store, options);
+    }
+
+    if (command === "content") {
+      return await handleContentCommand(parsed, store, options);
     }
 
     if (command === "media") {
