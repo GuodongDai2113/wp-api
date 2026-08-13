@@ -1,6 +1,6 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` v2 是纯 STDIO MCP 服务。它不提供交互式命令界面；MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 27 个结构化工具完成全部操作。
+`wp-api` v2 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。它不提供交互式命令界面；MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 31 个结构化工具完成全部操作。
 
 ## 1. 安装和启动入口
 
@@ -165,7 +165,7 @@ client 的构建源是项目目录内的 `config/config.json`。`npm run build` 
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 27 个 MCP 工具
+## 5. 31 个 MCP 工具
 
 ### 5.1 Client（3 个）
 
@@ -179,6 +179,8 @@ client 的构建源是项目目录内的 `config/config.json`。`npm run build` 
 
 ### 5.2 WordPress 资源（5 个）
 
+`products` 与 `product-categories` 是 Jelly Catalog 资源，要求目标站点启用 Jelly Catalog；它们不是 WooCommerce 产品接口。
+
 `resource` 允许：
 
 ```text
@@ -191,9 +193,9 @@ posts | pages | products | categories | product-categories
 | --- | --- | --- |
 | `posts` | `/wp-json/wp/v2/posts` | 内容 |
 | `pages` | `/wp-json/wp/v2/pages` | 内容 |
-| `products` | `/wp-json/wp/v2/product` | 内容 |
+| `products` | `/wp-json/wp/v2/product` | Jelly Catalog 产品内容 |
 | `categories` | `/wp-json/wp/v2/categories` | taxonomy |
-| `product-categories` | `/wp-json/wp/v2/product_cat` | taxonomy |
+| `product-categories` | `/wp-json/wp/v2/product_cat` | Jelly Catalog 产品分类 taxonomy |
 
 | 工具 | 必填输入 | 可选输入 |
 | --- | --- | --- |
@@ -287,6 +289,17 @@ Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工�
 | `wp_package_deactivate` | `packageType: "plugin"`, `package` | 通用连接字段；不支持主题 |
 | `wp_package_pack_theme` | `folderPath` | `outputPath`；纯本地，不使用 client |
 | `wp_package_pack_plugin` | `folderPath` | `outputPath`；纯本地，不使用 client |
+
+### 5.7 Jelly Form
+
+目标站点需要启用包含 `jelly-form/v1` REST 路由的 Jelly Form 插件。设置工具要求当前 Application Password 用户具备 `manage_options` 权限；SMTP 密码不会被读取返回。
+
+| 工具 | 必填输入 | 可选输入/说明 |
+| --- | --- | --- |
+| `wp_jelly_form_settings_get` | 无 | 通用连接字段；返回 `password_set`，不返回 SMTP 密码 |
+| `wp_jelly_form_settings_update` | 无 | `recipientEmail`、`emailEnabled`、`popupEnabled`、`ipinfoToken`、`redirectSlug`、`smtpEnabled`、`smtp`；未提供的字段保持不变 |
+| `wp_jelly_form_inquiry_list` | 无 | `search`、`page`、`perPage`、`startDate`、`endDate`、`orderBy`、`order`；只读且自动排除垃圾询价 |
+| `wp_jelly_form_inquiry_get` | `id` | 通用连接字段；只读且不会返回垃圾询价 |
 
 `package` 对插件是主文件标识，对主题是 stylesheet slug。安装和更新只接受扩展名为 `.zip` 且具有常见 ZIP 文件头的本地文件。
 

@@ -49,6 +49,15 @@ import {
   type PackageListInput,
   type PackageStatusMutationInput
 } from "./handlers/package-tools.js";
+import {
+  getJellyFormInquiry,
+  getJellyFormSettings,
+  listJellyFormInquiries,
+  updateJellyFormSettings,
+  type JellyFormInquiryGetInput,
+  type JellyFormInquiryListInput,
+  type JellyFormSettingsUpdateInput
+} from "./handlers/jelly-form-tools.js";
 
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [
@@ -78,7 +87,11 @@ export const WP_API_TOOL_NAMES = [
   "wp_package_activate",
   "wp_package_deactivate",
   "wp_package_pack_theme",
-  "wp_package_pack_plugin"
+  "wp_package_pack_plugin",
+  "wp_jelly_form_settings_get",
+  "wp_jelly_form_settings_update",
+  "wp_jelly_form_inquiry_list",
+  "wp_jelly_form_inquiry_get"
 ] as const;
 
 /** wp-api MCP 服务支持的工具名称联合类型。 */
@@ -359,6 +372,14 @@ async function executeRemoteTool(
       return activatePackage(client, input as unknown as PackageStatusMutationInput);
     case "wp_package_deactivate":
       return deactivatePackage(client, input as unknown as PackageStatusMutationInput);
+    case "wp_jelly_form_settings_get":
+      return getJellyFormSettings(client);
+    case "wp_jelly_form_settings_update":
+      return updateJellyFormSettings(client, input as unknown as JellyFormSettingsUpdateInput);
+    case "wp_jelly_form_inquiry_list":
+      return listJellyFormInquiries(client, input as unknown as JellyFormInquiryListInput);
+    case "wp_jelly_form_inquiry_get":
+      return getJellyFormInquiry(client, input as unknown as JellyFormInquiryGetInput);
     default:
       throw new Error(`Tool does not perform a remote WordPress operation: ${toolName}`);
   }

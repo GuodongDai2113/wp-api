@@ -1,6 +1,6 @@
 # wp-api
 
-A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native and Jelly Core REST APIs. It runs over STDIO and exposes 27 structured tools for clients, content, SEO, Elementor, media, and package management.
+A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 31 structured tools for clients, content, SEO, Elementor, media, packages, and inquiries.
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md) · Detailed MCP setup: [mcp.md](./mcp.md)
 
@@ -15,7 +15,7 @@ Version 2 is MCP-only. The only executable is `wp-api-mcp`; there is no standalo
 - Rank Math meta fields exposed through REST when using the SEO tools
 - Jelly Core installed and active for the package operations listed under [Jelly Core dependency](#jelly-core-dependency)
 
-Products and product categories must be exposed by the target site as `/wp-json/wp/v2/product` and `/wp-json/wp/v2/product_cat`. Elementor tools require the corresponding page meta to be readable and writable through REST.
+Product support targets Jelly Catalog, not WooCommerce. The target site must enable Jelly Catalog and expose products and product categories as `/wp-json/wp/v2/product` and `/wp-json/wp/v2/product_cat`. Elementor tools require the corresponding page meta to be readable and writable through REST.
 
 ## Install and build
 
@@ -120,7 +120,7 @@ All remote tools accept optional `client` and `siteUrl` fields. `client` selects
 
 ## Tools
 
-The server exposes exactly 27 tools.
+The server exposes exactly 31 tools.
 
 ### Client configuration (3)
 
@@ -130,13 +130,13 @@ The server exposes exactly 27 tools.
 
 ### WordPress resources (5)
 
-- `wp_resource_list` — list posts, pages, products, categories, or product categories.
+- `wp_resource_list` — list posts, pages, categories, or Jelly Catalog products and product categories.
 - `wp_resource_get` — read one resource by ID.
 - `wp_resource_create` — create content or a taxonomy term.
 - `wp_resource_update` — update content or a taxonomy term.
 - `wp_resource_delete` — trash content or permanently delete a taxonomy term.
 
-Supported `resource` values are `posts`, `pages`, `products`, `categories`, and `product-categories`. Category and product-category deletion requires explicit `force: true`, because those resources have no trash. `perPage: -1` aggregates all pages within the documented limits.
+Supported `resource` values are `posts`, `pages`, `products`, `categories`, and `product-categories`; product resources specifically refer to Jelly Catalog and do not represent WooCommerce products. Category and product-category deletion requires explicit `force: true`, because those resources have no trash. `perPage: -1` aggregates all pages within the documented limits.
 
 ### SEO, post content, and media (5)
 
@@ -167,6 +167,13 @@ Resource create/update accepts inline `content` or a local `contentFile`. Set `g
 - `wp_package_deactivate` — deactivate a plugin; themes are not supported.
 - `wp_package_pack_theme` — create an installable theme ZIP locally.
 - `wp_package_pack_plugin` — create an installable plugin ZIP locally.
+
+### Jelly Form
+
+- `wp_jelly_form_settings_get` — read the recipient, notification, redirect, and redacted SMTP settings.
+- `wp_jelly_form_settings_update` — update selected recipient, notification, redirect, or SMTP fields; omitted SMTP passwords are preserved.
+- `wp_jelly_form_inquiry_list` — list and filter non-spam inquiries (read-only).
+- `wp_jelly_form_inquiry_get` — read one non-spam inquiry by ID (read-only).
 
 See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 

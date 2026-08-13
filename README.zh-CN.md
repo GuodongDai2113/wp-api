@@ -1,6 +1,6 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 和 Jelly Core REST API 管理站点。服务使用 STDIO 传输，提供 27 个结构化工具，覆盖 client、内容、SEO、Elementor、媒体及插件/主题管理。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 31 个结构化工具，覆盖 client、内容、SEO、Elementor、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
@@ -15,7 +15,7 @@ v2 仅提供 MCP 服务。唯一的可执行入口是 `wp-api-mcp`，不再提�
 - 使用 SEO 工具时，Rank Math 元字段需要通过 REST 暴露
 - 使用下文指定的软件包操作时，目标站点需要安装并激活 Jelly Core
 
-目标站点需要把产品和产品分类分别暴露为 `/wp-json/wp/v2/product` 与 `/wp-json/wp/v2/product_cat`。Elementor 工具要求对应页面的 meta 可通过 REST 读写。
+产品能力适配 Jelly Catalog，不适配 WooCommerce。目标站点需要启用 Jelly Catalog，并把产品和产品分类分别暴露为 `/wp-json/wp/v2/product` 与 `/wp-json/wp/v2/product_cat`。Elementor 工具要求对应页面的 meta 可通过 REST 读写。
 
 ## 安装与构建
 
@@ -120,7 +120,7 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 
 ## 工具列表
 
-服务共暴露 27 个工具。
+服务共暴露 31 个工具。
 
 ### Client 配置（3 个）
 
@@ -130,13 +130,13 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 
 ### WordPress 资源（5 个）
 
-- `wp_resource_list`：列出文章、页面、产品、分类或产品分类。
+- `wp_resource_list`：列出文章、页面、分类或 Jelly Catalog 产品与产品分类。
 - `wp_resource_get`：按 ID 读取单个资源。
 - `wp_resource_create`：创建内容或分类项。
 - `wp_resource_update`：更新内容或分类项。
 - `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
 
-`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
+`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`；其中产品相关资源专指 Jelly Catalog，不代表 WooCommerce 产品。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
 
 ### SEO、文章内容与媒体（5 个）
 
@@ -167,6 +167,13 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 - `wp_package_deactivate`：停用插件，不支持主题。
 - `wp_package_pack_theme`：在本地创建可安装的主题 ZIP。
 - `wp_package_pack_plugin`：在本地创建可安装的插件 ZIP。
+
+### Jelly Form
+
+- `wp_jelly_form_settings_get`：读取接收邮箱、通知、跳转及脱敏后的 SMTP 设置。
+- `wp_jelly_form_settings_update`：按字段更新接收邮箱、通知、跳转或 SMTP 设置；省略 SMTP 密码时保留原密码。
+- `wp_jelly_form_inquiry_list`：分页、搜索并按日期读取非垃圾询价，只读。
+- `wp_jelly_form_inquiry_get`：按 ID 读取一条非垃圾询价，只读。
 
 字段约定和操作细节见 [mcp.md](./mcp.md)。
 

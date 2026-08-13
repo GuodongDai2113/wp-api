@@ -2,7 +2,7 @@
   "name": "wp-api",
   "version": "2.0.0",
   "author": "JellyDai",
-  "description": "MCP server for managing WordPress through native and Jelly Core REST APIs",
+  "description": "MCP server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs",
   "type": "module",
   "engines": {
     "node": ">=20"

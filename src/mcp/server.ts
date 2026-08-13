@@ -174,7 +174,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_list",
     {
       title: "List WordPress resources",
-      description: "List posts, pages, products, categories, or product categories through native WordPress REST endpoints.",
+      description: "List posts, pages, categories, or Jelly Catalog products and product categories through native WordPress REST endpoints.",
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -195,7 +195,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_get",
     {
       title: "Get WordPress resource",
-      description: "Get one WordPress resource by ID.",
+      description: "Get one WordPress or Jelly Catalog resource by ID.",
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -210,7 +210,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_create",
     {
       title: "Create WordPress resource",
-      description: "Create a post, page, product, category, or product category.",
+      description: "Create a post, page, category, or Jelly Catalog product or product category.",
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -225,7 +225,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_update",
     {
       title: "Update WordPress resource",
-      description: "Update a post, page, product, category, or product category.",
+      description: "Update a post, page, category, or Jelly Catalog product or product category.",
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -241,7 +241,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_delete",
     {
       title: "Delete WordPress resource",
-      description: "Delete a post, page, product, category, or product category. Taxonomy terms require force=true because they are permanently deleted.",
+      description: "Delete a post, page, category, or Jelly Catalog product or product category. Taxonomy terms require force=true because they are permanently deleted.",
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -408,6 +408,82 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       settingKey: z.string().optional().describe("Required setting key."),
       settingValue: z.string().optional().describe("Required setting value.")
     }
+  );
+
+  const jellyFormSmtpSchema = z.object({
+    host: z.string().optional().describe("SMTP host name."),
+    port: z.number().int().min(1).max(65535).optional().describe("SMTP port."),
+    encryption: z.enum(["none", "ssl", "tls"]).optional().describe("SMTP encryption mode."),
+    username: z.string().optional().describe("SMTP login username."),
+    password: z.string().optional().describe("New SMTP password; omit or leave empty to preserve the saved password."),
+    clearPassword: z.boolean().optional().describe("Explicitly clear the saved SMTP password."),
+    fromEmail: z.string().email().or(z.literal("")).optional().describe("SMTP from email; use an empty string to clear it."),
+    fromName: z.string().optional().describe("SMTP from name.")
+  }).strict();
+
+  server.registerTool(
+    "wp_jelly_form_settings_get",
+    {
+      title: "Get Jelly Form settings",
+      description: "Read Jelly Form recipient email, notification, redirect, and redacted SMTP settings.",
+      inputSchema: { ...globalInputShape },
+      outputSchema
+    },
+    createToolCallback("wp_jelly_form_settings_get", context)
+  );
+
+  server.registerTool(
+    "wp_jelly_form_settings_update",
+    {
+      title: "Update Jelly Form settings",
+      description: "Update selected Jelly Form recipient email, notification, redirect, or SMTP settings.",
+      inputSchema: {
+        ...globalInputShape,
+        recipientEmail: z.string().email().optional().describe("Email address that receives inquiry notifications."),
+        emailEnabled: z.boolean().optional().describe("Enable inquiry notification emails."),
+        popupEnabled: z.boolean().optional().describe("Enable the front-end popup."),
+        ipinfoToken: z.string().regex(/^[a-zA-Z0-9]*$/).optional().describe("IPInfo token; use an empty string to clear it."),
+        redirectSlug: z.string().optional().describe("Success redirect path; use an empty string to disable redirects."),
+        smtpEnabled: z.boolean().optional().describe("Enable custom SMTP delivery."),
+        smtp: jellyFormSmtpSchema.optional().describe("Selected SMTP fields to update.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_jelly_form_settings_update", context)
+  );
+
+  server.registerTool(
+    "wp_jelly_form_inquiry_list",
+    {
+      title: "List Jelly Form inquiries",
+      description: "Read a filtered page of non-spam Jelly Form inquiry submissions. This tool is read-only.",
+      inputSchema: {
+        ...globalInputShape,
+        search: z.string().optional().describe("Search submission content, page title, or country."),
+        page: z.number().int().positive().optional().describe("Page number."),
+        perPage: z.number().int().min(1).max(100).optional().describe("Items per page."),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Inclusive start date in YYYY-MM-DD format."),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Inclusive end date in YYYY-MM-DD format."),
+        orderBy: z.enum(["id", "created_at", "page_title", "country"]).optional().describe("Sort field."),
+        order: z.enum(["ASC", "DESC"]).optional().describe("Sort direction.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_jelly_form_inquiry_list", context)
+  );
+
+  server.registerTool(
+    "wp_jelly_form_inquiry_get",
+    {
+      title: "Get Jelly Form inquiry",
+      description: "Read one non-spam Jelly Form inquiry submission by ID. This tool is read-only.",
+      inputSchema: {
+        ...globalInputShape,
+        id: z.number().int().positive().describe("Inquiry ID.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_jelly_form_inquiry_get", context)
   );
 
   const packageTypeSchema = z.enum(["plugin", "theme"]).describe("WordPress package type.");

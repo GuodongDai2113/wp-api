@@ -26,6 +26,10 @@ function collectRegistrations() {
 /** 创建只实现当前测试显式提供方法的远端 WordPress client 替身。 */
 function createRemoteClientStub(overrides = {}) {
   return {
+    /** 拒绝未在测试中声明的自定义 REST API 请求。 */
+    async requestApiPath() {
+      throw new Error("Unexpected requestApiPath call.");
+    },
     /** 拒绝未在测试中声明的列表请求。 */
     async list() {
       throw new Error("Unexpected list call.");
@@ -163,6 +167,68 @@ test("executeWpApiTool 直接调用领域 handler 而不构造 CLI 参数", asyn
     query: { search: "hello", page: 2, per_page: 10, status: "publish" }
   }]);
   assert.equal(result.items[0].id, 7);
+});
+
+test("Jelly Form MCP 工具映射设置与只读询价 REST 请求", async () => {
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 记录 Jelly Form 自定义 REST 路由、方法、查询及请求体。 */
+    async requestApiPath(route, options = {}) {
+      calls.push({ route, options });
+      return { data: { ok: true }, pagination: { total: 0, totalPages: 0 } };
+    }
+  });
+  const context = {
+    /** 返回不会发出真实网络请求的 Jelly Form client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  };
+
+  await executeWpApiTool("wp_jelly_form_settings_get", {}, context);
+  await executeWpApiTool("wp_jelly_form_settings_update", {
+    recipientEmail: "sales@example.com",
+    smtpEnabled: true,
+    smtp: { host: "smtp.example.com", password: "secret", clearPassword: false }
+  }, context);
+  await executeWpApiTool("wp_jelly_form_inquiry_list", {
+    page: 2,
+    perPage: 25,
+    startDate: "2026-08-01",
+    orderBy: "created_at",
+    order: "DESC"
+  }, context);
+  await executeWpApiTool("wp_jelly_form_inquiry_get", { id: 9 }, context);
+
+  assert.deepEqual(calls, [
+    { route: "jelly-form/v1/settings", options: {} },
+    {
+      route: "jelly-form/v1/settings",
+      options: {
+        method: "POST",
+        body: {
+          recipient_email: "sales@example.com",
+          smtp_enabled: true,
+          smtp: { host: "smtp.example.com", password: "secret", clear_password: false }
+        }
+      }
+    },
+    {
+      route: "jelly-form/v1/inquiries",
+      options: {
+        query: {
+          search: undefined,
+          page: 2,
+          per_page: 25,
+          start_date: "2026-08-01",
+          end_date: undefined,
+          orderby: "created_at",
+          order: "DESC"
+        }
+      }
+    },
+    { route: "jelly-form/v1/inquiries/9", options: {} }
+  ]);
 });
 
 test("executeWpApiTool 原生执行 client 添加、选择和列表", async (t) => {
