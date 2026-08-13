@@ -4,6 +4,40 @@ import { z } from "zod";
 
 import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./wp-api-tools.js";
 
+/** 判断主机名是否明确表示只在本机可达的回环地址。 */
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return normalized === "localhost"
+    || normalized.endsWith(".localhost")
+    || normalized === "::1"
+    || /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+/** 判断站点地址是否是适合作为 WordPress 根地址的 HTTPS 或本机 HTTP URL。 */
+function isSafeSiteUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || (url.protocol === "http:" && isLoopbackHostname(url.hostname)))
+      && url.username === ""
+      && url.password === ""
+      && url.search === ""
+      && url.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+/** 判断 MCP 分页大小是否符合 WordPress 上限或全量聚合约定。 */
+function isValidPerPage(value: number): boolean {
+  return value === -1 || (value >= 1 && value <= 100);
+}
+
+/** WordPress 站点根地址的 MCP 校验 schema。 */
+const siteUrlSchema = z.string().url().refine(
+  isSafeSiteUrl,
+  "WordPress site URL must use HTTPS (or loopback HTTP) and cannot contain credentials, a query, or a fragment."
+);
+
 /** WordPress 原生 REST 资源名称的 MCP 校验 schema。 */
 const resourceSchema = z.enum(["posts", "pages", "products", "categories", "product-categories"]);
 
@@ -12,10 +46,16 @@ const outputSchema = {
   result: z.unknown()
 };
 
+/** 不执行 trim 转换、但拒绝空字符串和纯空白字符串的 MCP schema。 */
+const nonBlankStringSchema = z.string().min(1).refine(
+  (value) => value.trim().length > 0,
+  "Value must contain at least one non-whitespace character."
+);
+
 /** 所有需要连接 WordPress 站点的工具都支持的通用输入字段。 */
 const globalInputShape = {
-  client: z.string().optional().describe("Saved wp-api client name to use for this call."),
-  siteUrl: z.string().url().optional().describe("Temporary site URL override for this call.")
+  client: nonBlankStringSchema.optional().describe("Saved wp-api client name to use for this call."),
+  siteUrl: siteUrlSchema.optional().describe("Temporary same-origin site URL override for this call.")
 };
 
 /** 内容资源和分类资源 create/update 共用的输入字段。 */
@@ -28,11 +68,11 @@ const resourceBodyShape = {
   contentFile: z.string().optional().describe("Local content file path readable by the MCP server process."),
   // 是否在上传前把解析出的 HTML 正文转换为 Gutenberg 区块标记。
   gutenberg: z.boolean().optional().describe("Convert resolved HTML content to WordPress Gutenberg block markup before upload."),
-  featuredMedia: z.number().int().positive().optional().describe("Featured media attachment ID for post, page, or product resources."),
-  categories: z.array(z.number()).optional().describe("Post category IDs."),
+  featuredMedia: z.number().int().nonnegative().optional().describe("Featured media attachment ID; use 0 to clear the current featured image."),
+  categories: z.array(z.number().int().positive()).optional().describe("Post category IDs; use an empty array to clear all categories."),
   name: z.string().optional().describe("Taxonomy term name."),
   description: z.string().optional().describe("Taxonomy term description."),
-  parent: z.number().optional().describe("Parent taxonomy term ID.")
+  parent: z.number().int().nonnegative().optional().describe("Parent taxonomy term ID; use 0 to remove the parent.")
 };
 
 /** Elementor MCP 工具共用的输入字段。 */
@@ -107,10 +147,10 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       title: "Add wp-api client",
       description: "Save a local wp-api client using a WordPress Application Password.",
       inputSchema: {
-        name: z.string().describe("Client name to save locally."),
-        siteUrl: z.string().url().describe("WordPress site URL."),
-        username: z.string().describe("WordPress username."),
-        appPassword: z.string().describe("WordPress Application Password.")
+        name: nonBlankStringSchema.describe("Client name to save locally."),
+        siteUrl: siteUrlSchema.describe("WordPress site URL."),
+        username: nonBlankStringSchema.describe("WordPress username."),
+        appPassword: nonBlankStringSchema.describe("WordPress Application Password.")
       },
       outputSchema
     },
@@ -123,7 +163,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       title: "Use wp-api client",
       description: "Set the active local wp-api client.",
       inputSchema: {
-        name: z.string().describe("Saved client name to make active.")
+        name: nonBlankStringSchema.describe("Saved client name to make active.")
       },
       outputSchema
     },
@@ -140,7 +180,10 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         resource: resourceSchema,
         search: z.string().optional().describe("Search text."),
         page: z.number().int().positive().optional().describe("Page number."),
-        perPage: z.number().int().optional().describe("Items per page. Use -1 to fetch all pages."),
+        perPage: z.number().int().refine(
+          isValidPerPage,
+          "Items per page must be -1 or between 1 and 100."
+        ).optional().describe("Items per page. Use -1 to fetch all pages."),
         status: z.string().optional().describe("Resource status filter.")
       },
       outputSchema
@@ -198,12 +241,12 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_delete",
     {
       title: "Delete WordPress resource",
-      description: "Delete a post, page, product, category, or product category.",
+      description: "Delete a post, page, product, category, or product category. Taxonomy terms require force=true because they are permanently deleted.",
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
         id: z.number().int().positive().describe("Resource ID."),
-        force: z.boolean().optional().describe("Force permanent deletion when supported.")
+        force: z.boolean().optional().describe("Force permanent deletion. Required for categories and product categories, which do not support trash.")
       },
       outputSchema
     },
@@ -271,7 +314,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         ...globalInputShape,
         postId: z.number().int().positive().describe("Post ID."),
         text: z.string().min(1).describe("Exact text to find in the post content."),
-        replacement: z.string().min(1).describe("Text that replaces every exact match.")
+        replacement: z.string().describe("Text that replaces every exact match; use an empty string to remove matches.")
       },
       outputSchema
     },
@@ -301,7 +344,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     context,
     "wp_elementor_init",
     "Initialize Elementor page data",
-    "Enable Elementor metadata on an existing page and optionally set initial element data.",
+    "Initialize Elementor metadata only when the page has no existing elements; use import for intentional replacement.",
     {
       ...elementorBaseShape,
       data: elementorDataSchema.optional(),
@@ -393,7 +436,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       inputSchema: {
         ...globalInputShape,
         packageType: packageTypeSchema,
-        package: z.string().describe("Plugin file slug or theme stylesheet slug.")
+        package: nonBlankStringSchema.describe("Plugin file slug or theme stylesheet slug.")
       },
       outputSchema
     },
@@ -412,7 +455,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         inputSchema: {
           ...globalInputShape,
           packageType: packageTypeSchema,
-          file: z.string().describe("Local .zip path readable by the MCP server process.")
+          file: nonBlankStringSchema.describe("Local .zip path readable by the MCP server process.")
         },
         outputSchema
       },
@@ -428,7 +471,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       inputSchema: {
         ...globalInputShape,
         packageType: packageTypeSchema,
-        package: z.string().describe("Plugin file slug or theme stylesheet slug.")
+        package: nonBlankStringSchema.describe("Plugin file slug or theme stylesheet slug.")
       },
       outputSchema
     },
@@ -443,7 +486,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       inputSchema: {
         ...globalInputShape,
         packageType: z.literal("plugin").describe("Must be plugin; themes do not support deactivation."),
-        package: z.string().describe("Plugin file slug.")
+        package: nonBlankStringSchema.describe("Plugin file slug.")
       },
       outputSchema
     },
@@ -474,7 +517,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
 export function createWpApiMcpServer(context: WpApiToolContext = {}): McpServer {
   const server = new McpServer({
     name: "wp-api",
-    version: "0.1.0"
+    version: "2.0.0"
   });
   registerWpApiTools(server, context);
   return server;

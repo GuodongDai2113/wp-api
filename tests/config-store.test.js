@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 
 import { ConfigStore } from "../build/lib/config-store.js";
 
@@ -109,6 +109,64 @@ test("ConfigStore migrates legacy profile keys to client keys when re-saving", a
       }
     ]
   });
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("ConfigStore serializes concurrent updates across instances", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
+  const firstStore = new ConfigStore({ configDir: tempDir });
+  const secondStore = new ConfigStore({ configDir: tempDir });
+
+  await Promise.all([
+    firstStore.saveClient({
+      name: "prod",
+      siteUrl: "https://example.com",
+      username: "admin",
+      appPassword: "app-pass-1"
+    }),
+    secondStore.saveClient({
+      name: "staging",
+      siteUrl: "https://staging.example.com",
+      username: "editor",
+      appPassword: "app-pass-2"
+    })
+  ]);
+
+  const clients = await firstStore.listClients();
+  assert.deepEqual(
+    clients.map((client) => client.name),
+    ["prod", "staging"]
+  );
+
+  await rm(tempDir, { recursive: true, force: true });
+});
+
+test("ConfigStore atomically replaces config with restrictive permissions", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
+  const configPath = path.join(tempDir, "config.json");
+  const store = new ConfigStore({ configDir: tempDir });
+
+  if (process.platform !== "win32") {
+    await chmod(tempDir, 0o777);
+  }
+
+  await store.saveClient({
+    name: "prod",
+    siteUrl: "https://example.com",
+    username: "admin",
+    appPassword: "app-pass-1"
+  });
+
+  const directoryEntries = await readdir(tempDir);
+  const configStats = await stat(configPath);
+  const directoryStats = await stat(tempDir);
+
+  assert.deepEqual(directoryEntries, ["config.json"]);
+  if (process.platform !== "win32") {
+    assert.equal(configStats.mode & 0o777, 0o600);
+    assert.equal(directoryStats.mode & 0o777, 0o700);
+  }
 
   await rm(tempDir, { recursive: true, force: true });
 });

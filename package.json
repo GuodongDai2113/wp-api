@@ -1,16 +1,26 @@
 {
   "name": "wp-api",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": "JellyDai",
-  "description": "CLI for managing remote WordPress content through the native REST API",
+  "description": "MCP server for managing WordPress through native and Jelly Core REST APIs",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
-    "wp-api": "./build/bin/wp-api.js",
     "wp-api-mcp": "./build/bin/wp-api-mcp.js"
   },
+  "files": [
+    "build",
+    "README.md",
+    "README.zh-CN.md",
+    "mcp.md"
+  ],
   "scripts": {
     "clean": "node -e \"fs.rmSync('build',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json",
+    "start": "node build/bin/wp-api-mcp.js",
+    "prepack": "npm run build",
     "test": "npm run build && node --test",
     "test:unit": "node --test"
   },

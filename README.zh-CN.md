@@ -1,588 +1,232 @@
 # wp-api
 
-一个基于 Node.js 的小型 CLI，用来通过原生 WordPress REST API 管理远程站点内容。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 和 Jelly Core REST API 管理站点。服务使用 STDIO 传输，提供 27 个结构化工具，覆盖 client、内容、SEO、Elementor、媒体及插件/主题管理。
 
-English version: [README.md](./README.md)
+English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
-当前支持：
-
-- `posts`
-- `pages`
-- `products`，映射到原生 `/wp/v2/product`
-- `categories`
-- `product-categories`，映射到原生 `/wp/v2/product_cat`
-- `media` 上传，映射到原生 `/wp/v2/media`
-- 面向 `pages` 的基础 Elementor JSON 通讯，通过 REST `meta` 读写
-- 多站点本地 client 管理
-
-认证方式使用原生 WordPress Application Password。
-
-`seo` 更新通过目标资源自己的 WordPress REST `meta` 完成，不依赖 Rank Math 私有 REST 端点。
+v2 仅提供 MCP 服务。唯一的可执行入口是 `wp-api-mcp`，不再提供独立的 `wp-api` 命令界面。
 
 ## 环境要求
 
-- Node.js 20+
-- 开启 REST API 的 WordPress 站点
-- 具有 Application Password 的 WordPress 用户
-- 如果要使用 `seo` 命令，目标资源必须在 REST `meta` 中暴露：
-  - `rank_math_title`
-  - `rank_math_description`
-  - `rank_math_focus_keyword`
+- Node.js 20 或更高版本
+- 已开启 REST API 的 WordPress 站点
+- WordPress 用户及其 [Application Password](https://make.wordpress.org/core/2020/11/05/application-passwords-integration-guide/)
+- 与 MCP 可能执行的操作相匹配的 WordPress 权限
+- 使用 SEO 工具时，Rank Math 元字段需要通过 REST 暴露
+- 使用下文指定的软件包操作时，目标站点需要安装并激活 Jelly Core
 
-## 安装
+目标站点需要把产品和产品分类分别暴露为 `/wp-json/wp/v2/product` 与 `/wp-json/wp/v2/product_cat`。Elementor 工具要求对应页面的 meta 可通过 REST 读写。
+
+## 安装与构建
 
 ```bash
 npm install
-npm link
-wp-api client list
-```
-
-## 快速开始
-
-添加 client：
-
-```bash
-wp-api client add prod \
-  --site-url https://example.com \
-  --username admin \
-  --app-password xxxx\ xxxx\ xxxx\ xxxx\ xxxx\ xxxx
-```
-
-切换当前 client：
-
-```bash
-wp-api client use prod
-```
-
-查看已保存的 client：
-
-```bash
-wp-api client list
-wp-api client list --json
-```
-
-文本输出只显示激活标记和 client 名称：
-
-```text
-Active client: prod
-* prod
-- staging
-```
-
-## Client
-
-配置默认保存在：
-
-```text
-~/.wp-api/config.json
-```
-
-常用命令：
-
-```bash
-wp-api client
-wp-api client add <name> --site-url <url> --username <user> --app-password <password>
-wp-api client list [--json]
-wp-api client use <name>
-wp-api client remove <name>
-```
-
-`wp-api client` 不带子命令时，文本模式只返回当前激活的 client 名称；加 `--json` 时返回完整 client 对象。
-
-## 资源命令
-
-支持的资源：
-
-```bash
-wp-api posts ...
-wp-api pages ...
-wp-api products ...
-wp-api categories ...
-wp-api product-categories ...
-```
-
-支持的动作：
-
-```bash
-list
-get <id>
-create
-update <id>
-delete <id>
-```
-
-额外支持：
-
-```bash
-seo <resource> <id>
-links add <post-id>
-media upload
-elementor <action> <post-id>
-```
-
-全局参数可以写在资源命令前面：
-
-```bash
-wp-api --client prod posts list
-wp-api --site-url https://override.example.com posts list
-```
-
-全局参数：
-
-- `--client <name>`：临时使用某个已保存 client
-- `--site-url <url>`：本次命令临时覆盖站点地址
-- `--json`：输出 JSON
-- `--verbose`：将请求信息输出到 stderr
-
-支持 `list` 的资源都适用相同的分页行为，包括：
-
-- `posts`
-- `pages`
-- `products`
-- `categories`
-- `product-categories`
-
-`seo` 也支持同样这一组资源。
-
-## Posts、Pages、Products
-
-这三类资源共用内容型参数。
-
-### List
-
-```bash
-wp-api posts list --search hello --page 2 --per-page 10
-wp-api pages list --status publish
-wp-api posts list --per-page -1
-wp-api products list --status publish --json
-```
-
-支持的筛选参数：
-
-- `--search <text>`
-- `--page <number>`
-- `--per-page <number>`
-- `--status <status>`
-
-特殊行为：
-
-- `--per-page -1`：自动抓取所有分页并合并返回
-
-### Get
-
-```bash
-wp-api posts get 42
-wp-api pages get 7
-wp-api products get 9 --json
-```
-
-### Create
-
-```bash
-wp-api posts create \
-  --title "Hello World" \
-  --status draft \
-  --slug hello-world \
-  --excerpt "Short summary"
-```
-
-```bash
-wp-api pages create \
-  --title "About Us" \
-  --status draft \
-  --content-file ./about.md
-```
-
-从本地 HTML 文件创建，并在上传前转换为古腾堡区块：
-
-```bash
-wp-api posts create \
-  --title "HTML Article" \
-  --content-file ./article.html \
-  --gutenberg
-```
-
-```bash
-wp-api products create \
-  --title "Widget A" \
-  --status publish \
-  --content-file ./product.md
-```
-
-从 stdin 管道读取正文：
-
-```bash
-echo "Long body content" | wp-api posts create --title "Piped Post" --status draft
-```
-
-### Update
-
-```bash
-wp-api posts update 42 --title "Updated Title" --status publish
-wp-api pages update 7 --title "About" --content-file ./about-v2.md
-wp-api products update 9 --content-file ./new-body.md
-```
-
-支持的内容参数：
-
-- 通用内容参数：
-  - `--title <text>`
-  - `--slug <slug>`
-  - `--status <status>`
-  - `--excerpt <text>`
-  - `--content <text>`
-  - `--content-file <path>`
-  - `--gutenberg`
-  - `--featured-media <id>`：作为特色图片使用的 WordPress 媒体附件 ID
-- 面向文章分类的参数：
-  - `--categories <id,id,...>`
-
-`products` 当前使用原生 `product` REST 端点，但 CLI 还没有单独提供为产品直接指定 `product_cat` 的参数。
-
-正文优先级：
-
-1. `--content`
-2. `--content-file`
-3. stdin
-
-`--gutenberg` 是显式开启参数。传入后，会把最终解析出的正文从 HTML 转换为 WordPress Gutenberg 区块标记，再发送 create 或 update 请求；它对 `--content`、`--content-file` 和 stdin 都生效。不传 `--gutenberg` 时，正文保持原样提交。
-
-MCP 的 `wp_resource_create` 和 `wp_resource_update` 可通过 `gutenberg: true` 启用同样行为，也可通过 `featuredMedia` 写入 WordPress 的 `featured_media` 字段。
-
-### Delete
-
-```bash
-wp-api posts delete 42
-wp-api posts delete 42 --force
-wp-api pages delete 7
-wp-api products delete 9
-```
-
-`posts`、`pages`、`products` 默认软删除；如果接口支持永久删除，可加 `--force`。
-
-## Categories
-
-分类使用 taxonomy 风格参数。
-
-### List / Get
-
-```bash
-wp-api categories list
-wp-api categories get 15 --json
-```
-
-### Create / Update
-
-```bash
-wp-api categories create --name News --slug news --description "Site news"
-wp-api categories update 15 --name Updates --parent 3
-```
-
-支持参数：
-
-- `--name <text>`
-- `--slug <slug>`
-- `--description <text>`
-- `--parent <id>`
-
-### Delete
-
-```bash
-wp-api categories delete 15
-```
-
-taxonomy 默认永久删除，因为 WordPress taxonomy 端点不支持回收站。
-
-## Product Categories
-
-产品分类使用原生 `product_cat` taxonomy，参数与普通分类一致。
-
-### List / Get
-
-```bash
-wp-api product-categories list
-wp-api product-categories get 15 --json
-```
-
-### Create / Update
-
-```bash
-wp-api product-categories create --name Meters --slug meters --description "Product category"
-wp-api product-categories update 15 --name "Digital Meters" --parent 3
-```
-
-### Delete
-
-```bash
-wp-api product-categories delete 15
-```
-
-支持参数：
-
-- `--name <text>`
-- `--slug <slug>`
-- `--description <text>`
-- `--parent <id>`
-
-taxonomy 默认永久删除，因为 WordPress taxonomy 端点不支持回收站。
-
-## SEO
-
-`seo` 命令通过对应资源自己的 WordPress REST 端点读写 Rank Math meta，不再依赖 Rank Math 私有 REST 端点。
-
-命令格式：
-
-```bash
-wp-api seo <resource> <id>
-```
-
-支持的资源：
-
-- `posts`
-- `pages`
-- `products`
-- `categories`
-- `product-categories`
-
-支持字段：
-
-- `rank_math_title`
-- `rank_math_description`
-- `rank_math_focus_keyword`
-
-### 读取 SEO
-
-不带 SEO 参数时，读取当前值：
-
-```bash
-wp-api seo posts 42
-wp-api seo pages 7
-wp-api seo products 9
-wp-api seo categories 15
-wp-api seo product-categories 15 --json
-```
-
-### 更新 SEO
-
-```bash
-wp-api seo posts 42 \
-  --title "SEO Title" \
-  --description "SEO Description" \
-  --focus-keyword "focus keyword"
-```
-
-```bash
-wp-api seo products 9 \
-  --title "Product SEO Title" \
-  --description "Product SEO Description" \
-  --focus-keyword "product keyword"
-```
-
-```bash
-wp-api seo categories 15 --description "Category SEO description"
-wp-api seo product-categories 15 --description "Product category SEO description"
-```
-
-支持参数：
-
-- `--title <text>` -> `rank_math_title`
-- `--description <text>` -> `rank_math_description`
-- `--focus-keyword <text>` -> `rank_math_focus_keyword`
-
-### SEO 的 REST 前提
-
-- `posts`、`pages`：需要在 REST `meta` 中暴露 `rank_math_*`
-- `products`：自定义 post type 必须支持 `custom-fields`，否则 REST schema 不会包含 `meta`
-- `categories`、`product-categories`：需要对 term meta 做 REST 注册
-- 如果你使用本地 `jelly-seo` 插件，它可以提供这组字段的 REST 白名单
-
-## Links
-
-`links add` 用于更新单篇 WordPress 文章。命令会先读取文章当前正文，把第一处精确匹配的文本替换成 `a` 标签，然后通过原生 posts 端点写回正文。
-
-命令格式：
-
-```bash
-wp-api links add <post-id> --text <text> --href <url>
-```
-
-示例：
-
-```bash
-wp-api links add 42 --text "OpenAI" --href "https://openai.com"
-wp-api links add 42 --text "OpenAI" --href "https://openai.com" --json
-```
-
-行为：
-
-- 只支持 `posts`。
-- 必定先读取文章，再更新文章。
-- 优先使用 `content.raw`；没有时使用 `content.rendered`。
-- 匹配按用户输入原样执行，区分大小写。
-- 只考虑第一处精确匹配。
-- 如果第一处匹配已经在 `<a>...</a>` 内，不发送更新请求。
-- `--href` 必须非空，但第一版不做 URL 规范化或协议限制。
-
-## Media
-
-`media upload` 用于把本地图片文件上传到 WordPress 媒体库。命令通过原生 `/wp/v2/media` 接口发送文件字节，并可在上传后写入媒体元数据。
-
-命令格式：
-
-```bash
-wp-api media upload --file <local-path>
-```
-
-示例：
-
-```bash
-wp-api media upload --file ./hero.png --title "Hero image" --alt "Hero image"
-wp-api media upload --file ./hero.png --caption "Homepage hero" --description "Uploaded from wp-api" --json
-```
-
-支持参数：
-
-- `--file <path>`：必填，本地图片路径
-- `--title <text>`：媒体标题
-- `--alt <text>`：替代文本，对应 WordPress `alt_text`
-- `--caption <text>`：说明文字
-- `--description <text>`：媒体描述
-
-MCP 的 `wp_media_upload` 提供同样能力，输入字段为 `filePath`、`title`、`altText`、`caption`、`description`。`filePath` 必须是 MCP server 进程能读取到的本地路径。
-
-## Elementor
-
-`elementor` 命令用于管理 `pages` 的基础 Elementor 页面数据。实现方式是读取并写入 WordPress REST 的标准 `meta` payload。
-`pages` 是固定资源；`elementor` CLI 命令不接受 `--resource`，MCP 的 `wp_elementor_*` 工具也不接受 `resource` 字段。
-Elementor JSON 构建不再由 `wp-api` 负责；请在 API 外部生成 JSON tree，再交给 `init` 或 `import` 写入。
-
-REST 前提：
-
-- 目标站点必须把 `_elementor_data`、`_elementor_edit_mode`、`_elementor_template_type`、`_elementor_page_settings` 暴露到 REST `meta`。
-- 这些命令不会安装 Elementor，不会重新生成 Elementor CSS，不会校验实时 widget schema，也不包含 Elementor Pro、Atomic、Theme Builder 等高级能力。
-
-示例：
-
-```bash
-wp-api elementor init 12 --json
-wp-api elementor export 12 --json
-wp-api elementor import 12 --data-json "[...]" --json
-wp-api elementor structure 12 --json
-wp-api elementor get-element 12 --element-id bbbbbbb --json
-wp-api elementor find 12 --search-text "Hero" --json
-wp-api elementor get-tokens --json
-wp-api elementor set-tokens --tokens-json '{"system_colors":[]}' --json
-```
-
-支持的 action：
-
-- `init`
-- `export`
-- `import`
-- `structure`
-- `get-element`
-- `find`
-- `get-tokens`
-- `set-tokens`
-
-MCP 提供同样的通讯流程：
-
-- `wp_elementor_init`
-- `wp_elementor_export`
-- `wp_elementor_import`
-- `wp_elementor_structure`
-- `wp_elementor_get_element`
-- `wp_elementor_find`
-- `wp_elementor_get_tokens`
-- `wp_elementor_set_tokens`
-
-tokens 工具固定操作 slug 为 `default-kit` 的 Elementor Library 实体，因此不接受 `postId`。`wp_elementor_get_tokens` 返回其 `meta._elementor_page_settings`；`wp_elementor_set_tokens` 必须传入 `tokens` 对象，并始终执行读取当前设置 → 顶层浅合并 → 写入合并结果 → 清理 `/elementor/v1/cache`。同名嵌套对象和数组会作为完整顶层值替换。
-
-## 输出与错误
-
-默认输出为可读文本。
-
-`list` 命令的文本输出会带分页摘要：
-
-```text
-Total 11, 6 pages, fetched 2 items, current page 2
-```
-
-使用 `--per-page -1` 时，`current page` 会显示为 `all`。
-
-脚本场景建议使用：
-
-```bash
-wp-api posts list --json
-```
-
-WordPress API 错误格式：
-
-```text
-HTTP <status> <wp_error_code>: <message>
-```
-
-例如：
-
-```text
-HTTP 401 rest_forbidden: Sorry, you are not allowed to do that.
-```
-
-网络或 TLS 错误会带上请求上下文和底层错误原因。
-
-例如：
-
-```text
-Request failed: GET https://example.com/wp-json/wp/v2/posts | Reason: fetch failed | Code: DEPTH_ZERO_SELF_SIGNED_CERT | Cause: self-signed certificate
-```
-
-如果本地站点使用受信任的本地 CA，通常可以这样处理证书问题：
-
-```powershell
-$env:NODE_OPTIONS='--use-system-ca'
-wp-api posts list
-```
-
-## 开发
-
-运行测试：
-
-```bash
-npm test
-```
-
-构建运行时 JavaScript 文件：
-
-```bash
 npm run build
 ```
 
-源码位于 `src/**/*.ts`。运行入口 `build/bin/` 与库代码一同从 TypeScript 编译而来。
+直接检查编译后的 STDIO 服务是否能启动：
 
-当前测试覆盖包括：
+```bash
+npm start
+```
 
-- client 持久化与切换
-- Application Password 认证头
-- posts / pages / products / categories / product-categories 的端点映射
-- `--per-page -1` 的自动分页聚合
-- 分页摘要文本输出
-- post type 与 taxonomy 的 SEO 读写流程
-- CLI 解析与 CRUD 流程
-- stdin / 文件输入
-- 对解析后正文显式开启的古腾堡转换
-- 本地图片上传到 WordPress 媒体库
-- 面向 pages 的基础 Elementor JSON 导入、导出、结构与查询操作
-- WordPress 与网络错误输出
+`npm start` 和 `wp-api-mcp` 会在标准输入上等待 MCP host，不提供交互式终端。正常使用时应让 MCP host 自动拉起该进程。
 
-## 说明与限制
+通过 `npm link` 或全局安装后，包只暴露 `wp-api-mcp` 这一个可执行入口：
 
-- `products` 不是 WooCommerce 端点，而是原生 `/wp-json/wp/v2/product`
-- `product-categories` 使用原生 `/wp-json/wp/v2/product_cat`
-- CLI 当前支持 `posts`、`pages`、`products`、`categories`、`product-categories`、`media upload`，以及仅面向 `pages` 的基础 `elementor` 操作；`seo` 只支持内容和分类资源
-- `seo` 是否可用，取决于目标资源是否正确暴露 REST `meta`
-- `elementor` 是否可用，取决于目标资源是否正确暴露 Elementor 私有 meta key；如果资源没有返回 `meta._elementor_data`，需要先修复 WordPress 侧
-- `elementor` 只通过 REST meta 写入 JSON 数据，不会运行 Elementor PHP document save 流程或 CSS 重新生成流程
-- 对 `product` 这类自定义 post type，必须启用 `custom-fields` 支持
-- 如果本地 HTTPS 使用自签名证书，可以信任本地 CA 后配合 `NODE_OPTIONS=--use-system-ca`，或者本地验证时临时改用 `--site-url http://...`
-- 当前没有交互式提示模式
-- 本地配置是明文 JSON，机器和用户账户本身需要做好保护
+```bash
+npm link
+```
+
+## 连接 MCP host
+
+建议使用绝对路径并明确设置 `cwd`。进程工作目录同时也是本地文件工具的默认访问边界。
+
+### Codex
+
+Codex 从 `~/.codex/config.toml` 读取 MCP 配置，也可以在受信任项目内使用 `.codex/config.toml`。同一台主机上的 ChatGPT 桌面应用、Codex CLI 和 Codex IDE 扩展共享这份配置。格式依据 [OpenAI 官方 Codex MCP 文档](https://developers.openai.com/codex/mcp/)：
+
+```toml
+[mcp_servers.wp_api]
+command = "node"
+args = ["C:/absolute/path/to/wp-api/build/bin/wp-api-mcp.js"]
+cwd = "C:/absolute/path/to/wp-api"
+
+[mcp_servers.wp_api.env]
+WP_API_ALLOWED_LOCAL_ROOTS = "C:/wordpress-content;D:/wordpress-packages"
+```
+
+如果 `wp-api-mcp` 已加入 `PATH`，可以简化为：
+
+```toml
+[mcp_servers.wp_api]
+command = "wp-api-mcp"
+cwd = "C:/absolute/path/to/allowed-workspace"
+```
+
+### 通用 STDIO MCP host
+
+使用常见 `mcpServers` JSON 结构的 host 可以配置为：
+
+```json
+{
+  "mcpServers": {
+    "wp-api": {
+      "command": "node",
+      "args": ["/absolute/path/to/wp-api/build/bin/wp-api-mcp.js"],
+      "cwd": "/absolute/path/to/wp-api",
+      "env": {
+        "WP_API_ALLOWED_LOCAL_ROOTS": "/srv/wordpress-content:/srv/wordpress-packages"
+      }
+    }
+  }
+}
+```
+
+配置文件名由具体 host 决定。修改后需要重启或重新加载 MCP host。
+
+## 首次配置 client
+
+连接信息完全通过 MCP 工具配置，不需要额外命令。在 MCP host 中依次调用以下三个工具：
+
+1. `wp_client_add`
+
+   ```json
+   {
+     "name": "production",
+     "siteUrl": "https://example.com",
+     "username": "editor",
+     "appPassword": "xxxx xxxx xxxx xxxx xxxx xxxx"
+   }
+   ```
+
+2. `wp_client_use`
+
+   ```json
+   { "name": "production" }
+   ```
+
+3. `wp_client_list`
+
+   ```json
+   {}
+   ```
+
+`wp_client_list` 用于确认当前激活项，且不会返回 Application Password。client 默认保存在 `~/.wp-api/config.json`。服务使用原子写入，并在操作系统支持时收紧目录和文件权限；仍应把该文件视作凭据存储，禁止提交到版本库或对外共享。
+
+配置写入会在单个服务进程内串行化，但当前没有跨进程文件锁。多个 MCP host 若共享同一系统账户和配置文件，不应并发修改 client；应指定单一写入者，或在代码嵌入场景为各实例配置不同目录。
+
+所有远端工具都接受可选的 `client` 和 `siteUrl`。`client` 可以在不改变当前激活项的情况下选用另一个已保存连接；`siteUrl` 只能修改已保存 URL 同一 origin 下的路径，不能把已保存凭据转发到其他主机。
+
+## 工具列表
+
+服务共暴露 27 个工具。
+
+### Client 配置（3 个）
+
+- `wp_client_add`：新增或覆盖一个 WordPress 连接。
+- `wp_client_use`：设置当前激活的连接。
+- `wp_client_list`：列出连接及当前激活名称，不返回密码。
+
+### WordPress 资源（5 个）
+
+- `wp_resource_list`：列出文章、页面、产品、分类或产品分类。
+- `wp_resource_get`：按 ID 读取单个资源。
+- `wp_resource_create`：创建内容或分类项。
+- `wp_resource_update`：更新内容或分类项。
+- `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
+
+`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
+
+### SEO、文章内容与媒体（5 个）
+
+- `wp_seo_get`：读取 Rank Math 标题、描述和焦点关键词。
+- `wp_seo_update`：更新或显式清空 Rank Math REST meta。
+- `wp_post_link`：列出、新增、更新或删除可编辑文章正文中的链接。
+- `wp_post_content_replace`：替换文章中的所有精确文本匹配。
+- `wp_media_upload`：上传本地位图，并可设置附件元数据。
+
+资源创建/更新支持直接传 `content` 或读取本地 `contentFile`。设置 `gutenberg: true` 后，会在上传前把解析出的 HTML 转换成 Gutenberg 区块标记。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。
+
+### Elementor（6 个）
+
+- `wp_elementor_init`：仅在元素树为空的页面上初始化 Elementor meta。
+- `wp_elementor_export`：导出原始 Elementor 元素树。
+- `wp_elementor_import`：整体替换 Elementor 元素树。
+- `wp_elementor_structure`：返回精简的元素层级结构。
+- `wp_elementor_get_element`：按 ID 读取单个元素及其 settings。
+- `wp_elementor_find`：按元素类型、组件类型、文本或 setting 搜索。
+
+### 插件、主题与本地打包（8 个）
+
+- `wp_package_list`：列出已安装的插件或主题。
+- `wp_package_get`：读取单个插件或主题。
+- `wp_package_install`：从本地 ZIP 安装插件或主题。
+- `wp_package_update`：从本地 ZIP 更新插件或主题。
+- `wp_package_activate`：激活插件或切换主题。
+- `wp_package_deactivate`：停用插件，不支持主题。
+- `wp_package_pack_theme`：在本地创建可安装的主题 ZIP。
+- `wp_package_pack_plugin`：在本地创建可安装的插件 ZIP。
+
+字段约定和操作细节见 [mcp.md](./mcp.md)。
+
+## 安全模型
+
+### 站点 URL 与凭据
+
+- 站点 URL 必须使用 HTTPS。只有 `localhost`、`*.localhost`、`127.0.0.0/8`、`::1` 等回环主机允许使用 HTTP。
+- 站点 URL 不能嵌入用户名/密码，也不能包含 query 或 fragment。
+- 每次调用传入的 `siteUrl` 必须和已保存 URL 同源。
+- 携带 WordPress 凭据的请求不会跟随重定向；应直接配置站点的规范 URL。
+- 服务使用已保存的 WordPress Application Password 认证。请只授予该 WordPress 用户实际需要的能力。
+
+### 本地路径边界
+
+以下字段会读写本地文件：`contentFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
+
+默认情况下，这些路径必须位于 MCP 服务进程的 `cwd` 内。可以通过 `WP_API_ALLOWED_LOCAL_ROOTS` 增加可信根目录，并使用当前平台的路径分隔符：
+
+- Windows：分号，例如 `C:\content;D:\packages`
+- Linux/macOS：冒号，例如 `/srv/content:/srv/packages`
+
+服务同时校验词法路径和解析符号链接后的真实路径，不能借助已有符号链接逃逸。配置的根目录必须已存在且确实是目录。允许列表应尽可能收窄：所有获准调用文件工具的 Agent 都能访问这些目录。
+
+允许列表是应用层边界，不是操作系统沙箱。应确保不受信任的本地用户或进程不能在工具执行期间修改获准目录；否则从路径校验到实际文件访问之间仍存在操作系统层面的路径替换竞态。
+
+### 默认资源上限
+
+| 边界 | 默认值 |
+| --- | ---: |
+| 单次网络请求超时 | 30 秒 |
+| 单个 WordPress REST 响应 | 25 MiB |
+| 单个 `contentFile` | 25 MiB |
+| 单个媒体文件 | 50 MiB |
+| 单个插件/主题 ZIP | 100 MiB |
+| 单个 Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层 |
+| `perPage: -1` 聚合 | 100 页且约 50 MiB JSON |
+| 本地打包源目录 | 20,000 个条目且未压缩文件共 512 MiB |
+
+上传的软件包必须使用 `.zip` 扩展名并具有可识别的 ZIP 文件头。本地打包会拒绝符号链接和特殊文件，把源文件夹保留为 ZIP 顶层目录，并要求输出文件位于源文件夹之外。
+
+## Jelly Core 依赖范围
+
+以下操作要求目标站点已安装并激活 Jelly Core：
+
+- 安装和更新插件
+- 安装和更新主题
+- 激活主题
+
+执行这些变更前，服务会聚合检查全部活动插件。找不到 Jelly Core 时会在上传或修改软件包之前终止。
+
+软件包列表/详情、插件激活/停用使用 WordPress 原生 REST 端点，不依赖 Jelly Core；主题不支持停用。Jelly Core 自定义 REST 路由必须自行校验登录用户能力：兼容用的 `X-Jelly-*` 请求头不含共享秘密，不能当作独立认证机制。
+
+## v2 迁移
+
+v2 是破坏性版本：移除了 `wp-api` CLI、参数解析层、stdin 命令输入以及 CLI 专属输出选项。现有集成需要改为通过 `wp-api-mcp`（或 `npm start`）启动 STDIO MCP 服务，再调用上述结构化工具。`~/.wp-api/config.json` 中已有的 client 数据可以继续使用。
+
+## 开发
+
+```bash
+npm run build
+npm test
+```

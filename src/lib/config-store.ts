@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 
 /** 保存到本地配置文件中的完整 WordPress client。 */
 export interface StoredClient {
@@ -10,7 +11,7 @@ export interface StoredClient {
   siteUrl: string;
   /** WordPress 用户名。 */
   username: string;
-  /** WordPress Application Password。 */
+  /** WordPress 应用密码。 */
   appPassword: string;
 }
 
@@ -53,7 +54,7 @@ function isClientLike(client: unknown): client is Partial<StoredClient> {
   return typeof client === "object" && client !== null;
 }
 
-/** 隐藏 client 中的 Application Password，生成可安全展示的对象。 */
+/** 隐藏 client 中的应用密码，生成可安全展示的对象。 */
 function sanitizeClient(client: StoredClient): PublicClient {
   return {
     name: client.name,
@@ -77,8 +78,29 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error;
 }
 
+/**
+ * 尽可能把配置目录或文件权限收紧到指定模式。
+ * Windows 不完整支持 POSIX 权限位，因此仅忽略该平台明确返回的不支持类错误。
+ */
+async function tightenPermissions(targetPath: string, mode: number): Promise<void> {
+  try {
+    await chmod(targetPath, mode);
+  } catch (error) {
+    const unsupportedOnWindows = process.platform === "win32"
+      && isNodeError(error)
+      && ["EINVAL", "ENOSYS", "ENOTSUP", "EPERM"].includes(error.code ?? "");
+
+    if (!unsupportedOnWindows) {
+      throw error;
+    }
+  }
+}
+
 /** 管理 wp-api 本地配置文件的读写和 client 选择。 */
 export class ConfigStore {
+  /** 按配置文件路径共享的进程内写入队列，避免多个实例互相覆盖更新。 */
+  private static readonly writeQueues = new Map<string, Promise<void>>();
+
   /** 配置目录路径。 */
   configDir: string;
   /** 配置文件完整路径。 */
@@ -117,27 +139,89 @@ export class ConfigStore {
     }
   }
 
-  /** 保存完整配置数据到本地 JSON 文件。 */
+  /**
+   * 将操作加入当前配置文件的进程内写入队列，并在结束后释放队列位置。
+   * 队列覆盖整个“读取—修改—写入”过程，以避免同一进程内的更新丢失。
+   */
+  private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    const resolvedPath = path.resolve(this.configPath);
+    const lockKey = process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+    const previous = ConfigStore.writeQueues.get(lockKey) ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queueTail = previous.then(() => current, () => current);
+
+    ConfigStore.writeQueues.set(lockKey, queueTail);
+    await previous.catch(() => undefined);
+
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (ConfigStore.writeQueues.get(lockKey) === queueTail) {
+        ConfigStore.writeQueues.delete(lockKey);
+      }
+    }
+  }
+
+  /**
+   * 使用同目录临时文件写入完整 JSON，再原子替换正式配置文件。
+   * 临时文件和最终文件均限制为当前用户读写，失败时清理临时文件。
+   */
+  private async writeConfigAtomic(data: ConfigData): Promise<void> {
+    await mkdir(this.configDir, { recursive: true, mode: 0o700 });
+    await tightenPermissions(this.configDir, 0o700);
+
+    const tempPath = path.join(
+      this.configDir,
+      `.config.json.${process.pid}.${randomUUID()}.tmp`
+    );
+    let tempFileCreated = false;
+
+    try {
+      const tempFile = await open(tempPath, "wx", 0o600);
+      tempFileCreated = true;
+      try {
+        await tempFile.writeFile(`${JSON.stringify(data, null, 2)}\n`, "utf8");
+        await tempFile.sync();
+      } finally {
+        await tempFile.close();
+      }
+
+      await rename(tempPath, this.configPath);
+      tempFileCreated = false;
+      await tightenPermissions(this.configPath, 0o600);
+    } finally {
+      if (tempFileCreated) {
+        await rm(tempPath, { force: true });
+      }
+    }
+  }
+
+  /** 保存完整配置数据到本地 JSON 文件，并保证单次替换的原子性。 */
   async save(data: ConfigData): Promise<void> {
-    await mkdir(this.configDir, { recursive: true });
-    await writeFile(this.configPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    await this.withWriteLock(() => this.writeConfigAtomic(data));
   }
 
   /** 新增或覆盖保存一个 client，并返回隐藏密码后的对象。 */
   async saveClient(client: StoredClient): Promise<PublicClient> {
-    const config = await this.load();
-    const nextClient = normalizeClient(client);
+    return this.withWriteLock(async () => {
+      const config = await this.load();
+      const nextClient = normalizeClient(client);
 
-    const existingIndex = config.clients.findIndex((entry) => entry.name === client.name);
-    if (existingIndex >= 0) {
-      config.clients[existingIndex] = nextClient;
-    } else {
-      config.clients.push(nextClient);
-      config.clients.sort((left, right) => left.name.localeCompare(right.name));
-    }
+      const existingIndex = config.clients.findIndex((entry) => entry.name === client.name);
+      if (existingIndex >= 0) {
+        config.clients[existingIndex] = nextClient;
+      } else {
+        config.clients.push(nextClient);
+        config.clients.sort((left, right) => left.name.localeCompare(right.name));
+      }
 
-    await this.save(config);
-    return sanitizeClient(nextClient);
+      await this.writeConfigAtomic(config);
+      return sanitizeClient(nextClient);
+    });
   }
 
   /** 返回所有已保存 client 的安全展示对象。 */
@@ -151,15 +235,17 @@ export class ConfigStore {
 
   /** 将指定 client 设置为当前激活 client。 */
   async setActiveClient(name: string): Promise<PublicClient> {
-    const config = await this.load();
-    const client = config.clients.find((entry) => entry.name === name);
-    if (!client) {
-      throw new Error(`Client "${name}" not found.`);
-    }
+    return this.withWriteLock(async () => {
+      const config = await this.load();
+      const client = config.clients.find((entry) => entry.name === name);
+      if (!client) {
+        throw new Error(`Client "${name}" not found.`);
+      }
 
-    config.activeClient = name;
-    await this.save(config);
-    return sanitizeClient(client);
+      config.activeClient = name;
+      await this.writeConfigAtomic(config);
+      return sanitizeClient(client);
+    });
   }
 
   /** 获取当前激活 client 的安全展示对象。 */
@@ -181,7 +267,7 @@ export class ConfigStore {
   }
 
   /** 根据显式名称或当前激活名称解析可用于请求的完整 client。 */
-  async getResolvedClient(name?: string | boolean): Promise<StoredClient | null> {
+  async getResolvedClient(name?: string): Promise<StoredClient | null> {
     if (typeof name === "string" && name.length > 0) {
       return this.getClient(name);
     }
@@ -196,12 +282,14 @@ export class ConfigStore {
 
   /** 删除指定 client，并在必要时清空当前激活 client。 */
   async removeClient(name: string): Promise<void> {
-    const config = await this.load();
-    const nextClients = config.clients.filter((entry) => entry.name !== name);
-    config.clients = nextClients;
-    if (config.activeClient === name) {
-      config.activeClient = null;
-    }
-    await this.save(config);
+    await this.withWriteLock(async () => {
+      const config = await this.load();
+      const nextClients = config.clients.filter((entry) => entry.name !== name);
+      config.clients = nextClients;
+      if (config.activeClient === name) {
+        config.activeClient = null;
+      }
+      await this.writeConfigAtomic(config);
+    });
   }
 }

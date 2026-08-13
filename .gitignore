@@ -3,5 +3,4 @@ node_modules/
 .worktrees/
 build/
 build/bin/
-package-lock.json
 docs/

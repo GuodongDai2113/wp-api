@@ -1,397 +1,125 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-
-import { buildCliArgsForTool, executeWpApiTool } from "../build/mcp/wp-api-tools.js";
-import { registerWpApiTools } from "../build/mcp/server.js";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-test("wp_resource_list maps MCP input to JSON CLI arguments", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_resource_list", {
-      client: "prod",
-      resource: "posts",
-      search: "hello",
-      page: 2,
-      perPage: 10,
-      status: "publish"
-    }),
-    [
-      "--client",
-      "prod",
-      "posts",
-      "list",
-      "--json",
-      "--search",
-      "hello",
-      "--page",
-      "2",
-      "--per-page",
-      "10",
-      "--status",
-      "publish"
-    ]
-  );
-});
+import {
+  executeWpApiTool,
+  WP_API_TOOL_NAMES
+} from "../build/mcp/wp-api-tools.js";
+import { registerWpApiTools } from "../build/mcp/server.js";
 
-test("wp_resource_create maps content fields to existing CLI shape", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_resource_create", {
-      resource: "posts",
-      title: "Hello",
-      status: "draft",
-      content: "Body",
-      categories: [1, 2]
-    }),
-    [
-      "posts",
-      "create",
-      "--json",
-      "--title",
-      "Hello",
-      "--status",
-      "draft",
-      "--content",
-      "Body",
-      "--categories",
-      "1,2"
-    ]
-  );
-});
-
-test("wp_resource_create maps gutenberg flag to CLI option", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_resource_create", {
-      resource: "posts",
-      title: "Hello",
-      contentFile: "./article.html",
-      gutenberg: true
-    }),
-    [
-      "posts",
-      "create",
-      "--json",
-      "--title",
-      "Hello",
-      "--content-file",
-      "./article.html",
-      "--gutenberg"
-    ]
-  );
-});
-
-test("wp_media_upload maps MCP input to JSON CLI arguments", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_media_upload", {
-      client: "prod",
-      filePath: "./hero.png",
-      title: "Hero",
-      altText: "Hero alt",
-      caption: "Hero caption",
-      description: "Hero description"
-    }),
-    [
-      "--client",
-      "prod",
-      "media",
-      "upload",
-      "--json",
-      "--file",
-      "./hero.png",
-      "--title",
-      "Hero",
-      "--alt",
-      "Hero alt",
-      "--caption",
-      "Hero caption",
-      "--description",
-      "Hero description"
-    ]
-  );
-});
-
-test("wp_elementor_export maps MCP input to Elementor CLI arguments", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_elementor_export", {
-      client: "prod",
-      postId: 12
-    }),
-    [
-      "--client",
-      "prod",
-      "elementor",
-      "export",
-      "12",
-      "--json"
-    ]
-  );
-});
-
-test("wp_elementor_import maps raw tree data to Elementor CLI arguments", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_elementor_import", {
-      postId: 12,
-      data: [{ id: "aaaaaaa", elType: "widget", settings: {}, elements: [] }]
-    }),
-    [
-      "elementor",
-      "import",
-      "12",
-      "--json",
-      "--data-json",
-      "[{\"id\":\"aaaaaaa\",\"elType\":\"widget\",\"settings\":{},\"elements\":[]}]"
-    ]
-  );
-});
-
-test("wp_elementor_get_element maps element lookup to Elementor CLI arguments", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_elementor_get_element", {
-      postId: 42,
-      elementId: "aaaaaaa"
-    }),
-    [
-      "elementor",
-      "get-element",
-      "42",
-      "--json",
-      "--element-id",
-      "aaaaaaa"
-    ]
-  );
-});
-
-test("Elementor token MCP tools are removed while other Elementor tools remain", () => {
+/** 使用最小 MCP server 替身收集全部工具注册定义。 */
+function collectRegistrations() {
   const registrations = new Map();
   const server = {
+    /** 记录服务注册的工具名称和定义。 */
     registerTool(name, definition) {
       registrations.set(name, definition);
     }
   };
-
   registerWpApiTools(server);
+  return registrations;
+}
 
-  assert.equal(registrations.has("wp_elementor_get_tokens"), false);
-  assert.equal(registrations.has("wp_elementor_set_tokens"), false);
-  assert.throws(() => buildCliArgsForTool("wp_elementor_get_tokens", {}), /Unknown MCP tool/);
-  assert.throws(() => buildCliArgsForTool("wp_elementor_set_tokens", {}), /Unknown MCP tool/);
-
-  for (const toolName of [
-    "wp_elementor_init",
-    "wp_elementor_export",
-    "wp_elementor_import",
-    "wp_elementor_structure",
-    "wp_elementor_get_element",
-    "wp_elementor_find"
-  ]) {
-    assert.ok(registrations.has(toolName), `${toolName} should remain registered`);
-  }
-});
-
-test("wp_elementor construction tools are not exposed by wp-api MCP", async () => {
-  for (const toolName of [
-    "wp_elementor_add_container",
-    "wp_elementor_add_widget",
-    "wp_elementor_update_element",
-    "wp_elementor_batch_update",
-    "wp_elementor_reorder",
-    "wp_elementor_move",
-    "wp_elementor_remove",
-    "wp_elementor_duplicate"
-  ]) {
-    assert.throws(
-      () => buildCliArgsForTool(toolName, { postId: 42 }),
-      /Unknown MCP tool/
-    );
-  }
-});
-
-test("wp_elementor tools reject resource input", async () => {
-  assert.throws(
-    () => buildCliArgsForTool("wp_elementor_export", {
-      resource: "pages",
-      postId: 42
-    }),
-    /Elementor MCP tools do not accept resource/
-  );
-});
-
-test("wp_resource_update maps featuredMedia to featured media CLI option", async () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_resource_update", {
-      resource: "posts",
-      id: 42,
-      featuredMedia: 55
-    }),
-    [
-      "posts",
-      "update",
-      "42",
-      "--json",
-      "--featured-media",
-      "55"
-    ]
-  );
-});
-
-test("wp_post_content_replace maps exact text replacement to CLI arguments", () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_post_content_replace", {
-      client: "prod",
-      postId: 42,
-      text: "teh",
-      replacement: "the"
-    }),
-    [
-      "--client",
-      "prod",
-      "content",
-      "replace",
-      "42",
-      "--json",
-      "--text",
-      "teh",
-      "--replacement",
-      "the"
-    ]
-  );
-});
-
-test("wp_post_link maps all actions through one MCP entry point", () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_post_link", { action: "list", postId: 42 }),
-    ["links", "list", "42", "--json"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_post_link", { action: "add", postId: 42, text: "Beta", href: "/beta" }),
-    ["links", "add", "42", "--json", "--text", "Beta", "--href", "/beta"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_post_link", {
-      action: "update", postId: 42, href: "/old", text: "Old", newHref: "/new", newText: "New"
-    }),
-    [
-      "links", "update", "42", "--json", "--href", "/old", "--text", "Old",
-      "--new-href", "/new", "--new-text", "New"
-    ]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_post_link", { action: "remove", postId: 42, href: "/old" }),
-    ["links", "remove", "42", "--json", "--href", "/old"]
-  );
-  assert.throws(() => buildCliArgsForTool("wp_post_link_add", {}), /Unknown MCP tool/);
-});
-
-test("wp_post_link is registered as the only post link MCP entry point", () => {
-  const registrations = new Map();
-  const server = { registerTool(name, definition) { registrations.set(name, definition); } };
-  registerWpApiTools(server);
-  assert.equal(registrations.has("wp_post_link"), true);
-  assert.equal(registrations.has("wp_post_link_add"), false);
-});
-
-test("wp_post_content_replace is registered with the MCP server", () => {
-  const registrations = new Map();
-  const server = {
-    registerTool(name, definition) {
-      registrations.set(name, definition);
-    }
+/** 创建只实现当前测试显式提供方法的远端 WordPress client 替身。 */
+function createRemoteClientStub(overrides = {}) {
+  return {
+    /** 拒绝未在测试中声明的列表请求。 */
+    async list() {
+      throw new Error("Unexpected list call.");
+    },
+    /** 拒绝未在测试中声明的单资源读取请求。 */
+    async get() {
+      throw new Error("Unexpected get call.");
+    },
+    /** 拒绝未在测试中声明的资源创建请求。 */
+    async create() {
+      throw new Error("Unexpected create call.");
+    },
+    /** 拒绝未在测试中声明的资源更新请求。 */
+    async update() {
+      throw new Error("Unexpected update call.");
+    },
+    /** 拒绝未在测试中声明的资源删除请求。 */
+    async delete() {
+      throw new Error("Unexpected delete call.");
+    },
+    /** 拒绝未在测试中声明的通用 REST 请求。 */
+    async request() {
+      throw new Error("Unexpected request call.");
+    },
+    /** 拒绝未在测试中声明的媒体上传请求。 */
+    async uploadMediaFromFile() {
+      throw new Error("Unexpected uploadMediaFromFile call.");
+    },
+    /** 拒绝未在测试中声明的插件上传请求。 */
+    async uploadPluginFromFile() {
+      throw new Error("Unexpected uploadPluginFromFile call.");
+    },
+    /** 拒绝未在测试中声明的主题上传请求。 */
+    async uploadThemeFromFile() {
+      throw new Error("Unexpected uploadThemeFromFile call.");
+    },
+    /** 拒绝未在测试中声明的主题状态请求。 */
+    async updateThemeStatus() {
+      throw new Error("Unexpected updateThemeStatus call.");
+    },
+    ...overrides
   };
+}
 
-  registerWpApiTools(server);
-  assert.ok(registrations.has("wp_post_content_replace"));
-});
+test("MCP server 只注册当前纯 MCP 工具集合", () => {
+  const registrations = collectRegistrations();
+  assert.deepEqual([...registrations.keys()].sort(), [...WP_API_TOOL_NAMES].sort());
 
-test("executeWpApiTool returns structured data from runCli", async () => {
-  const result = await executeWpApiTool("wp_client_list", {}, {
-    runCliImpl: async () => ({
-      exitCode: 0,
-      stdout: "{}\n",
-      stderr: "",
-      data: { activeClient: null, clients: [] }
-    })
-  });
-
-  assert.deepEqual(result, { activeClient: null, clients: [] });
-});
-
-test("wp_package tools map plugin and theme operations to existing CLI commands", () => {
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_list", {
-      client: "prod",
-      packageType: "theme",
-      status: "inactive"
-    }),
-    ["--client", "prod", "themes", "list", "--json", "--status", "inactive"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_get", {
-      packageType: "theme",
-      package: "twentytwentyfive"
-    }),
-    ["themes", "get", "twentytwentyfive", "--json"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_install", {
-      packageType: "theme",
-      file: "theme.zip"
-    }),
-    ["themes", "install", "--json", "--file", "theme.zip"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_update", {
-      packageType: "plugin",
-      file: "plugin.zip"
-    }),
-    ["plugins", "install", "--json", "--file", "plugin.zip"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_activate", {
-      packageType: "theme",
-      package: "theme"
-    }),
-    ["themes", "activate", "theme", "--json"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_activate", {
-      packageType: "plugin",
-      package: "akismet/akismet"
-    }),
-    ["plugins", "update", "akismet/akismet", "--json", "--status", "active"]
-  );
-  assert.deepEqual(
-    buildCliArgsForTool("wp_package_deactivate", {
-      packageType: "plugin",
-      package: "akismet/akismet"
-    }),
-    ["plugins", "update", "akismet/akismet", "--json", "--status", "inactive"]
-  );
-});
-
-test("wp_package tools are registered and package type is required", () => {
-  const registrations = new Map();
-  const server = {
-    registerTool(name, definition) {
-      registrations.set(name, definition);
-    }
-  };
-
-  registerWpApiTools(server);
-
-  for (const toolName of [
-    "wp_package_list",
-    "wp_package_get",
-    "wp_package_install",
-    "wp_package_update",
-    "wp_package_activate",
-    "wp_package_deactivate",
-    "wp_package_pack_theme",
-    "wp_package_pack_plugin"
+  for (const removedName of [
+    "wp_plugin_list",
+    "wp_theme_push",
+    "wp_elementor_get_tokens",
+    "wp_elementor_add_widget"
   ]) {
-    assert.ok(registrations.has(toolName), `${toolName} should be registered`);
+    assert.equal(registrations.has(removedName), false);
   }
+});
 
+test("MCP 站点 URL schema 仅接受无凭据的 HTTPS 或回环 HTTP 根地址", () => {
+  const registrations = collectRegistrations();
+  const clientSiteUrl = registrations.get("wp_client_add").inputSchema.siteUrl;
+  const overrideSiteUrl = registrations.get("wp_resource_list").inputSchema.siteUrl;
+
+  for (const schema of [clientSiteUrl, overrideSiteUrl]) {
+    assert.equal(schema.safeParse("https://example.com/wordpress").success, true);
+    assert.equal(schema.safeParse("http://localhost:8080").success, true);
+    assert.equal(schema.safeParse("http://127.0.0.1:8080").success, true);
+    assert.equal(schema.safeParse("http://example.com").success, false);
+    assert.equal(schema.safeParse("ftp://example.com").success, false);
+    assert.equal(schema.safeParse("https://admin:secret@example.com").success, false);
+    assert.equal(schema.safeParse("https://example.com/?target=other").success, false);
+    assert.equal(schema.safeParse("https://example.com/#fragment").success, false);
+  }
+});
+
+test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
+  const registrations = collectRegistrations();
+  const listSchema = registrations.get("wp_resource_list").inputSchema;
+  assert.equal(listSchema.page.safeParse(1).success, true);
+  assert.equal(listSchema.page.safeParse(0).success, false);
+  assert.equal(listSchema.perPage.safeParse(-1).success, true);
+  assert.equal(listSchema.perPage.safeParse(100).success, true);
+  assert.equal(listSchema.perPage.safeParse(0).success, false);
+  assert.equal(listSchema.perPage.safeParse(101).success, false);
+
+  const updateSchema = registrations.get("wp_resource_update").inputSchema;
+  assert.equal(updateSchema.featuredMedia.safeParse(0).success, true);
+  assert.equal(updateSchema.categories.safeParse([]).success, true);
+  assert.equal(updateSchema.categories.safeParse([1, 2]).success, true);
+  assert.equal(updateSchema.categories.safeParse([0]).success, false);
+});
+
+test("MCP package schema 要求统一软件包类型并禁止停用主题", () => {
+  const registrations = collectRegistrations();
   assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse(undefined).success, false);
   assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse("plugin").success, true);
   assert.equal(registrations.get("wp_package_list").inputSchema.packageType.safeParse("theme").success, true);
@@ -399,209 +127,232 @@ test("wp_package tools are registered and package type is required", () => {
   assert.equal(registrations.get("wp_package_deactivate").inputSchema.packageType.safeParse("theme").success, false);
 });
 
-test("package folder tools create WordPress zip files without invoking the CLI", async () => {
-  const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-package-"));
-  const themeDirectory = path.join(tempDirectory, "sample-theme");
-  const outputFile = path.join(tempDirectory, "dist", "sample-theme.zip");
-  await mkdir(themeDirectory);
-  await writeFile(path.join(themeDirectory, "style.css"), "/* Theme Name: Sample */\n");
+test("executeWpApiTool 直接调用领域 handler 而不构造 CLI 参数", async () => {
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 记录资源列表路由和查询对象。 */
+    async list(route, query) {
+      calls.push({ route, query });
+      return { items: [{ id: 7 }], pagination: { total: 1, totalPages: 1 } };
+    }
+  });
+  let selectedConnection;
 
-  const result = await executeWpApiTool("wp_package_pack_theme", {
-    folderPath: themeDirectory,
-    outputPath: outputFile
+  const result = await executeWpApiTool("wp_resource_list", {
+    client: "prod",
+    siteUrl: "https://example.com/staging",
+    resource: "posts",
+    search: "hello",
+    page: 2,
+    perPage: 10,
+    status: "publish"
   }, {
-    runCliImpl: async () => {
-      throw new Error("The CLI must not be called for local packaging.");
+    /** 返回测试 client，并记录中央执行器解析出的连接字段。 */
+    async resolveClientImpl(connection) {
+      selectedConnection = connection;
+      return client;
     }
   });
 
-  const archive = await readFile(outputFile);
-  assert.equal(result.packageType, "theme");
-  assert.equal(result.outputFile, outputFile);
-  assert.ok(result.size > 0);
-  assert.equal(archive.subarray(0, 4).toString("hex"), "504b0304");
-  assert.ok(archive.includes(Buffer.from("sample-theme/style.css")));
+  assert.deepEqual(selectedConnection, {
+    client: "prod",
+    siteUrl: "https://example.com/staging"
+  });
+  assert.deepEqual(calls, [{
+    route: "posts",
+    query: { search: "hello", page: 2, per_page: 10, status: "publish" }
+  }]);
+  assert.equal(result.items[0].id, 7);
 });
 
-test("legacy plugin and theme MCP tools are removed", () => {
-  const registrations = new Map();
-  const server = {
-    registerTool(name, definition) {
-      registrations.set(name, definition);
+test("executeWpApiTool 原生执行 client 添加、选择和列表", async (t) => {
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-dispatch-client-"));
+  t.after(() => rm(configDir, { recursive: true, force: true }));
+
+  const added = await executeWpApiTool("wp_client_add", {
+    name: "local",
+    siteUrl: "http://localhost:8080/wordpress/",
+    username: "editor",
+    appPassword: "secret"
+  }, { configDir });
+  assert.deepEqual(added, {
+    name: "local",
+    siteUrl: "http://localhost:8080/wordpress",
+    username: "editor"
+  });
+
+  await executeWpApiTool("wp_client_use", { name: "local" }, { configDir });
+  assert.deepEqual(await executeWpApiTool("wp_client_list", {}, { configDir }), {
+    activeClient: "local",
+    clients: [added]
+  });
+});
+
+test("executeWpApiTool 对未知名称立即返回 MCP 工具错误", async () => {
+  await assert.rejects(
+    () => executeWpApiTool("wp_plugin_list", {}),
+    /Unknown MCP tool/
+  );
+});
+
+test("MCP 本地路径边界允许工作区内的正文文件并传递真实路径", async (t) => {
+  const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-mcp-local-"));
+  t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
+  const contentFile = path.join(workspaceDirectory, "article.html");
+  await writeFile(contentFile, "<p>Workspace content</p>");
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 记录使用安全文件内容创建资源的调用。 */
+    async create(route, body) {
+      calls.push({ route, body });
+      return { id: 1 };
+    }
+  });
+
+  await executeWpApiTool("wp_resource_create", {
+    resource: "posts",
+    contentFile
+  }, {
+    /** 返回不会发出网络请求的资源 client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].route, "posts");
+  assert.equal(calls[0].body.content, "<p>Workspace content</p>");
+});
+
+test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async (t) => {
+  const outsideDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-outside-"));
+  t.after(() => rm(outsideDirectory, { recursive: true, force: true }));
+  const mediaFile = path.join(outsideDirectory, "hero.png");
+  const packageFile = path.join(outsideDirectory, "plugin.zip");
+  await writeFile(mediaFile, "image fixture");
+  await writeFile(packageFile, "zip fixture");
+  let resolveCalls = 0;
+  const context = {
+    /** 记录任何意外发生的 client 解析。 */
+    async resolveClientImpl() {
+      resolveCalls += 1;
+      return createRemoteClientStub();
     }
   };
 
-  registerWpApiTools(server);
+  await assert.rejects(
+    () => executeWpApiTool("wp_media_upload", { filePath: mediaFile }, context),
+    /filePath.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_package_update", { packageType: "plugin", file: packageFile }, context),
+    /file.*outside the allowed local roots/
+  );
+  assert.equal(resolveCalls, 0);
+});
 
-  for (const toolName of [
-    "wp_theme_push",
-    "wp_theme_list",
-    "wp_theme_get",
-    "wp_theme_install",
-    "wp_theme_update",
-    "wp_theme_activate",
-    "wp_theme_deactivate",
-    "wp_plugin_list",
-    "wp_plugin_get",
-    "wp_plugin_update",
-    "wp_plugin_install"
-  ]) {
-    assert.equal(registrations.has(toolName), false, `${toolName} should be removed`);
-    assert.throws(() => buildCliArgsForTool(toolName, {}), /Unknown MCP tool/);
+test("MCP allowedLocalRoots 显式允许工作区外媒体文件", async (t) => {
+  const outsideDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-allowed-"));
+  t.after(() => rm(outsideDirectory, { recursive: true, force: true }));
+  const mediaFile = path.join(outsideDirectory, "hero.png");
+  await writeFile(mediaFile, "image fixture");
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 记录媒体上传的安全真实路径。 */
+    async uploadMediaFromFile(filePath, options) {
+      calls.push({ filePath, options });
+      return { id: 2 };
+    }
+  });
+
+  await executeWpApiTool("wp_media_upload", { filePath: mediaFile }, {
+    allowedLocalRoots: [outsideDirectory],
+    /** 返回媒体上传 client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  });
+
+  assert.deepEqual(calls, [{ filePath: await realpath(mediaFile), options: {} }]);
+});
+
+test("MCP 本地路径边界拒绝逃逸工作区的输入符号链接", async (t) => {
+  const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-mcp-link-"));
+  const outsideDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-link-target-"));
+  t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outsideDirectory, { recursive: true, force: true }));
+  const outsideFile = path.join(outsideDirectory, "secret.txt");
+  const linkFile = path.join(workspaceDirectory, "content.html");
+  await writeFile(outsideFile, "outside content");
+  try {
+    await symlink(outsideFile, linkFile, "file");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+      t.skip(`当前平台不能创建测试符号链接：${error.code}`);
+      return;
+    }
+    throw error;
   }
-});
 
-test("wp_package_deactivate rejects themes", () => {
-  assert.throws(
-    () => buildCliArgsForTool("wp_package_deactivate", {
-      packageType: "theme",
-      package: "theme"
-    }),
-    /Themes cannot be deactivated/
-  );
-});
-
-test("package install checks active Jelly Core before executing the mutation", async () => {
-  const calls = [];
-  const result = await executeWpApiTool("wp_package_install", {
-    client: "prod",
-    packageType: "theme",
-    file: "theme.zip"
-  }, {
-    runCliImpl: async (args) => {
-      calls.push(args);
-      if (calls.length === 1) {
-        return {
-          exitCode: 0,
-          stdout: "{}\n",
-          stderr: "",
-          data: {
-            items: [
-              {
-                plugin: "jelly-core/jelly-core",
-                status: "active"
-              }
-            ],
-            pagination: { total: 1, totalPages: 1 }
-          }
-        };
+  let resolverCalled = false;
+  await assert.rejects(
+    () => executeWpApiTool("wp_resource_update", {
+      resource: "posts",
+      id: 1,
+      contentFile: linkFile
+    }, {
+      /** 记录边界拒绝前不应发生的 client 解析。 */
+      async resolveClientImpl() {
+        resolverCalled = true;
+        return createRemoteClientStub();
       }
-
-      return {
-        exitCode: 0,
-        stdout: "{}\n",
-        stderr: "",
-        data: { success: true }
-      };
-    }
-  });
-
-  assert.deepEqual(calls, [
-    ["--client", "prod", "plugins", "list", "--json", "--status", "active"],
-    ["--client", "prod", "themes", "install", "--json", "--file", "theme.zip"]
-  ]);
-  assert.deepEqual(result, { success: true });
+    }),
+    /contentFile.*outside the allowed local roots/
+  );
+  assert.equal(resolverCalled, false);
 });
 
-test("package mutation stops before work when Jelly Core is missing or inactive", async () => {
-  const calls = [];
+test("MCP 软件包输出校验拒绝通过父目录符号链接逃逸", async (t) => {
+  const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-mcp-output-link-"));
+  const outsideDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-output-target-"));
+  t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outsideDirectory, { recursive: true, force: true }));
+  const packageDirectory = path.join(workspaceDirectory, "sample-plugin");
+  const linkedOutputDirectory = path.join(workspaceDirectory, "dist-link");
+  await mkdir(packageDirectory);
+  await writeFile(path.join(packageDirectory, "plugin.php"), "<?php // Plugin Name: Sample");
+  try {
+    await symlink(outsideDirectory, linkedOutputDirectory, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) {
+      t.skip(`当前平台不能创建测试符号链接：${error.code}`);
+      return;
+    }
+    throw error;
+  }
 
   await assert.rejects(
-    () => executeWpApiTool("wp_package_update", {
-      packageType: "plugin",
-      file: "plugin.zip"
-    }, {
-      runCliImpl: async (args) => {
-        calls.push(args);
-        return {
-          exitCode: 0,
-          stdout: "{}\n",
-          stderr: "",
-          data: {
-            items: [
-              {
-                plugin: "jelly-core/jelly-core.php",
-                status: "inactive"
-              }
-            ],
-            pagination: { total: 1, totalPages: 1 }
-          }
-        };
-      }
+    () => executeWpApiTool("wp_package_pack_plugin", {
+      folderPath: packageDirectory,
+      outputPath: path.join(linkedOutputDirectory, "sample-plugin.zip")
     }),
-    /Jelly Core is not installed and active/
+    /outputPath.*outside the allowed local roots/
   );
-
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], ["plugins", "list", "--json", "--status", "active"]);
 });
 
-test("theme activation requires Jelly Core but plugin activation uses native WordPress directly", async () => {
-  const themeCalls = [];
-  await assert.rejects(
-    () => executeWpApiTool("wp_package_activate", {
-      packageType: "theme",
-      package: "theme"
-    }, {
-      runCliImpl: async (args) => {
-        themeCalls.push(args);
-        return {
-          exitCode: 0,
-          stdout: "{}\n",
-          stderr: "",
-          data: { items: [], pagination: { total: 0, totalPages: 0 } }
-        };
-      }
-    }),
-    /Jelly Core is not installed and active/
-  );
-  assert.equal(themeCalls.length, 1);
+test("MCP 软件包工具在工作区内创建默认 ZIP 输出", async (t) => {
+  const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-mcp-default-output-"));
+  t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
+  const packageDirectory = path.join(workspaceDirectory, "sample-plugin");
+  await mkdir(packageDirectory);
+  await writeFile(path.join(packageDirectory, "plugin.php"), "<?php // Plugin Name: Sample");
 
-  const pluginCalls = [];
-  const pluginResult = await executeWpApiTool("wp_package_activate", {
-    packageType: "plugin",
-    package: "akismet/akismet"
-  }, {
-    runCliImpl: async (args) => {
-      pluginCalls.push(args);
-      return {
-        exitCode: 0,
-        stdout: "{}\n",
-        stderr: "",
-        data: { plugin: "akismet/akismet", status: "active" }
-      };
-    }
+  const result = await executeWpApiTool("wp_package_pack_plugin", {
+    folderPath: packageDirectory
   });
+  const archive = await readFile(result.outputFile);
 
-  assert.equal(pluginCalls.length, 1);
-  assert.deepEqual(pluginCalls[0], [
-    "plugins",
-    "update",
-    "akismet/akismet",
-    "--json",
-    "--status",
-    "active"
-  ]);
-  assert.equal(pluginResult.status, "active");
+  assert.equal(result.outputFile, path.join(workspaceDirectory, "sample-plugin.zip"));
+  assert.ok(result.size > 0);
+  assert.equal(archive.subarray(0, 4).toString("hex"), "504b0304");
 });
-
-test("package list and get do not require Jelly Core", async () => {
-  const calls = [];
-  await executeWpApiTool("wp_package_list", {
-    packageType: "theme"
-  }, {
-    runCliImpl: async (args) => {
-      calls.push(args);
-      return {
-        exitCode: 0,
-        stdout: "{}\n",
-        stderr: "",
-        data: { items: [], pagination: { total: 0, totalPages: 0 } }
-      };
-    }
-  });
-
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], ["themes", "list", "--json"]);
-});
-

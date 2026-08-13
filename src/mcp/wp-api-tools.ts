@@ -1,122 +1,254 @@
-import { runCli } from "../cli.js";
+import { realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+
 import { createPackageArchive } from "../lib/package-archive.js";
+import type { WordPressClient } from "../lib/wp-client.js";
+import {
+  addStoredClient,
+  listStoredClients,
+  resolveWordPressClient,
+  useStoredClient,
+  type WordPressConnectionContext,
+  type WordPressConnectionInput
+} from "./client-tools.js";
+import {
+  createResource,
+  deleteResource,
+  getResource,
+  getResourceSeo,
+  listResource,
+  managePostLink,
+  replacePostContent,
+  updateResource,
+  updateResourceSeo,
+  uploadMedia,
+  type MediaUploadInput,
+  type PostContentReplaceInput,
+  type PostLinkInput,
+  type ResourceCreateInput,
+  type ResourceDeleteInput,
+  type ResourceGetInput,
+  type ResourceListInput,
+  type ResourceSeoGetInput,
+  type ResourceSeoUpdateInput,
+  type ResourceUpdateInput
+} from "./handlers/content-tools.js";
+import {
+  executeElementorTool,
+  type ElementorToolName
+} from "./handlers/elementor-tools.js";
+import {
+  activatePackage,
+  deactivatePackage,
+  getPackage,
+  installPackage,
+  listPackages,
+  updatePackage,
+  type PackageFileMutationInput,
+  type PackageGetInput,
+  type PackageListInput,
+  type PackageStatusMutationInput
+} from "./handlers/package-tools.js";
 
-/** wp-api MCP 服务支持的工具名称。 */
-export type WpApiToolName =
-  | "wp_client_list"
-  | "wp_client_add"
-  | "wp_client_use"
-  | "wp_resource_list"
-  | "wp_resource_get"
-  | "wp_resource_create"
-  | "wp_resource_update"
-  | "wp_resource_delete"
-  | "wp_seo_get"
-  | "wp_seo_update"
-  | "wp_post_link"
-  | "wp_post_content_replace"
-  | "wp_media_upload"
-  | "wp_elementor_init"
-  | "wp_elementor_export"
-  | "wp_elementor_import"
-  | "wp_elementor_structure"
-  | "wp_elementor_get_element"
-  | "wp_elementor_find"
-  | "wp_package_list"
-  | "wp_package_get"
-  | "wp_package_install"
-  | "wp_package_update"
-  | "wp_package_activate"
-  | "wp_package_deactivate"
-  | "wp_package_pack_theme"
-  | "wp_package_pack_plugin";
+/** wp-api MCP 服务支持的全部工具名称。 */
+export const WP_API_TOOL_NAMES = [
+  "wp_client_list",
+  "wp_client_add",
+  "wp_client_use",
+  "wp_resource_list",
+  "wp_resource_get",
+  "wp_resource_create",
+  "wp_resource_update",
+  "wp_resource_delete",
+  "wp_seo_get",
+  "wp_seo_update",
+  "wp_post_link",
+  "wp_post_content_replace",
+  "wp_media_upload",
+  "wp_elementor_init",
+  "wp_elementor_export",
+  "wp_elementor_import",
+  "wp_elementor_structure",
+  "wp_elementor_get_element",
+  "wp_elementor_find",
+  "wp_package_list",
+  "wp_package_get",
+  "wp_package_install",
+  "wp_package_update",
+  "wp_package_activate",
+  "wp_package_deactivate",
+  "wp_package_pack_theme",
+  "wp_package_pack_plugin"
+] as const;
 
-/** MCP 工具收到的原始输入对象。 */
+/** wp-api MCP 服务支持的工具名称联合类型。 */
+export type WpApiToolName = typeof WP_API_TOOL_NAMES[number];
+
+/** MCP 工具收到的原始 JSON 对象。 */
 export type WpApiToolInput = Record<string, unknown>;
 
-/** runCli 返回值在 MCP 适配层中使用的最小结构。 */
-export interface RunCliResult {
-  /** 进程语义的退出码，0 表示命令成功。 */
-  exitCode: number;
-  /** CLI 命令写入标准输出的文本。 */
-  stdout: string;
-  /** CLI 命令写入标准错误的文本。 */
-  stderr: string;
-  /** CLI 命令返回的结构化数据，优先作为 MCP 结果返回。 */
-  data: unknown;
+/** 可注入的 WordPress client 解析函数签名。 */
+export type ResolveWordPressClientImpl = (
+  input: WordPressConnectionInput,
+  context?: WordPressConnectionContext
+) => Promise<WordPressClient>;
+
+/** 执行 MCP 工具时允许注入的运行上下文。 */
+export interface WpApiToolContext extends WordPressConnectionContext {
+  /** 在默认工作目录之外，额外允许 MCP 工具读取或写入的本地目录。 */
+  allowedLocalRoots?: string[];
+  /** 覆盖 WordPress client 解析函数，主要用于不访问真实配置与网络的测试。 */
+  resolveClientImpl?: ResolveWordPressClientImpl;
 }
 
-/** runCli 的可注入函数签名，用于测试和 MCP 服务复用。 */
-export type RunCliImpl = (
-  argv: string[],
-  options?: Record<string, unknown>
-) => Promise<RunCliResult>;
-
-/** 执行 MCP 工具时允许注入的上下文。 */
-export interface WpApiToolContext {
-  /** 覆盖 wp-api 本地配置目录，主要用于测试或隔离不同 MCP 客户端。 */
-  configDir?: string;
-  /** 覆盖 runCli 实现，主要用于单元测试。 */
-  runCliImpl?: RunCliImpl;
-  /** 覆盖 fetch 实现，主要用于测试 WordPress 请求。 */
-  fetchImpl?: unknown;
-  /** 覆盖日志对象，保持和现有 CLI verbose logger 兼容。 */
-  logger?: unknown;
+/** 一个允许 MCP 访问的本地根目录及其消除符号链接后的真实位置。 */
+interface AllowedLocalRoot {
+  /** 调用 path.resolve 后用于校验用户输入路径的绝对目录。 */
+  resolvedPath: string;
+  /** 调用 fs.realpath 后用于阻止符号链接逃逸的真实目录。 */
+  realPath: string;
 }
 
-/** 将可选的全局 client 参数追加到 CLI 参数列表。 */
-function appendGlobalArgs(args: string[], input: WpApiToolInput): void {
-  appendOption(args, "--client", readOptionalString(input, "client"));
-  appendOption(args, "--site-url", readOptionalString(input, "siteUrl"));
+/** 已校验本地路径的词法绝对位置和消除符号链接后的真实位置。 */
+interface ValidatedLocalPath {
+  /** 调用 path.resolve 后得到的词法绝对路径。 */
+  resolvedPath: string;
+  /** 消除已有路径段中的符号链接后得到的真实绝对路径。 */
+  realPath: string;
 }
 
-/** 将一个可选命令行参数追加到 CLI 参数列表。 */
-function appendOption(args: string[], flag: string, value: unknown): void {
-  if (value === undefined || value === null || value === "") {
+/** 将路径转换为适合当前平台比较的形式，Windows 上忽略盘符和路径大小写。 */
+function normalizePathForComparison(filePath: string): string {
+  return process.platform === "win32" ? filePath.toLowerCase() : filePath;
+}
+
+/** 判断目标路径是否等于指定根目录，或严格位于该根目录之下。 */
+function isPathWithinRoot(rootPath: string, targetPath: string): boolean {
+  const pathFromRoot = relative(
+    normalizePathForComparison(rootPath),
+    normalizePathForComparison(targetPath)
+  );
+  return pathFromRoot === ""
+    || (pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot));
+}
+
+/** 解析默认工作目录和显式扩展目录，确保每个允许根目录都真实存在且为目录。 */
+async function resolveAllowedLocalRoots(context: WpApiToolContext): Promise<AllowedLocalRoot[]> {
+  const configuredRoots = [process.cwd(), ...(context.allowedLocalRoots ?? [])];
+  const roots: AllowedLocalRoot[] = [];
+
+  for (const configuredRoot of configuredRoots) {
+    if (typeof configuredRoot !== "string" || configuredRoot.length === 0) {
+      throw new Error("MCP allowedLocalRoots entries must be non-empty directory paths.");
+    }
+
+    const resolvedPath = resolve(configuredRoot);
+    let realPath: string;
+    try {
+      realPath = await realpath(resolvedPath);
+    } catch {
+      throw new Error(`MCP allowed local root does not exist or cannot be resolved: ${resolvedPath}`);
+    }
+
+    const rootStats = await stat(realPath).catch(() => undefined);
+    if (!rootStats?.isDirectory()) {
+      throw new Error(`MCP allowed local root is not a directory: ${resolvedPath}`);
+    }
+    roots.push({ resolvedPath, realPath });
+  }
+  return roots;
+}
+
+/** 校验路径的词法位置和真实位置属于同一个允许根目录。 */
+function assertPathWithinAllowedRoots(
+  fieldName: string,
+  validatedPath: ValidatedLocalPath,
+  allowedRoots: AllowedLocalRoot[]
+): void {
+  const isAllowed = allowedRoots.some((root) => (
+    isPathWithinRoot(root.resolvedPath, validatedPath.resolvedPath)
+    && isPathWithinRoot(root.realPath, validatedPath.realPath)
+  ));
+  if (isAllowed) {
     return;
   }
 
-  args.push(flag, String(value));
+  const allowedRootList = allowedRoots.map((root) => root.resolvedPath).join(", ");
+  throw new Error(
+    `MCP local path '${fieldName}' is outside the allowed local roots: ${validatedPath.resolvedPath}. `
+    + `Allowed roots: ${allowedRootList}`
+  );
 }
 
-/** 将一个可选结构化命令行参数序列化为 JSON 并追加到参数列表。 */
-function appendJsonOption(args: string[], flag: string, value: unknown): void {
-  if (value === undefined || value === null) {
-    return;
+/** 解析并校验必须已经存在的 MCP 本地输入路径，同时阻止符号链接越过允许根目录。 */
+async function validateExistingLocalPath(
+  fieldName: string,
+  inputPath: string,
+  allowedRoots: AllowedLocalRoot[]
+): Promise<ValidatedLocalPath> {
+  const resolvedPath = resolve(inputPath);
+  let realPath: string;
+  try {
+    realPath = await realpath(resolvedPath);
+  } catch {
+    throw new Error(`MCP local path '${fieldName}' does not exist or cannot be resolved: ${resolvedPath}`);
   }
 
-  args.push(flag, JSON.stringify(value));
+  const validatedPath = { resolvedPath, realPath };
+  assertPathWithinAllowedRoots(fieldName, validatedPath, allowedRoots);
+  return validatedPath;
 }
 
-/** 读取必填字符串字段，缺失或类型错误时抛出明确错误。 */
+/** 找到可能尚不存在的输出路径最近的现存祖先，并据此重建消除符号链接后的目标位置。 */
+async function resolvePotentialOutputPath(outputPath: string): Promise<ValidatedLocalPath> {
+  const resolvedPath = resolve(outputPath);
+  let currentPath = resolvedPath;
+  const missingSegments: string[] = [];
+
+  while (true) {
+    try {
+      const existingRealPath = await realpath(currentPath);
+      return {
+        resolvedPath,
+        realPath: resolve(existingRealPath, ...missingSegments)
+      };
+    } catch (error) {
+      const errorCode = (error as NodeJS.ErrnoException).code;
+      if (errorCode !== "ENOENT") {
+        throw new Error(`MCP local output path cannot be resolved: ${resolvedPath}`);
+      }
+
+      const parentPath = dirname(currentPath);
+      if (parentPath === currentPath) {
+        throw new Error(`MCP local output path has no resolvable existing parent: ${resolvedPath}`);
+      }
+      missingSegments.unshift(basename(currentPath));
+      currentPath = parentPath;
+    }
+  }
+}
+
+/** 校验允许尚不存在的 MCP 输出路径，并阻止任意现存父目录通过符号链接逃逸。 */
+async function validateLocalOutputPath(
+  fieldName: string,
+  outputPath: string,
+  allowedRoots: AllowedLocalRoot[]
+): Promise<ValidatedLocalPath> {
+  const validatedPath = await resolvePotentialOutputPath(outputPath);
+  assertPathWithinAllowedRoots(fieldName, validatedPath, allowedRoots);
+  return validatedPath;
+}
+
+/** 读取必填非空字符串字段，缺失或类型错误时抛出明确错误。 */
 function readRequiredString(input: WpApiToolInput, key: string): string {
   const value = input[key];
-  if (typeof value !== "string" || value.length === 0) {
+  if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`Missing required string field: ${key}`);
   }
   return value;
 }
 
-/** WordPress 插件列表中用于识别 Jelly Core 的最小实体结构。 */
-interface PackagePluginEntity {
-  /** WordPress 插件文件标识。 */
-  plugin?: string;
-  /** 插件目录 slug。 */
-  slug?: string;
-  /** 插件激活状态。 */
-  status?: string;
-}
-
-/** 读取必填普通对象字段，缺失、数组或类型错误时抛出明确错误。 */
-function readRequiredObject(input: WpApiToolInput, key: string): Record<string, unknown> {
-  const value = input[key];
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Missing required object field: ${key}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-/** 读取可选字符串字段，未提供时返回 undefined。 */
+/** 读取可选字符串字段，并拒绝其他 JSON 类型。 */
 function readOptionalString(input: WpApiToolInput, key: string): string | undefined {
   const value = input[key];
   if (value === undefined || value === null) {
@@ -128,506 +260,144 @@ function readOptionalString(input: WpApiToolInput, key: string): string | undefi
   return value;
 }
 
-/** 读取必填数字字段，缺失或类型错误时抛出明确错误。 */
-function readRequiredNumber(input: WpApiToolInput, key: string): number {
-  const value = input[key];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Missing required number field: ${key}`);
-  }
-  return value;
-}
-
-/** 读取可选数字字段，未提供时返回 undefined。 */
-function readOptionalNumber(input: WpApiToolInput, key: string): number | undefined {
-  const value = input[key];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Expected number field: ${key}`);
-  }
-  return value;
-}
-
-/** 读取可选布尔字段，未提供时返回 undefined。 */
-function readOptionalBoolean(input: WpApiToolInput, key: string): boolean | undefined {
-  const value = input[key];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (typeof value !== "boolean") {
-    throw new Error(`Expected boolean field: ${key}`);
-  }
-  return value;
-}
-
-/** 读取可选数字数组字段，并转换为 CLI 接受的逗号分隔字符串。 */
-function readOptionalNumberCsv(input: WpApiToolInput, key: string): string | undefined {
-  const value = input[key];
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
-    throw new Error(`Expected number array field: ${key}`);
-  }
-  return value.map((entry) => String(entry)).join(",");
-}
-
-/** 校验 Elementor MCP 工具不接受资源字段。 */
-function rejectElementorResourceInput(input: WpApiToolInput): void {
-  if (input.resource !== undefined) {
-    throw new Error("Elementor MCP tools do not accept resource; pages is always used.");
-  }
-}
-
-/** 根据 MCP 工具输入构造 client list 的 CLI 参数。 */
-function buildClientListArgs(): string[] {
-  return ["client", "list", "--json"];
-}
-
-/** 根据 MCP 工具输入构造 client add 的 CLI 参数。 */
-function buildClientAddArgs(input: WpApiToolInput): string[] {
-  return [
-    "client",
-    "add",
-    readRequiredString(input, "name"),
-    "--site-url",
-    readRequiredString(input, "siteUrl"),
-    "--username",
-    readRequiredString(input, "username"),
-    "--app-password",
-    readRequiredString(input, "appPassword")
-  ];
-}
-
-/** 根据 MCP 工具输入构造 client use 的 CLI 参数。 */
-function buildClientUseArgs(input: WpApiToolInput): string[] {
-  return ["client", "use", readRequiredString(input, "name")];
-}
-
-/** 根据 MCP 工具输入构造资源列表查询的 CLI 参数。 */
-function buildResourceListArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push(readRequiredString(input, "resource"), "list", "--json");
-  appendOption(args, "--search", readOptionalString(input, "search"));
-  appendOption(args, "--page", readOptionalNumber(input, "page"));
-  appendOption(args, "--per-page", readOptionalNumber(input, "perPage"));
-  appendOption(args, "--status", readOptionalString(input, "status"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造单个资源读取的 CLI 参数。 */
-function buildResourceGetArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push(readRequiredString(input, "resource"), "get", String(readRequiredNumber(input, "id")), "--json");
-  return args;
-}
-
-/** 将内容类和分类类资源字段追加到 create/update CLI 参数。 */
-function appendResourceBodyArgs(args: string[], input: WpApiToolInput): void {
-  appendOption(args, "--title", readOptionalString(input, "title"));
-  appendOption(args, "--slug", readOptionalString(input, "slug"));
-  appendOption(args, "--status", readOptionalString(input, "status"));
-  appendOption(args, "--excerpt", readOptionalString(input, "excerpt"));
-  appendOption(args, "--content", readOptionalString(input, "content"));
-  appendOption(args, "--content-file", readOptionalString(input, "contentFile"));
-  if (readOptionalBoolean(input, "gutenberg")) {
-    args.push("--gutenberg");
-  }
-  appendOption(args, "--featured-media", readOptionalNumber(input, "featuredMedia"));
-  appendOption(args, "--categories", readOptionalNumberCsv(input, "categories"));
-  appendOption(args, "--name", readOptionalString(input, "name"));
-  appendOption(args, "--description", readOptionalString(input, "description"));
-  appendOption(args, "--parent", readOptionalNumber(input, "parent"));
-}
-
-/** 根据 MCP 工具输入构造资源创建的 CLI 参数。 */
-function buildResourceCreateArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push(readRequiredString(input, "resource"), "create", "--json");
-  appendResourceBodyArgs(args, input);
-  return args;
-}
-
-/** 根据 MCP 工具输入构造资源更新的 CLI 参数。 */
-function buildResourceUpdateArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push(readRequiredString(input, "resource"), "update", String(readRequiredNumber(input, "id")), "--json");
-  appendResourceBodyArgs(args, input);
-  return args;
-}
-
-/** 根据 MCP 工具输入构造资源删除的 CLI 参数。 */
-function buildResourceDeleteArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push(readRequiredString(input, "resource"), "delete", String(readRequiredNumber(input, "id")), "--json");
-  if (readOptionalBoolean(input, "force")) {
-    args.push("--force");
-  }
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 SEO 读取的 CLI 参数。 */
-function buildSeoGetArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("seo", readRequiredString(input, "resource"), String(readRequiredNumber(input, "id")), "--json");
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 SEO 更新的 CLI 参数。 */
-function buildSeoUpdateArgs(input: WpApiToolInput): string[] {
-  const args = buildSeoGetArgs(input);
-  appendOption(args, "--title", readOptionalString(input, "title"));
-  appendOption(args, "--description", readOptionalString(input, "description"));
-  appendOption(args, "--focus-keyword", readOptionalString(input, "focusKeyword"));
-  return args;
-}
-
-/** 读取并校验统一文章内链工具的动作。 */
-function readPostLinkAction(input: WpApiToolInput): "list" | "add" | "update" | "remove" {
-  const action = readRequiredString(input, "action");
-  if (action !== "list" && action !== "add" && action !== "update" && action !== "remove") {
-    throw new Error("action must be list, add, update, or remove.");
-  }
-  return action;
-}
-
-/** 根据 MCP 工具输入构造统一文章内链 CLI 参数。 */
-function buildPostLinkArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  const action = readPostLinkAction(input);
-  appendGlobalArgs(args, input);
-  args.push("links", action, String(readRequiredNumber(input, "postId")), "--json");
-  if (action === "add") {
-    appendOption(args, "--text", readRequiredString(input, "text"));
-    appendOption(args, "--href", readRequiredString(input, "href"));
-  } else if (action === "update") {
-    appendOption(args, "--href", readRequiredString(input, "href"));
-    appendOption(args, "--text", readOptionalString(input, "text"));
-    appendOption(args, "--new-href", readOptionalString(input, "newHref"));
-    appendOption(args, "--new-text", readOptionalString(input, "newText"));
-  } else if (action === "remove") {
-    appendOption(args, "--href", readRequiredString(input, "href"));
-    appendOption(args, "--text", readOptionalString(input, "text"));
-  }
-  return args;
-}
-
-/** 根据 MCP 工具输入构造媒体上传的 CLI 参数。 */
-function buildMediaUploadArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("media", "upload", "--json", "--file", readRequiredString(input, "filePath"));
-  appendOption(args, "--title", readOptionalString(input, "title"));
-  appendOption(args, "--alt", readOptionalString(input, "altText"));
-  appendOption(args, "--caption", readOptionalString(input, "caption"));
-  appendOption(args, "--description", readOptionalString(input, "description"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 Elementor 命令的基础 CLI 参数。 */
-function buildElementorBaseArgs(input: WpApiToolInput, subcommand: string): string[] {
-  const args: string[] = [];
-  rejectElementorResourceInput(input);
-  appendGlobalArgs(args, input);
-  args.push("elementor", subcommand, String(readRequiredNumber(input, "postId")), "--json");
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 Elementor 初始化 CLI 参数。 */
-function buildElementorInitArgs(input: WpApiToolInput): string[] {
-  const args = buildElementorBaseArgs(input, "init");
-  appendJsonOption(args, "--data-json", input.data);
-  appendJsonOption(args, "--page-settings-json", input.pageSettings);
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 Elementor 导出 CLI 参数。 */
-function buildElementorExportArgs(input: WpApiToolInput): string[] {
-  return buildElementorBaseArgs(input, "export");
-}
-
-/** 根据 MCP 工具输入构造 Elementor 导入 CLI 参数。 */
-function buildElementorImportArgs(input: WpApiToolInput): string[] {
-  const args = buildElementorBaseArgs(input, "import");
-  appendJsonOption(args, "--data-json", input.data);
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 Elementor 结构读取 CLI 参数。 */
-function buildElementorStructureArgs(input: WpApiToolInput): string[] {
-  return buildElementorBaseArgs(input, "structure");
-}
-
-/** 根据 MCP 工具输入构造 Elementor 单元素读取 CLI 参数。 */
-function buildElementorGetElementArgs(input: WpApiToolInput): string[] {
-  const args = buildElementorBaseArgs(input, "get-element");
-  appendOption(args, "--element-id", readRequiredString(input, "elementId"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造 Elementor 元素查找 CLI 参数。 */
-function buildElementorFindArgs(input: WpApiToolInput): string[] {
-  const args = buildElementorBaseArgs(input, "find");
-  appendOption(args, "--widget-type", readOptionalString(input, "widgetType"));
-  appendOption(args, "--element-type", readOptionalString(input, "elementType"));
-  appendOption(args, "--search-text", readOptionalString(input, "searchText"));
-  appendOption(args, "--setting-key", readOptionalString(input, "settingKey"));
-  appendOption(args, "--setting-value", readOptionalString(input, "settingValue"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造文章正文文本替换的 CLI 参数。 */
-function buildPostContentReplaceArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push(
-    "content",
-    "replace",
-    String(readRequiredNumber(input, "postId")),
-    "--json",
-    "--text",
-    readRequiredString(input, "text"),
-    "--replacement",
-    readRequiredString(input, "replacement")
-  );
-  return args;
-}
-
-/** 根据 MCP 工具输入构造插件列表查询的 CLI 参数。 */
-/** 读取并校验统一软件包工具的类型。 */
-function readPackageType(input: WpApiToolInput): "plugin" | "theme" {
-  const packageType = readRequiredString(input, "packageType");
-  if (packageType !== "plugin" && packageType !== "theme") {
-    throw new Error("packageType must be plugin or theme.");
-  }
-  return packageType;
-}
-
-/** 根据软件包类型返回内部 CLI 命令组名称。 */
-function packageCommand(packageType: "plugin" | "theme"): "plugins" | "themes" {
-  return packageType === "plugin" ? "plugins" : "themes";
-}
-
-/** 根据 MCP 工具输入构造插件或主题列表的 CLI 参数。 */
-function buildPackageListArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  const packageType = readPackageType(input);
-  appendGlobalArgs(args, input);
-  args.push(packageCommand(packageType), "list", "--json");
-  appendOption(args, "--status", readOptionalString(input, "status"));
-  if (packageType === "plugin") {
-    appendOption(args, "--search", readOptionalString(input, "search"));
-  }
-  return args;
-}
-
-/** 根据 MCP 工具输入构造单个插件或主题读取的 CLI 参数。 */
-function buildPackageGetArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  const packageType = readPackageType(input);
-  appendGlobalArgs(args, input);
-  args.push(packageCommand(packageType), "get", readRequiredString(input, "package"), "--json");
-  return args;
-}
-
-/** 根据 MCP 工具输入构造插件或主题 ZIP 安装、更新的 CLI 参数。 */
-function buildPackageMutationArgs(input: WpApiToolInput, action: "install" | "update"): string[] {
-  const args: string[] = [];
-  const packageType = readPackageType(input);
-  appendGlobalArgs(args, input);
-  args.push(packageCommand(packageType), packageType === "plugin" ? "install" : action, "--json");
-  appendOption(args, "--file", readRequiredString(input, "file"));
-  return args;
-}
-
-/** 根据 MCP 工具输入构造插件或主题激活的 CLI 参数。 */
-function buildPackageActivateArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  const packageType = readPackageType(input);
-  const packageName = readRequiredString(input, "package");
-  appendGlobalArgs(args, input);
-  if (packageType === "plugin") {
-    args.push("plugins", "update", packageName, "--json", "--status", "active");
-  } else {
-    args.push("themes", "activate", packageName, "--json");
-  }
-  return args;
-}
-
-/** 根据 MCP 工具输入构造插件禁用的 CLI 参数，并拒绝主题禁用。 */
-function buildPackageDeactivateArgs(input: WpApiToolInput): string[] {
-  const packageType = readPackageType(input);
-  if (packageType === "theme") {
-    throw new Error("Themes cannot be deactivated through wp_package_deactivate.");
-  }
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("plugins", "update", readRequiredString(input, "package"), "--json", "--status", "inactive");
-  return args;
-}
-
-/** 判断指定软件包操作是否依赖 Jelly Core 自定义 REST 接口。 */
-function packageOperationRequiresJellyCore(toolName: WpApiToolName, input: WpApiToolInput): boolean {
-  if (toolName === "wp_package_install" || toolName === "wp_package_update") {
-    return true;
-  }
-
-  return toolName === "wp_package_activate" && readPackageType(input) === "theme";
-}
-
-/** 构造读取已激活插件列表的 CLI 参数，用于 Jelly Core 前置检查。 */
-function buildActivePluginListArgs(input: WpApiToolInput): string[] {
-  const args: string[] = [];
-  appendGlobalArgs(args, input);
-  args.push("plugins", "list", "--json", "--status", "active");
-  return args;
-}
-
-/** 判断 CLI 返回的插件列表中是否包含已激活的 Jelly Core。 */
-function hasActiveJellyCore(data: unknown): boolean {
-  if (typeof data !== "object" || data === null || !("items" in data)) {
-    return false;
-  }
-
-  const items = (data as { items?: unknown }).items;
-  if (!Array.isArray(items)) {
-    return false;
-  }
-
-  return items.some((item) => {
-    if (typeof item !== "object" || item === null) {
-      return false;
-    }
-
-    const plugin = item as PackagePluginEntity;
-    const identifier = plugin.plugin ?? plugin.slug ?? "";
-    return plugin.status === "active"
-      && (
-        identifier === "jelly-core"
-        || identifier === "jelly-core/jelly-core"
-        || identifier === "jelly-core/jelly-core.php"
-      );
-  });
-}
-
-/** 在执行依赖 Jelly Core 的操作前确认目标站点已经激活核心插件。 */
-async function assertJellyCoreIsActive(
+/** 在 MCP 执行前校验所有可能读写本地文件的参数，并返回使用真实路径的安全输入副本。 */
+async function validateToolLocalPaths(
+  toolName: WpApiToolName,
   input: WpApiToolInput,
-  runCliImpl: RunCliImpl,
   context: WpApiToolContext
-): Promise<void> {
-  const result = await runCliImpl(buildActivePluginListArgs(input), {
-    configDir: context.configDir,
-    fetchImpl: context.fetchImpl,
-    logger: context.logger
-  });
+): Promise<WpApiToolInput> {
+  const validatedInput = { ...input };
+  let pathField: "contentFile" | "filePath" | "file" | undefined;
 
-  if (result.exitCode !== 0) {
-    throw new Error(result.stderr.trim() || "Unable to check whether Jelly Core is active.");
+  if ((toolName === "wp_resource_create" || toolName === "wp_resource_update") && input.contentFile !== undefined) {
+    pathField = "contentFile";
+  } else if (toolName === "wp_media_upload") {
+    pathField = "filePath";
+  } else if (toolName === "wp_package_install" || toolName === "wp_package_update") {
+    pathField = "file";
   }
 
-  if (!hasActiveJellyCore(result.data)) {
-    throw new Error(
-      "Jelly Core is not installed and active on the target site. "
-      + "This operation requires Jelly Core, so no install, update, or theme activation was attempted."
-    );
+  if (pathField !== undefined) {
+    const inputPath = readRequiredString(input, pathField);
+    const allowedRoots = await resolveAllowedLocalRoots(context);
+    validatedInput[pathField] = (await validateExistingLocalPath(pathField, inputPath, allowedRoots)).realPath;
+    return validatedInput;
   }
+
+  if (toolName === "wp_package_pack_theme" || toolName === "wp_package_pack_plugin") {
+    const allowedRoots = await resolveAllowedLocalRoots(context);
+    const folderPath = readRequiredString(input, "folderPath");
+    const validatedFolder = await validateExistingLocalPath("folderPath", folderPath, allowedRoots);
+    const requestedOutputPath = readOptionalString(input, "outputPath")
+      ?? resolve(dirname(validatedFolder.resolvedPath), `${basename(validatedFolder.resolvedPath)}.zip`);
+    const validatedOutput = await validateLocalOutputPath("outputPath", requestedOutputPath, allowedRoots);
+    validatedInput.folderPath = validatedFolder.realPath;
+    validatedInput.outputPath = validatedOutput.realPath;
+  }
+
+  return validatedInput;
 }
 
-/** 将 MCP 工具名和输入对象转换为现有 CLI 可以消费的 argv 数组。 */
-export function buildCliArgsForTool(toolName: WpApiToolName, input: WpApiToolInput = {}): string[] {
+/** 判断任意字符串是否是当前服务注册的 MCP 工具名称。 */
+function isWpApiToolName(toolName: string): toolName is WpApiToolName {
+  return (WP_API_TOOL_NAMES as readonly string[]).includes(toolName);
+}
+
+/** 判断工具名称是否属于 Elementor 领域。 */
+function isElementorToolName(toolName: WpApiToolName): toolName is ElementorToolName {
+  return toolName.startsWith("wp_elementor_");
+}
+
+/** 从工具输入中读取远端 WordPress client 选择字段。 */
+function readConnectionInput(input: WpApiToolInput): WordPressConnectionInput {
+  return {
+    client: readOptionalString(input, "client"),
+    siteUrl: readOptionalString(input, "siteUrl")
+  };
+}
+
+/** 使用已经解析的 WordPressClient 直接执行远端 MCP 领域操作。 */
+async function executeRemoteTool(
+  toolName: WpApiToolName,
+  input: WpApiToolInput,
+  client: WordPressClient
+): Promise<unknown> {
+  if (isElementorToolName(toolName)) {
+    return executeElementorTool(toolName, client, input);
+  }
+
   switch (toolName) {
-    case "wp_client_list":
-      return buildClientListArgs();
-    case "wp_client_add":
-      return buildClientAddArgs(input);
-    case "wp_client_use":
-      return buildClientUseArgs(input);
     case "wp_resource_list":
-      return buildResourceListArgs(input);
+      return listResource(client, input as unknown as ResourceListInput);
     case "wp_resource_get":
-      return buildResourceGetArgs(input);
+      return getResource(client, input as unknown as ResourceGetInput);
     case "wp_resource_create":
-      return buildResourceCreateArgs(input);
+      return createResource(client, input as unknown as ResourceCreateInput);
     case "wp_resource_update":
-      return buildResourceUpdateArgs(input);
+      return updateResource(client, input as unknown as ResourceUpdateInput);
     case "wp_resource_delete":
-      return buildResourceDeleteArgs(input);
+      return deleteResource(client, input as unknown as ResourceDeleteInput);
     case "wp_seo_get":
-      return buildSeoGetArgs(input);
+      return getResourceSeo(client, input as unknown as ResourceSeoGetInput);
     case "wp_seo_update":
-      return buildSeoUpdateArgs(input);
+      return updateResourceSeo(client, input as unknown as ResourceSeoUpdateInput);
     case "wp_post_link":
-      return buildPostLinkArgs(input);
+      return managePostLink(client, input as unknown as PostLinkInput);
     case "wp_post_content_replace":
-      return buildPostContentReplaceArgs(input);
+      return replacePostContent(client, input as unknown as PostContentReplaceInput);
     case "wp_media_upload":
-      return buildMediaUploadArgs(input);
-    case "wp_elementor_init":
-      return buildElementorInitArgs(input);
-    case "wp_elementor_export":
-      return buildElementorExportArgs(input);
-    case "wp_elementor_import":
-      return buildElementorImportArgs(input);
-    case "wp_elementor_structure":
-      return buildElementorStructureArgs(input);
-    case "wp_elementor_get_element":
-      return buildElementorGetElementArgs(input);
-    case "wp_elementor_find":
-      return buildElementorFindArgs(input);
+      return uploadMedia(client, input as unknown as MediaUploadInput);
     case "wp_package_list":
-      return buildPackageListArgs(input);
+      return listPackages(client, input as unknown as PackageListInput);
     case "wp_package_get":
-      return buildPackageGetArgs(input);
+      return getPackage(client, input as unknown as PackageGetInput);
     case "wp_package_install":
-      return buildPackageMutationArgs(input, "install");
+      return installPackage(client, input as unknown as PackageFileMutationInput);
     case "wp_package_update":
-      return buildPackageMutationArgs(input, "update");
+      return updatePackage(client, input as unknown as PackageFileMutationInput);
     case "wp_package_activate":
-      return buildPackageActivateArgs(input);
+      return activatePackage(client, input as unknown as PackageStatusMutationInput);
     case "wp_package_deactivate":
-      return buildPackageDeactivateArgs(input);
+      return deactivatePackage(client, input as unknown as PackageStatusMutationInput);
     default:
-      throw new Error(`Unknown MCP tool: ${toolName}`);
+      throw new Error(`Tool does not perform a remote WordPress operation: ${toolName}`);
   }
 }
 
-/** 执行一个 wp-api MCP 工具，并返回 runCli 提供的结构化数据。 */
+/** 执行一个纯 MCP 工具，并直接返回领域 handler 的结构化结果。 */
 export async function executeWpApiTool(
   toolName: WpApiToolName,
   input: WpApiToolInput = {},
   context: WpApiToolContext = {}
 ): Promise<unknown> {
-  if (toolName === "wp_package_pack_theme" || toolName === "wp_package_pack_plugin") {
-    return createPackageArchive(
-      toolName === "wp_package_pack_theme" ? "theme" : "plugin",
-      readRequiredString(input, "folderPath"),
-      readOptionalString(input, "outputPath")
-    );
+  if (!isWpApiToolName(toolName)) {
+    throw new Error(`Unknown MCP tool: ${String(toolName)}`);
   }
 
-  const runCliImpl = context.runCliImpl ?? (runCli as unknown as RunCliImpl);
-
-  if (packageOperationRequiresJellyCore(toolName, input)) {
-    await assertJellyCoreIsActive(input, runCliImpl, context);
+  const validatedInput = await validateToolLocalPaths(toolName, input, context);
+  switch (toolName) {
+    case "wp_client_list":
+      return listStoredClients(context);
+    case "wp_client_add":
+      return addStoredClient({
+        name: readRequiredString(validatedInput, "name"),
+        siteUrl: readRequiredString(validatedInput, "siteUrl"),
+        username: readRequiredString(validatedInput, "username"),
+        appPassword: readRequiredString(validatedInput, "appPassword")
+      }, context);
+    case "wp_client_use":
+      return useStoredClient(readRequiredString(validatedInput, "name"), context);
+    case "wp_package_pack_theme":
+    case "wp_package_pack_plugin":
+      return createPackageArchive(
+        toolName === "wp_package_pack_theme" ? "theme" : "plugin",
+        readRequiredString(validatedInput, "folderPath"),
+        readOptionalString(validatedInput, "outputPath")
+      );
+    default: {
+      const resolver = context.resolveClientImpl ?? resolveWordPressClient;
+      const client = await resolver(readConnectionInput(validatedInput), context);
+      return executeRemoteTool(toolName, validatedInput, client);
+    }
   }
-
-  const result = await runCliImpl(buildCliArgsForTool(toolName, input), {
-    configDir: context.configDir,
-    fetchImpl: context.fetchImpl,
-    logger: context.logger
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(result.stderr.trim() || `wp-api command failed with exit code ${result.exitCode}`);
-  }
-
-  return result.data;
 }
