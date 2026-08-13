@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "clean": "node -e \"fs.rmSync('build',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/copy-config.mjs",
     "start": "node build/bin/wp-api-mcp.js",
     "prepack": "npm run build",
     "test": "npm run build && node --test",

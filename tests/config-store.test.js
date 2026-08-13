@@ -6,6 +6,12 @@ import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 
 import { ConfigStore } from "../build/lib/config-store.js";
 
+test("ConfigStore 默认引用 build 内的凭据配置", () => {
+  const store = new ConfigStore();
+  assert.equal(store.configDir, path.join(process.cwd(), "build", "config"));
+  assert.equal(store.configPath, path.join(process.cwd(), "build", "config", "config.json"));
+});
+
 test("ConfigStore persists clients and active client selection", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
   const store = new ConfigStore({ configDir: tempDir });

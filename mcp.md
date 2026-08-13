@@ -109,7 +109,7 @@ C:\content;D:\packages
 
 ## 3. 首次连接 WordPress
 
-client 配置存储在 `~/.wp-api/config.json`。Application Password 会写入该本地文件；`wp_client_list` 返回时会将其移除。
+client 的构建源是项目目录内的 `config/config.json`。`npm run build` 会将它复制到 `build/config/config.json`，编译后的 MCP 服务只引用并更新这个 build 内副本。Application Password 会以明文进入 build 和 npm 安装包；`wp_client_list` 返回时会将其移除。不要把包发布到公共 registry。
 
 首次使用依次调用：
 
@@ -142,7 +142,7 @@ client 配置存储在 `~/.wp-api/config.json`。Application Password 会写入�
 
 返回结构包含 `activeClient` 和不含密码的 `clients`。
 
-配置更新只在单个服务进程内串行化，没有跨进程文件锁。多个 MCP host 共享同一个 `~/.wp-api/config.json` 时，应避免同时调用 `wp_client_add` 或 `wp_client_use`，否则最后完成的写入可能覆盖另一个进程基于旧快照所做的变更。
+配置更新只在单个服务进程内串行化，没有跨进程文件锁。多个 MCP host 共享同一个 `build/config/config.json` 时，应避免同时调用 `wp_client_add` 或 `wp_client_use`，否则最后完成的写入可能覆盖另一个进程基于旧快照所做的变更。重新构建还会用项目内 `config/config.json` 覆盖 build 副本；需要保留运行时新增的 client 时，应先同步回构建源。
 
 ## 4. 通用调用约定
 
@@ -371,4 +371,4 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 
 ## 10. v2 破坏性变更
 
-v2 移除了 `wp-api` CLI、命令参数解析、stdin 正文命令模式以及 CLI 专属文本/JSON 输出选项。迁移方式是让 MCP host 启动 `wp-api-mcp`（或 `npm start`），并改为调用对应结构化工具。已有 `~/.wp-api/config.json` client 配置继续兼容。
+v2 移除了 `wp-api` CLI、命令参数解析、stdin 正文命令模式以及 CLI 专属文本/JSON 输出选项。迁移方式是让 MCP host 启动 `wp-api-mcp`（或 `npm start`），并改为调用对应结构化工具。凭据从项目内 `config/config.json` 构建到 `build/config/config.json`。

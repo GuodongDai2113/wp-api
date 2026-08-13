@@ -1,0 +1,11 @@
+{
+  "activeClient": "example",
+  "clients": [
+    {
+      "name": "example",
+      "siteUrl": "https://example.com",
+      "username": "wordpress-user",
+      "appPassword": "replace-with-wordpress-application-password"
+    }
+  ]
+}

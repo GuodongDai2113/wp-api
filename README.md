@@ -112,7 +112,7 @@ Connections are configured through MCP tools, not through a separate command. In
    {}
    ```
 
-`wp_client_list` confirms the active client and never returns Application Passwords. Saved clients are stored in `~/.wp-api/config.json`. The server uses atomic writes and tightens directory/file permissions where the operating system supports it; nevertheless, treat this file as a credential store and never commit or share it.
+`wp_client_list` confirms the active client and never returns Application Passwords. The project-local `config/config.json` is the credential build source; `npm run build` copies it to the runtime file `build/config/config.json`. The source is ignored by Git, but `build` is included in the npm package. Treat every resulting package as a plaintext credential artifact: never publish it to a public registry or share it outside the trusted environment.
 
 Configuration writes are serialized inside one server process, but the file does not use a cross-process lock. If several MCP hosts share the same account and config file, avoid changing clients concurrently; use one writer or separate configuration directories in an embedded deployment.
 
@@ -222,7 +222,7 @@ Package listing/details and plugin activation/deactivation use native WordPress 
 
 ## Version 2 migration
 
-Version 2 is a breaking release that removes the `wp-api` CLI, its argument parser, stdin command mode, and CLI-only output options. Update integrations to launch `wp-api-mcp` (or `npm start`) as a STDIO MCP server and invoke the structured tools above. Existing client data in `~/.wp-api/config.json` remains usable.
+Version 2 is a breaking release that removes the `wp-api` CLI, its argument parser, stdin command mode, and CLI-only output options. Update integrations to launch `wp-api-mcp` (or `npm start`) as a STDIO MCP server and invoke the structured tools above. Credentials are built from project-local `config/config.json` into `build/config/config.json`.
 
 ## Development
 

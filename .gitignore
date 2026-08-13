@@ -4,3 +4,6 @@ node_modules/
 build/
 build/bin/
 docs/
+
+# 本地 WordPress 凭据，仅供构建复制，禁止提交版本库。
+config/config.json

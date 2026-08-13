@@ -112,7 +112,7 @@ cwd = "C:/absolute/path/to/allowed-workspace"
    {}
    ```
 
-`wp_client_list` 用于确认当前激活项，且不会返回 Application Password。client 默认保存在 `~/.wp-api/config.json`。服务使用原子写入，并在操作系统支持时收紧目录和文件权限；仍应把该文件视作凭据存储，禁止提交到版本库或对外共享。
+`wp_client_list` 用于确认当前激活项，且不会返回 Application Password。项目内的 `config/config.json` 是凭据构建源，`npm run build` 会把它复制为运行时实际引用的 `build/config/config.json`。源文件已被 Git 忽略，但 `build` 会进入 npm 安装包，因此该安装包必须作为含明文凭据的敏感文件处理，禁止发布到公共 registry 或对外共享。
 
 配置写入会在单个服务进程内串行化，但当前没有跨进程文件锁。多个 MCP host 若共享同一系统账户和配置文件，不应并发修改 client；应指定单一写入者，或在代码嵌入场景为各实例配置不同目录。
 
@@ -222,7 +222,7 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 
 ## v2 迁移
 
-v2 是破坏性版本：移除了 `wp-api` CLI、参数解析层、stdin 命令输入以及 CLI 专属输出选项。现有集成需要改为通过 `wp-api-mcp`（或 `npm start`）启动 STDIO MCP 服务，再调用上述结构化工具。`~/.wp-api/config.json` 中已有的 client 数据可以继续使用。
+v2 是破坏性版本：移除了 `wp-api` CLI、参数解析层、stdin 命令输入以及 CLI 专属输出选项。现有集成需要改为通过 `wp-api-mcp`（或 `npm start`）启动 STDIO MCP 服务，再调用上述结构化工具。凭据从项目内 `config/config.json` 构建到 `build/config/config.json`。
 
 ## 开发
 

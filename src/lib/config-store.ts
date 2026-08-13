@@ -1,5 +1,5 @@
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 
@@ -44,9 +44,9 @@ interface RawConfigData {
   profiles?: unknown;
 }
 
-/** 返回默认 wp-api 配置目录。 */
+/** 返回编译产物内的默认配置目录，使 MCP 始终引用 `build/config/config.json`。 */
 function defaultConfigDir(): string {
-  return path.join(os.homedir(), ".wp-api");
+  return path.resolve(fileURLToPath(new URL("../config/", import.meta.url)));
 }
 
 /** 判断任意值是否是可归一化的 client 对象。 */
