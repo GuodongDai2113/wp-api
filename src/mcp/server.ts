@@ -4,20 +4,11 @@ import { z } from "zod";
 
 import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./wp-api-tools.js";
 
-/** 判断主机名是否明确表示只在本机可达的回环地址。 */
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  return normalized === "localhost"
-    || normalized.endsWith(".localhost")
-    || normalized === "::1"
-    || /^127(?:\.\d{1,3}){3}$/.test(normalized);
-}
-
-/** 判断站点地址是否是适合作为 WordPress 根地址的 HTTPS 或本机 HTTP URL。 */
+/** 判断站点地址是否是适合作为 WordPress 根地址的 HTTP(S) URL。 */
 function isSafeSiteUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return (url.protocol === "https:" || (url.protocol === "http:" && isLoopbackHostname(url.hostname)))
+    return (url.protocol === "https:" || url.protocol === "http:")
       && url.username === ""
       && url.password === ""
       && url.search === ""
@@ -35,7 +26,7 @@ function isValidPerPage(value: number): boolean {
 /** WordPress 站点根地址的 MCP 校验 schema。 */
 const siteUrlSchema = z.string().url().refine(
   isSafeSiteUrl,
-  "WordPress site URL must use HTTPS (or loopback HTTP) and cannot contain credentials, a query, or a fragment."
+  "WordPress site URL must use HTTP or HTTPS and cannot contain credentials, a query, or a fragment."
 );
 
 /** WordPress 原生 REST 资源名称的 MCP 校验 schema。 */
@@ -139,22 +130,6 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       outputSchema
     },
     createToolCallback("wp_client_list", context)
-  );
-
-  server.registerTool(
-    "wp_client_add",
-    {
-      title: "Add wp-api client",
-      description: "Save a local wp-api client using a WordPress Application Password.",
-      inputSchema: {
-        name: nonBlankStringSchema.describe("Client name to save locally."),
-        siteUrl: siteUrlSchema.describe("WordPress site URL."),
-        username: nonBlankStringSchema.describe("WordPress username."),
-        appPassword: nonBlankStringSchema.describe("WordPress Application Password.")
-      },
-      outputSchema
-    },
-    createToolCallback("wp_client_add", context)
   );
 
   server.registerTool(

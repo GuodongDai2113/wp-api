@@ -1,10 +1,10 @@
 # wp-api
 
-A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 31 structured tools for clients, content, SEO, Elementor, media, packages, and inquiries.
+A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 30 structured tools for clients, content, SEO, Elementor, media, packages, and inquiries.
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md) · Detailed MCP setup: [mcp.md](./mcp.md)
 
-Version 2 is MCP-only. The only executable is `wp-api-mcp`; there is no standalone `wp-api` command interface.
+`wp-api-mcp` is the STDIO server entry point. `wp-api-config` opens a temporary loopback-only credential configuration page.
 
 ## Requirements
 
@@ -32,7 +32,7 @@ npm start
 
 `npm start` and `wp-api-mcp` wait for an MCP host on standard input. They do not provide an interactive shell. In normal use, configure the MCP host to launch the process for you.
 
-If the package is linked or installed globally, `wp-api-mcp` is the only package executable:
+When the package is linked or installed globally, both executables are available:
 
 ```bash
 npm link
@@ -54,6 +54,7 @@ cwd = "C:/absolute/path/to/wp-api"
 
 [mcp_servers.wp_api.env]
 WP_API_ALLOWED_LOCAL_ROOTS = "C:/wordpress-content;D:/wordpress-packages"
+WP_API_CONFIG_DIR = "C:/Users/your-name/.wp-api"
 ```
 
 When `wp-api-mcp` is available on `PATH`, the shorter form is:
@@ -87,46 +88,30 @@ The exact settings filename is host-specific. Restart or reload the MCP host aft
 
 ## First-time client setup
 
-Connections are configured through MCP tools, not through a separate command. In your MCP host, call these three tools in order:
+Do not send usernames or Application Passwords through an agent. On every host that runs the MCP server, an administrator should run:
 
-1. `wp_client_add`
+```bash
+wp-api-config
+```
 
-   ```json
-   {
-     "name": "production",
-     "siteUrl": "https://example.com",
-     "username": "editor",
-     "appPassword": "xxxx xxxx xxxx xxxx xxxx xxxx"
-   }
-   ```
+This starts a temporary page on a random `127.0.0.1` port and opens it in the default browser. The page can add, edit, delete, test, and activate connections. Saved passwords are never displayed again. The service exits explicitly or after 15 minutes of inactivity.
 
-2. `wp_client_use`
+Credentials default to `~/.wp-api/`. `vault.json` contains AES-256-GCM ciphertext for usernames and passwords; `vault.key` contains a random per-host key. Set the same `WP_API_CONFIG_DIR` for `wp-api-config` and the MCP host to override that directory. Builds and npm packages contain no credentials.
 
-   ```json
-   { "name": "production" }
-   ```
+The configuration page never reads legacy plaintext configuration. Re-enter connections in the page, then securely remove old `config/config.json`, `build/config/config.json`, or `*.plaintext-backup` files manually.
 
-3. `wp_client_list`
-
-   ```json
-   {}
-   ```
-
-`wp_client_list` confirms the active client and never returns Application Passwords. The project-local `config/config.json` is the credential build source; `npm run build` copies it to the runtime file `build/config/config.json`. The source is ignored by Git, but `build` is included in the npm package. Treat every resulting package as a plaintext credential artifact: never publish it to a public registry or share it outside the trusted environment.
-
-Configuration writes are serialized inside one server process, but the file does not use a cross-process lock. If several MCP hosts share the same account and config file, avoid changing clients concurrently; use one writer or separate configuration directories in an embedded deployment.
+Vault writes use atomic replacement and a cross-process file lock. `wp_client_list` returns only connection names, site URLs, and the active connection name; it never returns usernames, passwords, or password status.
 
 All remote tools accept optional `client` and `siteUrl` fields. `client` selects a saved connection without changing the active one. `siteUrl` may change only the path on the saved URL's origin; it cannot redirect saved credentials to another host.
 
 ## Tools
 
-The server exposes exactly 31 tools.
+The server exposes exactly 30 tools.
 
-### Client configuration (3)
+### Client configuration (2)
 
-- `wp_client_add` — add or replace a saved WordPress connection.
 - `wp_client_use` — set the active saved connection.
-- `wp_client_list` — list saved connections and the active name without passwords.
+- `wp_client_list` — list saved connection names and URLs without usernames or passwords.
 
 ### WordPress resources (5)
 
@@ -181,11 +166,13 @@ See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 
 ### Site URLs and credentials
 
-- Site URLs must use HTTPS. HTTP is accepted only for loopback hosts such as `localhost`, `*.localhost`, `127.0.0.0/8`, and `::1`.
+- Site URLs may use HTTP or HTTPS. HTTP Basic Authentication does not encrypt credentials in transit, so use HTTPS on untrusted networks.
 - A site URL cannot contain embedded credentials, a query string, or a fragment.
 - Per-call `siteUrl` overrides must have the same origin as the saved URL.
 - Authenticated WordPress requests do not follow redirects. Configure the canonical site URL instead.
 - Authentication uses the saved WordPress Application Password; grant that WordPress account only the capabilities it needs.
+- Credentials default to `~/.wp-api/` and use AES-256-GCM; protect both the key and ciphertext files as current-user-only data.
+- File encryption prevents plaintext browsing, packaging, and accidental logging, but it cannot defeat malicious code with arbitrary access as the same operating-system user.
 
 ### Local file boundary
 
@@ -227,9 +214,9 @@ The server checks all active plugins before any of those mutations. If Jelly Cor
 
 Package listing/details and plugin activation/deactivation use native WordPress REST endpoints and do not require Jelly Core. Theme deactivation is unsupported. Jelly Core's custom REST routes must perform their own logged-in capability checks: the compatibility `X-Jelly-*` headers are not a shared secret and must not be treated as authentication.
 
-## Version 2 migration
+## Credential-storage migration
 
-Version 2 is a breaking release that removes the `wp-api` CLI, its argument parser, stdin command mode, and CLI-only output options. Update integrations to launch `wp-api-mcp` (or `npm start`) as a STDIO MCP server and invoke the structured tools above. Credentials are built from project-local `config/config.json` into `build/config/config.json`.
+The current release removes `wp_client_add`, the build-time plaintext credential copy, and UI plaintext imports. Run `wp-api-config` to re-enter connections, then let the MCP host use `wp_client_use` or the default selected in the page. Configure a separate vault on every host.
 
 ## Development
 

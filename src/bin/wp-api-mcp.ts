@@ -18,6 +18,7 @@ function readAllowedLocalRootsFromEnvironment(): string[] | undefined {
 
 try {
   await startStdioServer({
+    configDir: process.env.WP_API_CONFIG_DIR?.trim() || undefined,
     allowedLocalRoots: readAllowedLocalRootsFromEnvironment()
   });
 } catch (error) {

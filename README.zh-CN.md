@@ -1,10 +1,10 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 31 个结构化工具，覆盖 client、内容、SEO、Elementor、媒体、插件/主题及询价管理。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 30 个结构化工具，覆盖 client、内容、SEO、Elementor、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
-v2 仅提供 MCP 服务。唯一的可执行入口是 `wp-api-mcp`，不再提供独立的 `wp-api` 命令界面。
+`wp-api-mcp` 是 STDIO 服务入口，`wp-api-config` 是只监听本机回环地址的一次性凭据配置页面。
 
 ## 环境要求
 
@@ -32,7 +32,7 @@ npm start
 
 `npm start` 和 `wp-api-mcp` 会在标准输入上等待 MCP host，不提供交互式终端。正常使用时应让 MCP host 自动拉起该进程。
 
-通过 `npm link` 或全局安装后，包只暴露 `wp-api-mcp` 这一个可执行入口：
+通过 `npm link` 或全局安装后，可以直接使用两个可执行入口：
 
 ```bash
 npm link
@@ -54,6 +54,7 @@ cwd = "C:/absolute/path/to/wp-api"
 
 [mcp_servers.wp_api.env]
 WP_API_ALLOWED_LOCAL_ROOTS = "C:/wordpress-content;D:/wordpress-packages"
+WP_API_CONFIG_DIR = "C:/Users/your-name/.wp-api"
 ```
 
 如果 `wp-api-mcp` 已加入 `PATH`，可以简化为：
@@ -87,46 +88,30 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 
 ## 首次配置 client
 
-连接信息完全通过 MCP 工具配置，不需要额外命令。在 MCP host 中依次调用以下三个工具：
+不要把用户名或 Application Password 发送给 Agent。请在每台运行 MCP 的主机上由管理员执行：
 
-1. `wp_client_add`
+```bash
+wp-api-config
+```
 
-   ```json
-   {
-     "name": "production",
-     "siteUrl": "https://example.com",
-     "username": "editor",
-     "appPassword": "xxxx xxxx xxxx xxxx xxxx xxxx"
-   }
-   ```
+该命令在 `127.0.0.1` 的随机端口启动临时网页并自动打开浏览器。页面可以新增、编辑、删除、测试连接和选择默认连接；密码保存后不再回显。服务显式关闭或空闲 15 分钟后退出。
 
-2. `wp_client_use`
+凭据默认保存在当前用户的 `~/.wp-api/`：`vault.json` 使用 AES-256-GCM 保存包含用户名和密码的密文，`vault.key` 保存每台主机独立生成的随机密钥。可同时为 `wp-api-config` 和 MCP host 设置相同的 `WP_API_CONFIG_DIR` 来覆盖目录。构建产物和 npm 包不包含凭据。
 
-   ```json
-   { "name": "production" }
-   ```
+配置页面不读取旧版明文配置。升级时请在页面中重新录入连接，并手动安全删除旧的 `config/config.json`、`build/config/config.json` 或 `*.plaintext-backup`。
 
-3. `wp_client_list`
-
-   ```json
-   {}
-   ```
-
-`wp_client_list` 用于确认当前激活项，且不会返回 Application Password。项目内的 `config/config.json` 是凭据构建源，`npm run build` 会把它复制为运行时实际引用的 `build/config/config.json`。源文件已被 Git 忽略，但 `build` 会进入 npm 安装包，因此该安装包必须作为含明文凭据的敏感文件处理，禁止发布到公共 registry 或对外共享。
-
-配置写入会在单个服务进程内串行化，但当前没有跨进程文件锁。多个 MCP host 若共享同一系统账户和配置文件，不应并发修改 client；应指定单一写入者，或在代码嵌入场景为各实例配置不同目录。
+凭据库写入使用原子替换和跨进程文件锁。`wp_client_list` 只返回连接名称、站点 URL 和默认连接名称；用户名、密码及密码状态都不会通过 MCP 返回。
 
 所有远端工具都接受可选的 `client` 和 `siteUrl`。`client` 可以在不改变当前激活项的情况下选用另一个已保存连接；`siteUrl` 只能修改已保存 URL 同一 origin 下的路径，不能把已保存凭据转发到其他主机。
 
 ## 工具列表
 
-服务共暴露 31 个工具。
+服务共暴露 30 个工具。
 
-### Client 配置（3 个）
+### Client 配置（2 个）
 
-- `wp_client_add`：新增或覆盖一个 WordPress 连接。
 - `wp_client_use`：设置当前激活的连接。
-- `wp_client_list`：列出连接及当前激活名称，不返回密码。
+- `wp_client_list`：列出连接及当前激活名称，不返回用户名或密码。
 
 ### WordPress 资源（5 个）
 
@@ -181,11 +166,13 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 
 ### 站点 URL 与凭据
 
-- 站点 URL 必须使用 HTTPS。只有 `localhost`、`*.localhost`、`127.0.0.0/8`、`::1` 等回环主机允许使用 HTTP。
+- 站点 URL 可以使用 HTTP 或 HTTPS。HTTP Basic Authentication 不提供传输加密，非可信网络应优先使用 HTTPS。
 - 站点 URL 不能嵌入用户名/密码，也不能包含 query 或 fragment。
 - 每次调用传入的 `siteUrl` 必须和已保存 URL 同源。
 - 携带 WordPress 凭据的请求不会跟随重定向；应直接配置站点的规范 URL。
 - 服务使用已保存的 WordPress Application Password 认证。请只授予该 WordPress 用户实际需要的能力。
+- 凭据文件默认位于 `~/.wp-api/`，使用 AES-256-GCM 加密；密钥和密文文件均应仅允许当前系统用户访问。
+- 文件加密可避免明文误读、打包和日志泄漏，但不能抵御拥有同一系统用户任意文件及代码执行权限的恶意程序。
 
 ### 本地路径边界
 
@@ -227,9 +214,9 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 
 软件包列表/详情、插件激活/停用使用 WordPress 原生 REST 端点，不依赖 Jelly Core；主题不支持停用。Jelly Core 自定义 REST 路由必须自行校验登录用户能力：兼容用的 `X-Jelly-*` 请求头不含共享秘密，不能当作独立认证机制。
 
-## v2 迁移
+## 凭据存储迁移
 
-v2 是破坏性版本：移除了 `wp-api` CLI、参数解析层、stdin 命令输入以及 CLI 专属输出选项。现有集成需要改为通过 `wp-api-mcp`（或 `npm start`）启动 STDIO MCP 服务，再调用上述结构化工具。凭据从项目内 `config/config.json` 构建到 `build/config/config.json`。
+当前版本移除了 `wp_client_add`、构建时复制明文凭据以及 UI 明文导入功能。请运行 `wp-api-config` 重新录入连接，再让 MCP host 使用 `wp_client_use` 或页面设置的默认连接。每台主机都需要单独配置自己的凭据库。
 
 ## 开发
 

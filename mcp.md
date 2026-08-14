@@ -1,6 +1,6 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` v2 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。它不提供交互式命令界面；MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 31 个结构化工具完成全部操作。
+`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 30 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
 
 ## 1. 安装和启动入口
 
@@ -23,13 +23,15 @@ npm run build
 build/bin/wp-api-mcp.js
 ```
 
-可用的启动方式只有：
+MCP 可用的启动方式：
 
 - `node <绝对路径>/build/bin/wp-api-mcp.js`
 - 安装或链接包后执行 `wp-api-mcp`
 - 在项目目录执行 `npm start`
 
 这些入口都使用 STDIO 协议。标准输出由 MCP 消息占用，不应把进程当成交互式 shell 使用。
+
+凭据配置入口为 `wp-api-config`，它只监听 `127.0.0.1` 的随机端口，不使用 STDIO MCP 协议。
 
 ## 2. MCP host 配置
 
@@ -49,6 +51,7 @@ tool_timeout_sec = 120
 
 [mcp_servers.wp_api.env]
 WP_API_ALLOWED_LOCAL_ROOTS = "C:/wordpress-content;D:/wordpress-packages"
+WP_API_CONFIG_DIR = "C:/Users/your-name/.wp-api"
 ```
 
 `wp-api-mcp` 已加入 `PATH` 时：
@@ -109,24 +112,19 @@ C:\content;D:\packages
 
 ## 3. 首次连接 WordPress
 
-client 的构建源是项目目录内的 `config/config.json`。`npm run build` 会将它复制到 `build/config/config.json`，编译后的 MCP 服务只引用并更新这个 build 内副本。Application Password 会以明文进入 build 和 npm 安装包；`wp_client_list` 返回时会将其移除。不要把包发布到公共 registry。
+在每台运行 MCP 的主机上，由管理员在普通终端执行：
 
-首次使用依次调用：
-
-### 3.1 保存连接：`wp_client_add`
-
-```json
-{
-  "name": "production",
-  "siteUrl": "https://example.com",
-  "username": "editor",
-  "appPassword": "xxxx xxxx xxxx xxxx xxxx xxxx"
-}
+```bash
+wp-api-config
 ```
 
-同名 client 会被覆盖。保存连接不会自动将它设为当前激活项。
+浏览器页面支持新增、编辑、删除和测试连接，也可以直接选择默认连接。用户名与 Application Password 只提交给回环地址上的一次性配置服务，不应通过 Agent 或 MCP 工具输入。密码保存后不回显；编辑时留空表示保留原密码。
 
-### 3.2 选择连接：`wp_client_use`
+凭据默认保存到当前用户的 `~/.wp-api/`。`vault.json` 是包含用户名和密码的 AES-256-GCM 密文，`vault.key` 是每台主机首次写入时生成的 256 位随机密钥。两者均使用当前用户专用文件权限，写入采用原子替换与跨进程锁。通过 `WP_API_CONFIG_DIR` 可以为多实例指定不同目录，但配置 UI 与 MCP host 必须使用同一个值。
+
+构建过程不会读取或复制凭据，npm 包中也不包含凭据。文件加密可以防止明文误读、打包和日志泄漏，但不能抵御拥有同一系统用户任意文件及代码执行权限的恶意程序。
+
+### 3.1 选择连接：`wp_client_use`
 
 ```json
 {
@@ -134,19 +132,21 @@ client 的构建源是项目目录内的 `config/config.json`。`npm run build` 
 }
 ```
 
-### 3.3 检查连接：`wp_client_list`
+### 3.2 检查连接：`wp_client_list`
 
 ```json
 {}
 ```
 
-返回结构包含 `activeClient` 和不含密码的 `clients`。
+返回结构包含 `activeClient` 和只带 `name`、`siteUrl` 的 `clients`，不包含用户名、密码或密码状态。
 
-配置更新只在单个服务进程内串行化，没有跨进程文件锁。多个 MCP host 共享同一个 `build/config/config.json` 时，应避免同时调用 `wp_client_add` 或 `wp_client_use`，否则最后完成的写入可能覆盖另一个进程基于旧快照所做的变更。重新构建还会用项目内 `config/config.json` 覆盖 build 副本；需要保留运行时新增的 client 时，应先同步回构建源。
+### 3.3 处理旧明文配置
+
+配置页面不会检测、读取或导入旧版明文配置。升级时请在页面重新录入连接，验证可用后手动安全删除 `config/config.json`、`build/config/config.json` 和已有的 `*.plaintext-backup`。
 
 ## 4. 通用调用约定
 
-除三个 client 工具和两个纯本地打包工具外，所有工具均支持：
+除两个 client 工具和两个纯本地打包工具外，所有工具均支持：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -165,17 +165,16 @@ client 的构建源是项目目录内的 `config/config.json`。`npm run build` 
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 31 个 MCP 工具
+## 5. 30 个 MCP 工具
 
-### 5.1 Client（3 个）
+### 5.1 Client（2 个）
 
 | 工具 | 必填输入 | 说明 |
 | --- | --- | --- |
-| `wp_client_add` | `name`, `siteUrl`, `username`, `appPassword` | 新增或覆盖本地连接；返回内容隐藏密码 |
 | `wp_client_use` | `name` | 把已保存连接设为当前激活项 |
-| `wp_client_list` | 无 | 返回 `activeClient` 和安全的 client 列表 |
+| `wp_client_list` | 无 | 返回 `activeClient` 及仅含名称和 URL 的 client 列表 |
 
-目前没有远程删除 client 的 MCP 工具。如需停用旧凭据，应先在 WordPress 端撤销对应 Application Password。
+Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `wp-api-config` 页面完成。如需彻底停用旧凭据，还应在 WordPress 端撤销对应 Application Password。
 
 ### 5.2 WordPress 资源（5 个）
 
@@ -331,14 +330,13 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 
 站点 URL：
 
-- 必须使用 HTTPS。
-- 只有明确的回环地址允许 HTTP：`localhost`、`*.localhost`、`127.0.0.0/8`、`::1`。
+- 允许 HTTP 或 HTTPS；非可信网络应优先使用 HTTPS。
 - 禁止 URL 内嵌用户名或密码。
 - 禁止 query 和 fragment。
 - 每次调用的 `siteUrl` 覆盖必须与已保存 URL 同源，仅可改变路径。
 - 携带 Application Password 的 WordPress 请求不跟随 301/302/303/307/308 重定向；应保存规范 URL。
 
-服务使用 HTTP Basic Authentication 发送 WordPress Application Password。请为 MCP 使用专门的低权限 WordPress 账号，定期轮换密码，并在不再使用时从 WordPress 撤销。
+服务使用 HTTP Basic Authentication 发送 WordPress Application Password。使用 HTTP 时凭据没有传输层加密，可能被同一网络中的攻击者截获；请仅在可信内网使用 HTTP。请为 MCP 使用专门的低权限 WordPress 账号，定期轮换密码，并在不再使用时从 WordPress 撤销。
 
 ## 8. 默认资源上限
 
@@ -364,7 +362,7 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 
 ### `No client selected`
 
-先调用 `wp_client_add` 保存连接，再调用 `wp_client_use` 选择当前连接；或在远端工具中显式传入已保存的 `client`。
+先运行 `wp-api-config` 新增连接并选择默认项；也可以调用 `wp_client_use` 选择现有连接，或在远端工具中显式传入已保存的 `client`。
 
 ### 认证后收到重定向错误
 
@@ -382,6 +380,6 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 
 先在目标 WordPress 站点安装并激活 Jelly Core。检查发生在上传/修改之前，失败后无需清理半完成的软件包变更。
 
-## 10. v2 破坏性变更
+## 10. 凭据存储迁移
 
-v2 移除了 `wp-api` CLI、命令参数解析、stdin 正文命令模式以及 CLI 专属文本/JSON 输出选项。迁移方式是让 MCP host 启动 `wp-api-mcp`（或 `npm start`），并改为调用对应结构化工具。凭据从项目内 `config/config.json` 构建到 `build/config/config.json`。
+当前版本移除了 `wp_client_add`、构建时复制明文凭据和 UI 明文导入功能。每台主机需运行 `wp-api-config` 重新录入连接；验证完成后手动删除遗留的明文配置与备份。

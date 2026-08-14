@@ -9,6 +9,7 @@ import {
   WP_API_TOOL_NAMES
 } from "../build/mcp/wp-api-tools.js";
 import { registerWpApiTools } from "../build/mcp/server.js";
+import { ConfigStore } from "../build/lib/config-store.js";
 
 /** 使用最小 MCP server 替身收集全部工具注册定义。 */
 function collectRegistrations() {
@@ -79,6 +80,7 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
   assert.deepEqual([...registrations.keys()].sort(), [...WP_API_TOOL_NAMES].sort());
 
   for (const removedName of [
+    "wp_client_add",
     "wp_plugin_list",
     "wp_theme_push",
     "wp_elementor_get_tokens",
@@ -88,16 +90,15 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
   }
 });
 
-test("MCP 站点 URL schema 仅接受无凭据的 HTTPS 或回环 HTTP 根地址", () => {
+test("MCP 站点 URL schema 接受无凭据的 HTTP 或 HTTPS 根地址", () => {
   const registrations = collectRegistrations();
-  const clientSiteUrl = registrations.get("wp_client_add").inputSchema.siteUrl;
   const overrideSiteUrl = registrations.get("wp_resource_list").inputSchema.siteUrl;
 
-  for (const schema of [clientSiteUrl, overrideSiteUrl]) {
+  for (const schema of [overrideSiteUrl]) {
     assert.equal(schema.safeParse("https://example.com/wordpress").success, true);
     assert.equal(schema.safeParse("http://localhost:8080").success, true);
     assert.equal(schema.safeParse("http://127.0.0.1:8080").success, true);
-    assert.equal(schema.safeParse("http://example.com").success, false);
+    assert.equal(schema.safeParse("http://example.com").success, true);
     assert.equal(schema.safeParse("ftp://example.com").success, false);
     assert.equal(schema.safeParse("https://admin:secret@example.com").success, false);
     assert.equal(schema.safeParse("https://example.com/?target=other").success, false);
@@ -231,20 +232,20 @@ test("Jelly Form MCP 工具映射设置与只读询价 REST 请求", async () =>
   ]);
 });
 
-test("executeWpApiTool 原生执行 client 添加、选择和列表", async (t) => {
+test("executeWpApiTool 仅执行 client 选择和脱敏列表", async (t) => {
   const configDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-dispatch-client-"));
   t.after(() => rm(configDir, { recursive: true, force: true }));
 
-  const added = await executeWpApiTool("wp_client_add", {
-    name: "local",
-    siteUrl: "http://localhost:8080/wordpress/",
-    username: "editor",
-    appPassword: "secret"
-  }, { configDir });
-  assert.deepEqual(added, {
+  const store = new ConfigStore({ configDir });
+  const added = await store.saveClient({
     name: "local",
     siteUrl: "http://localhost:8080/wordpress",
-    username: "editor"
+    username: "editor",
+    appPassword: "secret"
+  });
+  assert.deepEqual(added, {
+    name: "local",
+    siteUrl: "http://localhost:8080/wordpress"
   });
 
   await executeWpApiTool("wp_client_use", { name: "local" }, { configDir });

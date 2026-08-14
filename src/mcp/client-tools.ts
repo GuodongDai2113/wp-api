@@ -19,18 +19,6 @@ export interface WordPressConnectionInput {
   siteUrl?: string;
 }
 
-/** 新增或覆盖本地 WordPress client 所需输入。 */
-export interface AddClientInput {
-  /** 保存到本地配置中的唯一 client 名称。 */
-  name: string;
-  /** WordPress 站点根地址。 */
-  siteUrl: string;
-  /** WordPress 用户名。 */
-  username: string;
-  /** WordPress 应用密码。 */
-  appPassword: string;
-}
-
 /** client 列表工具返回的安全结构。 */
 export interface ClientListResult {
   /** 当前激活的 client 名称；尚未选择时为 null。 */
@@ -52,28 +40,7 @@ export async function listStoredClients(
   context: WordPressConnectionContext = {}
 ): Promise<ClientListResult> {
   const store = new ConfigStore({ configDir: context.configDir });
-  const [clients, activeClient] = await Promise.all([
-    store.listClients(),
-    store.getActiveClient()
-  ]);
-  return {
-    activeClient: activeClient?.name ?? null,
-    clients
-  };
-}
-
-/** 校验并保存一个 WordPress client，返回时隐藏应用密码。 */
-export async function addStoredClient(
-  input: AddClientInput,
-  context: WordPressConnectionContext = {}
-): Promise<PublicClient> {
-  const name = requireNonEmptyString(input.name, "Client name");
-  const siteUrl = normalizeWordPressBaseUrl(requireNonEmptyString(input.siteUrl, "Site URL"));
-  const username = requireNonEmptyString(input.username, "Username");
-  const appPassword = requireNonEmptyString(input.appPassword, "Application Password");
-  const store = new ConfigStore({ configDir: context.configDir });
-
-  return store.saveClient({ name, siteUrl, username, appPassword });
+  return store.listClients();
 }
 
 /** 将一个已保存 client 设为当前激活项，并返回不含密码的公开信息。 */

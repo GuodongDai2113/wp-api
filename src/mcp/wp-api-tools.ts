@@ -4,7 +4,6 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { createPackageArchive } from "../lib/package-archive.js";
 import type { WordPressClient } from "../lib/wp-client.js";
 import {
-  addStoredClient,
   listStoredClients,
   resolveWordPressClient,
   useStoredClient,
@@ -62,7 +61,6 @@ import {
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [
   "wp_client_list",
-  "wp_client_add",
   "wp_client_use",
   "wp_resource_list",
   "wp_resource_get",
@@ -399,13 +397,6 @@ export async function executeWpApiTool(
   switch (toolName) {
     case "wp_client_list":
       return listStoredClients(context);
-    case "wp_client_add":
-      return addStoredClient({
-        name: readRequiredString(validatedInput, "name"),
-        siteUrl: readRequiredString(validatedInput, "siteUrl"),
-        username: readRequiredString(validatedInput, "username"),
-        appPassword: readRequiredString(validatedInput, "appPassword")
-      }, context);
     case "wp_client_use":
       return useStoredClient(readRequiredString(validatedInput, "name"), context);
     case "wp_package_pack_theme":

@@ -372,14 +372,16 @@ test("WordPressClient deactivates a theme by sending a replacement theme", async
   });
 });
 
-test("WordPressClient validates secure base URLs while allowing loopback HTTP", () => {
+test("WordPressClient accepts HTTP and HTTPS base URLs while rejecting unsafe URL components", () => {
+  const httpClient = new WordPressClient({
+    baseUrl: "http://example.com/wordpress/",
+    username: "admin",
+    appPassword: "secret"
+  });
+  assert.equal(httpClient.baseUrl, "http://example.com/wordpress");
   assert.throws(
-    () => new WordPressClient({
-      baseUrl: "http://example.com",
-      username: "admin",
-      appPassword: "secret"
-    }),
-    /must use HTTPS/
+    () => new WordPressClient({ baseUrl: "ftp://example.com", username: "admin", appPassword: "secret" }),
+    /must use HTTP or HTTPS/
   );
   assert.throws(
     () => new WordPressClient({

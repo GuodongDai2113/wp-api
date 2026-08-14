@@ -2,178 +2,99 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 
 import { ConfigStore } from "../build/lib/config-store.js";
 
-test("ConfigStore 默认引用 build 内的凭据配置", () => {
-  const store = new ConfigStore();
-  assert.equal(store.configDir, path.join(process.cwd(), "build", "config"));
-  assert.equal(store.configPath, path.join(process.cwd(), "build", "config", "config.json"));
+/** 创建测试专用临时凭据目录并在测试结束时清理。 */
+async function createStore(t) {
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-vault-"));
+  t.after(() => rm(configDir, { recursive: true, force: true }));
+  return { configDir, store: new ConfigStore({ configDir }) };
+}
+
+/** 在独立 Node 进程中保存一个连接，用于验证文件锁。 */
+async function saveFromChildProcess(configDir, name) {
+  const moduleUrl = new URL("../build/lib/config-store.js", import.meta.url).href;
+  const source = `import { ConfigStore } from ${JSON.stringify(moduleUrl)}; const store = new ConfigStore({configDir: process.env.TEST_VAULT_DIR}); await store.saveClient({name: process.env.TEST_CLIENT_NAME, siteUrl: 'https://' + process.env.TEST_CLIENT_NAME + '.example.com', username: 'user-' + process.env.TEST_CLIENT_NAME, appPassword: 'pass-' + process.env.TEST_CLIENT_NAME});`;
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "--eval", source], {
+      env: { ...process.env, TEST_VAULT_DIR: configDir, TEST_CLIENT_NAME: name },
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    let errors = "";
+    child.stderr.on("data", (chunk) => { errors += chunk; });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(errors || `Child exited with ${code}`)));
+  });
+}
+
+test("ConfigStore 默认使用用户级目录并允许环境变量覆盖", () => {
+  const previous = process.env.WP_API_CONFIG_DIR;
+  process.env.WP_API_CONFIG_DIR = path.join(os.tmpdir(), "wp-api-custom-vault");
+  try {
+    assert.equal(new ConfigStore().configDir, path.resolve(process.env.WP_API_CONFIG_DIR));
+  } finally {
+    if (previous === undefined) delete process.env.WP_API_CONFIG_DIR;
+    else process.env.WP_API_CONFIG_DIR = previous;
+  }
 });
 
-test("ConfigStore persists clients and active client selection", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
-  const store = new ConfigStore({ configDir: tempDir });
-
-  await store.saveClient({
-    name: "prod",
-    siteUrl: "https://example.com",
-    username: "admin",
-    appPassword: "app-pass-1"
-  });
-
-  await store.saveClient({
-    name: "staging",
-    siteUrl: "https://staging.example.com",
-    username: "editor",
-    appPassword: "app-pass-2"
-  });
-
-  await store.setActiveClient("staging");
-
-  const clients = await store.listClients();
-  const active = await store.getActiveClient();
-  const raw = JSON.parse(await readFile(path.join(tempDir, "config.json"), "utf8"));
-
-  assert.equal(clients.length, 2);
-  assert.equal(active.name, "staging");
-  assert.equal(raw.activeClient, "staging");
-  assert.deepEqual(
-    clients.map((client) => client.name),
-    ["prod", "staging"]
-  );
-
-  await rm(tempDir, { recursive: true, force: true });
-});
-
-test("ConfigStore removes an active client and clears selection", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
-  const store = new ConfigStore({ configDir: tempDir });
-
-  await store.saveClient({
-    name: "prod",
-    siteUrl: "https://example.com",
-    username: "admin",
-    appPassword: "app-pass-1"
-  });
+test("ConfigStore 加密保存连接且公开列表不含用户名和密码", async (t) => {
+  const { configDir, store } = await createStore(t);
+  await store.saveClient({ name: "prod", siteUrl: "https://example.com", username: "secret-user", appPassword: "secret-pass" });
   await store.setActiveClient("prod");
-  await store.removeClient("prod");
 
-  const clients = await store.listClients();
-  const active = await store.getActiveClient();
-
-  assert.equal(clients.length, 0);
-  assert.equal(active, null);
-
-  await rm(tempDir, { recursive: true, force: true });
-});
-
-test("ConfigStore migrates legacy profile keys to client keys when re-saving", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
-  const configPath = path.join(tempDir, "config.json");
-  const store = new ConfigStore({ configDir: tempDir });
-
-  await writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        activeProfile: "prod",
-        profiles: [
-          {
-            name: "prod",
-            siteUrl: "https://example.com",
-            username: "admin",
-            appPassword: "app-pass-1",
-            productType: "catalog"
-          }
-        ]
-      },
-      null,
-      2
-    )}\n`,
-    "utf8"
-  );
-
-  const active = await store.getActiveClient();
-  await store.setActiveClient("prod");
-  const raw = JSON.parse(await readFile(configPath, "utf8"));
-
-  assert.deepEqual(active, {
-    name: "prod",
-    siteUrl: "https://example.com",
-    username: "admin"
-  });
-  assert.deepEqual(raw, {
+  assert.deepEqual(await store.listClients(), {
     activeClient: "prod",
-    clients: [
-      {
-        name: "prod",
-        siteUrl: "https://example.com",
-        username: "admin",
-        appPassword: "app-pass-1"
-      }
-    ]
+    clients: [{ name: "prod", siteUrl: "https://example.com" }]
   });
-
-  await rm(tempDir, { recursive: true, force: true });
+  assert.deepEqual(await store.listClientsForConfiguration(), [{
+    name: "prod", siteUrl: "https://example.com", username: "secret-user", passwordSet: true
+  }]);
+  const vaultText = await readFile(path.join(configDir, "vault.json"), "utf8");
+  assert.equal(vaultText.includes("secret-user"), false);
+  assert.equal(vaultText.includes("secret-pass"), false);
+  assert.equal(vaultText.includes("Basic"), false);
+  assert.equal((await readFile(path.join(configDir, "vault.key"), "utf8")).trim().length > 0, true);
 });
 
-test("ConfigStore serializes concurrent updates across instances", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
-  const firstStore = new ConfigStore({ configDir: tempDir });
-  const secondStore = new ConfigStore({ configDir: tempDir });
-
-  await Promise.all([
-    firstStore.saveClient({
-      name: "prod",
-      siteUrl: "https://example.com",
-      username: "admin",
-      appPassword: "app-pass-1"
-    }),
-    secondStore.saveClient({
-      name: "staging",
-      siteUrl: "https://staging.example.com",
-      username: "editor",
-      appPassword: "app-pass-2"
-    })
-  ]);
-
-  const clients = await firstStore.listClients();
-  assert.deepEqual(
-    clients.map((client) => client.name),
-    ["prod", "staging"]
-  );
-
-  await rm(tempDir, { recursive: true, force: true });
+test("ConfigStore 支持重命名、保留默认选择并删除默认连接", async (t) => {
+  const { store } = await createStore(t);
+  await store.saveClient({ name: "old", siteUrl: "https://example.com", username: "admin", appPassword: "pass" });
+  await store.setActiveClient("old");
+  await store.saveClient({ name: "new", siteUrl: "https://example.com/new", username: "editor", appPassword: "next" }, "old");
+  assert.equal((await store.listClients()).activeClient, "new");
+  assert.equal((await store.getClient("new")).appPassword, "next");
+  await store.removeClient("new");
+  assert.deepEqual(await store.listClients(), { activeClient: null, clients: [] });
 });
 
-test("ConfigStore atomically replaces config with restrictive permissions", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-config-"));
-  const configPath = path.join(tempDir, "config.json");
-  const store = new ConfigStore({ configDir: tempDir });
+test("ConfigStore 检测凭据库密文篡改", async (t) => {
+  const { configDir, store } = await createStore(t);
+  await store.saveClient({ name: "prod", siteUrl: "https://example.com", username: "admin", appPassword: "pass" });
+  const vaultPath = path.join(configDir, "vault.json");
+  const envelope = JSON.parse(await readFile(vaultPath, "utf8"));
+  envelope.ciphertext = `${envelope.ciphertext.slice(0, -2)}AA`;
+  await writeFile(vaultPath, JSON.stringify(envelope), "utf8");
+  await assert.rejects(() => store.listClients(), /could not be decrypted or is invalid/);
+});
 
+test("ConfigStore 使用跨进程锁保留并发更新", async (t) => {
+  const { configDir, store } = await createStore(t);
+  await Promise.all([saveFromChildProcess(configDir, "prod"), saveFromChildProcess(configDir, "staging")]);
+  assert.deepEqual((await store.listClients()).clients.map((client) => client.name), ["prod", "staging"]);
+});
+
+test("ConfigStore 原子写入并尽可能限制目录和文件权限", async (t) => {
+  const { configDir, store } = await createStore(t);
+  if (process.platform !== "win32") await chmod(configDir, 0o777);
+  await store.saveClient({ name: "prod", siteUrl: "https://example.com", username: "admin", appPassword: "pass" });
+  assert.deepEqual((await readdir(configDir)).sort(), ["vault.json", "vault.key"]);
   if (process.platform !== "win32") {
-    await chmod(tempDir, 0o777);
+    assert.equal((await stat(configDir)).mode & 0o777, 0o700);
+    assert.equal((await stat(store.vaultPath)).mode & 0o777, 0o600);
+    assert.equal((await stat(store.keyPath)).mode & 0o777, 0o600);
   }
-
-  await store.saveClient({
-    name: "prod",
-    siteUrl: "https://example.com",
-    username: "admin",
-    appPassword: "app-pass-1"
-  });
-
-  const directoryEntries = await readdir(tempDir);
-  const configStats = await stat(configPath);
-  const directoryStats = await stat(tempDir);
-
-  assert.deepEqual(directoryEntries, ["config.json"]);
-  if (process.platform !== "win32") {
-    assert.equal(configStats.mode & 0o777, 0o600);
-    assert.equal(directoryStats.mode & 0o777, 0o700);
-  }
-
-  await rm(tempDir, { recursive: true, force: true });
 });
-

@@ -193,19 +193,7 @@ interface MediaWithId {
   id?: number;
 }
 
-/** 判断主机名是否明确表示当前机器的回环地址。 */
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
-  if (normalized === "localhost" || normalized.endsWith(".localhost") || normalized === "::1") {
-    return true;
-  }
-  if (isIP(normalized) !== 4) {
-    return false;
-  }
-  return Number(normalized.split(".", 1)[0]) === 127;
-}
-
-/** 校验并规范化 WordPress 站点根地址，只允许 HTTPS 或用于本地开发的回环 HTTP。 */
+/** 校验并规范化 WordPress 站点根地址，允许 HTTP 或 HTTPS。 */
 export function normalizeWordPressBaseUrl(baseUrl: string): string {
   let url: URL;
   try {
@@ -220,8 +208,8 @@ export function normalizeWordPressBaseUrl(baseUrl: string): string {
   if (url.search || url.hash) {
     throw new TypeError("WordPress base URL must not include a query string or fragment.");
   }
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHostname(url.hostname))) {
-    throw new TypeError("WordPress base URL must use HTTPS; HTTP is allowed only for loopback hosts.");
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new TypeError("WordPress base URL must use HTTP or HTTPS.");
   }
 
   url.pathname = url.pathname.replace(/\/+$/, "");
