@@ -1,5 +1,5 @@
 /** 纯 MCP 内容工具支持的 WordPress 资源名称。 */
-export type ResourceName = "posts" | "pages" | "products" | "categories" | "product-categories";
+export type ResourceName = "posts" | "pages" | "products" | "categories" | "product-categories" | "product-tags";
 
 /** 资源请求体的业务分类。 */
 export type ResourceKind = "content" | "taxonomy";
@@ -30,6 +30,8 @@ export function getResourceConfig(resourceName: string): ResourceConfig {
       return { route: "categories", kind: "taxonomy", deleteMode: "force" };
     case "product-categories":
       return { route: "product_cat", kind: "taxonomy", deleteMode: "force" };
+    case "product-tags":
+      return { route: "product_tag", kind: "taxonomy", deleteMode: "force" };
     default:
       throw new Error(`Unknown resource: ${resourceName}`);
   }

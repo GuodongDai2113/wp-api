@@ -1,8 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./wp-api-tools.js";
+import { WP_STRUCTURE_NAMES } from "./handlers/structure-tools.js";
 
 /** 判断站点地址是否是适合作为 WordPress 根地址的 HTTP(S) URL。 */
 function isSafeSiteUrl(value: string): boolean {
@@ -30,12 +32,48 @@ const siteUrlSchema = z.string().url().refine(
 );
 
 /** WordPress 原生 REST 资源名称的 MCP 校验 schema。 */
-const resourceSchema = z.enum(["posts", "pages", "products", "categories", "product-categories"]);
+const resourceSchema = z.enum(["posts", "pages", "products", "categories", "product-categories", "product-tags"]);
 
 /** MCP 工具统一返回结构的 schema。 */
 const outputSchema = {
   result: z.unknown()
 };
+
+/** 所有 MCP 工具的副作用、幂等性和外部交互提示。 */
+export const WP_API_TOOL_ANNOTATIONS = {
+  wp_client_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  wp_client_use: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  wp_structure_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  wp_api_schema: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_resource_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_resource_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_resource_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_resource_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_resource_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  wp_seo_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_seo_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_post_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  wp_post_content_replace: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  wp_media_upload: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_elementor_init: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_elementor_export: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_elementor_import: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_elementor_structure: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_elementor_get_element: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_elementor_find: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_package_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_package_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_package_install: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_package_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_package_activate: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_package_deactivate: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_package_pack_theme: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  wp_package_pack_plugin: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  wp_jelly_form_settings_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_jelly_form_settings_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_jelly_form_inquiry_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_jelly_form_inquiry_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }
+} satisfies Record<WpApiToolName, ToolAnnotations>;
 
 /** 不执行 trim 转换、但拒绝空字符串和纯空白字符串的 MCP schema。 */
 const nonBlankStringSchema = z.string().min(1).refine(
@@ -61,9 +99,12 @@ const resourceBodyShape = {
   gutenberg: z.boolean().optional().describe("Convert resolved HTML content to WordPress Gutenberg block markup before upload."),
   featuredMedia: z.number().int().nonnegative().optional().describe("Featured media attachment ID; use 0 to clear the current featured image."),
   categories: z.array(z.number().int().positive()).optional().describe("Post category IDs; use an empty array to clear all categories."),
+  productCategories: z.array(z.number().int().positive()).optional().describe("Jelly Catalog product category IDs; use an empty array to clear all product categories."),
+  productTags: z.array(z.number().int().positive()).optional().describe("Jelly Catalog product tag IDs; use an empty array to clear all product tags."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. Inspect the resource route with wp_api_schema before writing plugin-specific fields."),
   name: z.string().optional().describe("Taxonomy term name."),
   description: z.string().optional().describe("Taxonomy term description."),
-  parent: z.number().int().nonnegative().optional().describe("Parent taxonomy term ID; use 0 to remove the parent.")
+  parent: z.number().int().nonnegative().optional().describe("Parent ID for hierarchical categories and product categories; use 0 to remove the parent. Not supported by product tags.")
 };
 
 /** Elementor MCP 工具共用的输入字段。 */
@@ -113,7 +154,8 @@ function registerElementorTool(
       title,
       description,
       inputSchema,
-      outputSchema
+      outputSchema,
+      annotations: WP_API_TOOL_ANNOTATIONS[toolName]
     },
     createToolCallback(toolName, context)
   );
@@ -126,6 +168,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "List wp-api clients",
       description: "List saved local wp-api clients and the active client.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_client_list,
       inputSchema: {},
       outputSchema
     },
@@ -137,6 +180,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Use wp-api client",
       description: "Set the active local wp-api client.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_client_use,
       inputSchema: {
         name: nonBlankStringSchema.describe("Saved client name to make active.")
       },
@@ -146,10 +190,40 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
+    "wp_structure_get",
+    {
+      title: "Get WordPress data structure",
+      description: "Read the local usage catalog for posts, pages, Jelly Catalog resources, media, SEO, and Elementor. Omit structure to list available definitions. Use wp_api_schema afterward when the target site's live schema is needed.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_structure_get,
+      inputSchema: {
+        structure: z.enum(WP_STRUCTURE_NAMES).optional().describe("Structure to inspect. Omit to list every available structure name.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_structure_get", context)
+  );
+
+  server.registerTool(
+    "wp_api_schema",
+    {
+      title: "Inspect WordPress REST API schema",
+      description: "Discover the target site's live REST routes, request arguments, supported methods, and resource fields. Omit apiPath for the wp-json route index, or pass a path such as wp/v2/product to read its OPTIONS schema before sending data.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_api_schema,
+      inputSchema: {
+        ...globalInputShape,
+        apiPath: nonBlankStringSchema.optional().describe("Path below wp-json, for example wp/v2/product, wp/v2/product_cat, or jelly-form/v1/settings. Omit to list all registered routes.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_api_schema", context)
+  );
+
+  server.registerTool(
     "wp_resource_list",
     {
       title: "List WordPress resources",
-      description: "List posts, pages, categories, or Jelly Catalog products and product categories through native WordPress REST endpoints.",
+      description: "List posts, pages, categories, or Jelly Catalog products, product categories, and product tags through native WordPress REST endpoints.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_list,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -171,6 +245,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Get WordPress resource",
       description: "Get one WordPress or Jelly Catalog resource by ID.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_get,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -185,7 +260,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_create",
     {
       title: "Create WordPress resource",
-      description: "Create a post, page, category, or Jelly Catalog product or product category.",
+      description: "Create a post, page, category, or Jelly Catalog product, product category, or product tag.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_create,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -200,7 +276,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_update",
     {
       title: "Update WordPress resource",
-      description: "Update a post, page, category, or Jelly Catalog product or product category.",
+      description: "Update a post, page, category, or Jelly Catalog product, product category, or product tag.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_update,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -217,6 +294,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Delete WordPress resource",
       description: "Delete a post, page, category, or Jelly Catalog product or product category. Taxonomy terms require force=true because they are permanently deleted.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_delete,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -233,6 +311,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Get Rank Math SEO fields",
       description: "Read Rank Math REST meta fields from a supported WordPress resource.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_seo_get,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -248,6 +327,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Update Rank Math SEO fields",
       description: "Update Rank Math REST meta fields through the resource's native WordPress REST endpoint.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_seo_update,
       inputSchema: {
         ...globalInputShape,
         resource: resourceSchema,
@@ -266,6 +346,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Manage links in WordPress post content",
       description: "List, add, update, or remove links in the editable raw content of a WordPress post.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_post_link,
       inputSchema: {
         ...globalInputShape,
         action: z.enum(["list", "add", "update", "remove"]).describe("Link operation to perform."),
@@ -285,6 +366,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Replace text in WordPress post content",
       description: "Replace every exact occurrence of text in a post's content, for example to fix a misspelled word.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_post_content_replace,
       inputSchema: {
         ...globalInputShape,
         postId: z.number().int().positive().describe("Post ID."),
@@ -301,6 +383,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Upload WordPress media",
       description: "Upload a local image file readable by the MCP server process to the WordPress media library.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_media_upload,
       inputSchema: {
         ...globalInputShape,
         filePath: z.string().min(1).describe("Local image file path readable by the MCP server process."),
@@ -401,6 +484,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Get Jelly Form settings",
       description: "Read Jelly Form recipient email, notification, redirect, and redacted SMTP settings.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_settings_get,
       inputSchema: { ...globalInputShape },
       outputSchema
     },
@@ -412,6 +496,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Update Jelly Form settings",
       description: "Update selected Jelly Form recipient email, notification, redirect, or SMTP settings.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_settings_update,
       inputSchema: {
         ...globalInputShape,
         recipientEmail: z.string().email().optional().describe("Email address that receives inquiry notifications."),
@@ -432,6 +517,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "List Jelly Form inquiries",
       description: "Read a filtered page of non-spam Jelly Form inquiry submissions. This tool is read-only.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_inquiry_list,
       inputSchema: {
         ...globalInputShape,
         search: z.string().optional().describe("Search submission content, page title, or country."),
@@ -452,6 +538,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Get Jelly Form inquiry",
       description: "Read one non-spam Jelly Form inquiry submission by ID. This tool is read-only.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_inquiry_get,
       inputSchema: {
         ...globalInputShape,
         id: z.number().int().positive().describe("Inquiry ID.")
@@ -468,6 +555,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "List WordPress packages",
       description: "List installed plugins or themes.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_package_list,
       inputSchema: {
         ...globalInputShape,
         packageType: packageTypeSchema,
@@ -484,6 +572,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Get WordPress package",
       description: "Get an installed plugin or theme.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_package_get,
       inputSchema: {
         ...globalInputShape,
         packageType: packageTypeSchema,
@@ -503,6 +592,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       {
         title,
         description,
+        annotations: WP_API_TOOL_ANNOTATIONS[toolName],
         inputSchema: {
           ...globalInputShape,
           packageType: packageTypeSchema,
@@ -519,6 +609,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Activate WordPress package",
       description: "Activate an installed plugin or switch to an installed theme.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_package_activate,
       inputSchema: {
         ...globalInputShape,
         packageType: packageTypeSchema,
@@ -534,6 +625,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       title: "Deactivate WordPress plugin",
       description: "Deactivate an installed plugin. Themes are not supported by this operation.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_package_deactivate,
       inputSchema: {
         ...globalInputShape,
         packageType: z.literal("plugin").describe("Must be plugin; themes do not support deactivation."),
@@ -553,6 +645,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       {
         title,
         description,
+        annotations: WP_API_TOOL_ANNOTATIONS[toolName],
         inputSchema: {
           folderPath: z.string().min(1).describe("Local theme or plugin folder path readable by the MCP server process."),
           outputPath: z.string().min(1).optional().describe("Optional output .zip path. Defaults to <folder-name>.zip beside the source folder.")

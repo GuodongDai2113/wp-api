@@ -1,6 +1,6 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 30 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
+`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 32 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
 
 ## 1. 安装和启动入口
 
@@ -146,7 +146,7 @@ wp-api-config
 
 ## 4. 通用调用约定
 
-除两个 client 工具和两个纯本地打包工具外，所有工具均支持：
+除两个 client 工具、`wp_structure_get` 和两个纯本地打包工具外，所有远端工具均支持：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -165,7 +165,7 @@ wp-api-config
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 30 个 MCP 工具
+## 5. 32 个 MCP 工具
 
 ### 5.1 Client（2 个）
 
@@ -176,14 +176,38 @@ wp-api-config
 
 Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `wp-api-config` 页面完成。如需彻底停用旧凭据，还应在 WordPress 端撤销对应 Application Password。
 
-### 5.2 WordPress 资源（5 个）
+### 5.2 本地结构与 REST 接口结构（2 个）
+
+| 工具 | 必填输入 | 可选输入 | 说明 |
+| --- | --- | --- | --- |
+| `wp_structure_get` | 无 | `structure` | 省略时列出结构目录；指定名称时返回字段结构、MCP 工具、响应结构、示例和注意事项；纯本地，不需要 client |
+| `wp_api_schema` | 无 | `apiPath`、通用连接字段 | 省略 `apiPath` 时读取 `/wp-json/` 路由索引；传入 `wp/v2/product` 等相对路径时以 `OPTIONS` 读取实时接口定义 |
+
+`wp_structure_get` 支持：
+
+```text
+post | page | product | category | product-category
+media | seo-meta | elementor-page | elementor-element
+```
+
+推荐 Agent 先调用本地结构目录理解 MCP 字段和标准示例，再调用 `wp_api_schema` 检查目标站点当前插件实际注册的 REST schema。例如：
+
+```json
+{ "structure": "elementor-page" }
+```
+
+```json
+{ "apiPath": "wp/v2/pages" }
+```
+
+### 5.3 WordPress 资源（5 个）
 
 `products` 与 `product-categories` 是 Jelly Catalog 资源，要求目标站点启用 Jelly Catalog；它们不是 WooCommerce 产品接口。
 
 `resource` 允许：
 
 ```text
-posts | pages | products | categories | product-categories
+posts | pages | products | categories | product-categories | product-tags
 ```
 
 路由映射：
@@ -195,6 +219,7 @@ posts | pages | products | categories | product-categories
 | `products` | `/wp-json/wp/v2/product` | Jelly Catalog 产品内容 |
 | `categories` | `/wp-json/wp/v2/categories` | taxonomy |
 | `product-categories` | `/wp-json/wp/v2/product_cat` | Jelly Catalog 产品分类 taxonomy |
+| `product-tags` | `/wp-json/wp/v2/product_tag` | Jelly Catalog 产品标签 taxonomy |
 
 | 工具 | 必填输入 | 可选输入 |
 | --- | --- | --- |
@@ -210,16 +235,55 @@ posts | pages | products | categories | product-categories
 - `content` 或 `contentFile`；两者同时存在时 `content` 优先
 - `gutenberg`：将解析后的 HTML 转换为 Gutenberg 区块标记
 - `featuredMedia`：非负附件 ID，`0` 表示清空
-- `categories`：正整数 ID 数组，`[]` 表示清空
+- `categories`：文章分类正整数 ID 数组，`[]` 表示清空
+- `productCategories`：Jelly Catalog 产品分类正整数 ID 数组，映射为 REST `product_cat`
+- `productTags`：Jelly Catalog 产品标签正整数 ID 数组，映射为 REST `product_tag`
+- `meta`：目标资源已注册的 REST meta 对象；写入插件业务字段前先调用 `wp_api_schema`
 
 taxonomy 写入字段：
 
 - `name`, `slug`, `description`
-- `parent`：非负 ID，`0` 表示移除父级
+- `parent`：层级 taxonomy 的非负父级 ID，`0` 表示移除父级；产品标签不支持
+- `meta`：目标 taxonomy 已注册的 REST meta 对象
+
+Jelly Catalog 产品 `meta`：
+
+| 字段 | JSON 结构 | 清空值 | 说明 |
+| --- | --- | --- | --- |
+| `_product_sku` | `string` | `""` | 规范产品型号或 SKU |
+| `product_sku` | `string` | `""` | 旧导入兼容字段；新写入优先使用 `_product_sku` |
+| `_product_videourl` | `string` | `""` | 产品视频绝对 URL |
+| `product_file` | 非负 `integer` | `0` | 下载文件的 WordPress 附件 ID |
+| `_product_image_gallery` | `string` | `""` | 逗号分隔的正整数附件 ID，如 `"12,18,24"` |
+| `_product_attributes` | `{name:string,value:string}[]` | `[]` | 产品属性/规格列表 |
+| `_product_faqs` | `{name:string,value:string}[]` | `[]` | FAQ 列表，`name` 为问题，`value` 为答案 |
+
+Jelly Catalog 产品分类 `meta`：
+
+| 字段 | JSON 结构 | 清空值 | 说明 |
+| --- | --- | --- | --- |
+| `thumbnail_id` | 非负 `integer` | `0` | 分类缩略图附件 ID |
+| `banner_id` | 非负 `integer` | `0` | 分类横幅附件 ID |
+| `category_h1_title` | `string` | `""` | 分类 H1 覆盖标题 |
+| `category_subtitle` | `string` | `""` | Hero 副标题 |
+| `category_why_choose_title` | `string` | `""` | Why Choose 标题 |
+| `category_why_choose` | `string` | `""` | 允许安全 HTML 的 Why Choose 内容 |
+| `category_advantages` | `string` | `""` | 允许安全 HTML 的优势内容 |
+| `category_applications_title` | `string` | `""` | 应用场景标题 |
+| `category_applications` | `{title:string,description:string,image_id:integer,link_url:string}[]` | `[]` | 应用场景列表；`image_id` 为非负附件 ID |
+| `category_cta_title` | `string` | `""` | CTA 标题 |
+| `category_cta_button_text` | `string` | `""` | 旧 CTA 兼容字段；新写入优先使用 `category_cta_title` |
+| `category_buying_guide_title` | `string` | `""` | 采购指南标题 |
+| `category_buying_guide` | `string` | `""` | 允许安全 HTML 的采购指南 |
+| `category_faq_title` | `string` | `""` | FAQ 区块标题 |
+| `product_cat_faqs` | `{name:string,value:string}[]` | `[]` | 分类 FAQ，`name` 为问题，`value` 为答案 |
+| `category_inherit_parent_content` | `"0"` 或 `"1"` | `"0"` | 是否允许模板回退到父分类内容 |
+
+产品基础字段仍使用 WordPress REST 原生结构：`title`、`slug`、`status`、`excerpt`、`content`、`featured_media`、`product_cat` 和 `product_tag`。MCP 对应字段分别为 `title`、`slug`、`status`、`excerpt`、`content`、`featuredMedia`、`productCategories` 和 `productTags`。
 
 `perPage` 可为 `1..100`，或使用 `-1` 聚合全部分页。分类和产品分类没有回收站，`wp_resource_delete` 对这两类资源强制要求 `force: true`；文章、页面和产品只有显式传入 `force: true` 才会永久删除，否则进入回收站。
 
-### 5.3 SEO 与文章编辑（4 个）
+### 5.4 SEO 与文章编辑（4 个）
 
 | 工具 | 必填输入 | 可选/动作相关输入 |
 | --- | --- | --- |
@@ -247,7 +311,7 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 
 链接地址必须是 HTTP(S) URL 或不含控制字符的相对 URL。文章链接和正文替换都读取 `context=edit` 下的 raw content；账号必须有编辑权限。正文替换会替换所有精确匹配，`replacement: ""` 表示删除匹配文本。
 
-### 5.4 媒体（1 个）
+### 5.5 媒体（1 个）
 
 `wp_media_upload` 必填 `filePath`，可选：
 
@@ -259,7 +323,7 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 
 允许的位图扩展名为 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。上传成功后，如果提供了附件元数据，服务会再更新媒体实体。
 
-### 5.5 Elementor（6 个）
+### 5.6 Elementor（6 个）
 
 Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工具都要求正整数 `postId`，并支持通用连接字段。
 
@@ -274,7 +338,7 @@ Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工�
 
 `data` 必须是 Elementor 元素对象数组，`pageSettings` 必须是对象。init 会先读取页面并拒绝覆盖非空元素树；import 会整体覆盖页面的 Elementor 元数据，调用前应先用 export 备份当前元素树。
 
-### 5.6 插件、主题与本地打包（8 个）
+### 5.7 插件、主题与本地打包（8 个）
 
 远端软件包工具使用 `packageType: "plugin" | "theme"`。
 
@@ -289,7 +353,7 @@ Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工�
 | `wp_package_pack_theme` | `folderPath` | `outputPath`；纯本地，不使用 client |
 | `wp_package_pack_plugin` | `folderPath` | `outputPath`；纯本地，不使用 client |
 
-### 5.7 Jelly Form
+### 5.8 Jelly Form
 
 目标站点需要启用包含 `jelly-form/v1` REST 路由的 Jelly Form 插件。设置工具要求当前 Application Password 用户具备 `manage_options` 权限；SMTP 密码不会被读取返回。
 

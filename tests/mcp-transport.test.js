@@ -24,9 +24,15 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   });
 
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 30);
+  assert.equal(tools.tools.length, 32);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_add"), false);
+  assert.deepEqual(tools.tools.find((tool) => tool.name === "wp_resource_delete").annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true
+  });
 
   const success = await client.callTool({
     name: "wp_client_list",

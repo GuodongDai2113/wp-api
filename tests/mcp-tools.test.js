@@ -79,6 +79,29 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
   const registrations = collectRegistrations();
   assert.deepEqual([...registrations.keys()].sort(), [...WP_API_TOOL_NAMES].sort());
 
+  for (const registration of registrations.values()) {
+    assert.deepEqual(Object.keys(registration.annotations).sort(), [
+      "destructiveHint",
+      "idempotentHint",
+      "openWorldHint",
+      "readOnlyHint"
+    ]);
+    assert.equal(Object.values(registration.annotations).every((value) => typeof value === "boolean"), true);
+  }
+
+  assert.deepEqual(registrations.get("wp_structure_get").annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+  });
+  assert.deepEqual(registrations.get("wp_resource_delete").annotations, {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true
+  });
+
   for (const removedName of [
     "wp_client_add",
     "wp_plugin_list",
@@ -88,6 +111,82 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
   ]) {
     assert.equal(registrations.has(removedName), false);
   }
+});
+
+test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", async () => {
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 记录接口结构查询使用的 API 路径和 HTTP 方法。 */
+    async requestApiPath(apiPath, options = {}) {
+      calls.push({ apiPath, options });
+      return { data: { namespace: apiPath || "root" }, pagination: { total: 0, totalPages: 0 } };
+    }
+  });
+  const context = {
+    /** 返回不会发出真实网络请求的 WordPress client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  };
+
+  const index = await executeWpApiTool("wp_api_schema", {}, context);
+  const route = await executeWpApiTool("wp_api_schema", { apiPath: "/wp/v2/product/" }, context);
+
+  assert.deepEqual(calls, [
+    { apiPath: "", options: { method: "GET" } },
+    { apiPath: "wp/v2/product", options: { method: "OPTIONS" } }
+  ]);
+  assert.deepEqual(index, { apiPath: "", method: "GET", schema: { namespace: "root" } });
+  assert.deepEqual(route, {
+    apiPath: "wp/v2/product",
+    method: "OPTIONS",
+    schema: { namespace: "wp/v2/product" }
+  });
+
+  await assert.rejects(
+    () => executeWpApiTool("wp_api_schema", { apiPath: "wp/v2/../users" }, context),
+    /safe unencoded wp-json relative path/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_api_schema", { apiPath: "%2e%2e/admin" }, context),
+    /safe unencoded wp-json relative path/
+  );
+});
+
+test("本地结构目录无需 WordPress client 即可列出并查询常用结构", async () => {
+  let resolverCalls = 0;
+  const context = {
+    /** 记录本地结构工具不应触发的远程 client 解析。 */
+    async resolveClientImpl() {
+      resolverCalls += 1;
+      return createRemoteClientStub();
+    }
+  };
+
+  const catalog = await executeWpApiTool("wp_structure_get", {}, context);
+  const names = catalog.structures.map((entry) => entry.name);
+  assert.equal(names.includes("post"), true);
+  assert.equal(names.includes("page"), true);
+  assert.equal(names.includes("product-category"), true);
+  assert.equal(names.includes("product-tag"), false);
+  assert.equal(names.includes("elementor-page"), true);
+
+  const page = await executeWpApiTool("wp_structure_get", { structure: "page" }, context);
+  assert.equal(page.remoteSchemaPath, "wp/v2/pages");
+  assert.equal(page.writeShape.resource, "required literal pages");
+
+  const element = await executeWpApiTool("wp_structure_get", { structure: "elementor-element" }, context);
+  assert.match(element.writeShape.elements, /recursive/);
+  assert.equal(resolverCalls, 0);
+
+  await assert.rejects(
+    () => executeWpApiTool("wp_structure_get", { structure: "unknown" }, context),
+    /Unknown structure/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_structure_get", { structure: "product-tag" }, context),
+    /Unknown structure/
+  );
 });
 
 test("MCP 站点 URL schema 接受无凭据的 HTTP 或 HTTPS 根地址", () => {
@@ -121,6 +220,10 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(updateSchema.categories.safeParse([]).success, true);
   assert.equal(updateSchema.categories.safeParse([1, 2]).success, true);
   assert.equal(updateSchema.categories.safeParse([0]).success, false);
+  assert.equal(updateSchema.productCategories.safeParse([]).success, true);
+  assert.equal(updateSchema.productTags.safeParse([3, 4]).success, true);
+  assert.equal(updateSchema.meta.safeParse({ _product_sku: "JC-100" }).success, true);
+  assert.equal(updateSchema.resource.safeParse("product-tags").success, true);
 });
 
 test("MCP package schema 要求统一软件包类型并禁止停用主题", () => {

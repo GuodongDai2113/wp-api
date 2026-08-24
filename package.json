@@ -2,7 +2,26 @@
   "name": "wp-api",
   "version": "2.0.0",
   "author": "JellyDai",
+  "license": "MIT",
   "description": "MCP server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "wordpress",
+    "wordpress-rest-api",
+    "elementor"
+  ],
+  "homepage": "https://github.com/GuodongDai2113/wp-api#readme",
+  "bugs": {
+    "url": "https://github.com/GuodongDai2113/wp-api/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GuodongDai2113/wp-api.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -15,7 +34,11 @@
     "build",
     "README.md",
     "README.zh-CN.md",
-    "mcp.md"
+    "mcp.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
   ],
   "scripts": {
     "clean": "node -e \"fs.rmSync('build',{recursive:true,force:true})\"",

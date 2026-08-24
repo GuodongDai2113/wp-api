@@ -1,6 +1,6 @@
 # wp-api
 
-A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 30 structured tools for clients, content, SEO, Elementor, media, packages, and inquiries.
+A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 32 structured tools for clients, local structure guidance, live REST schema discovery, content, SEO, Elementor, media, packages, and inquiries.
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md) · Detailed MCP setup: [mcp.md](./mcp.md)
 
@@ -106,22 +106,40 @@ All remote tools accept optional `client` and `siteUrl` fields. `client` selects
 
 ## Tools
 
-The server exposes exactly 30 tools.
+The server exposes exactly 32 tools.
 
 ### Client configuration (2)
 
 - `wp_client_use` — set the active saved connection.
 - `wp_client_list` — list saved connection names and URLs without usernames or passwords.
 
+### Structure and REST schema discovery (2)
+
+- `wp_structure_get` — query stable usage structures for `post`, `page`, `product`, `category`, `product-category`, `media`, `seo-meta`, `elementor-page`, or `elementor-element`; omit `structure` to list the catalog. This local tool does not require a saved WordPress client.
+- `wp_api_schema` — omit `apiPath` to inspect the target site's `/wp-json/` route index, or pass a relative path such as `wp/v2/product` to read its live `OPTIONS` schema before constructing a request.
+
 ### WordPress resources (5)
 
-- `wp_resource_list` — list posts, pages, categories, or Jelly Catalog products and product categories.
+- `wp_resource_list` — list posts, pages, categories, or Jelly Catalog products, product categories, and product tags.
 - `wp_resource_get` — read one resource by ID.
 - `wp_resource_create` — create content or a taxonomy term.
 - `wp_resource_update` — update content or a taxonomy term.
 - `wp_resource_delete` — trash content or permanently delete a taxonomy term.
 
-Supported `resource` values are `posts`, `pages`, `products`, `categories`, and `product-categories`; product resources specifically refer to Jelly Catalog and do not represent WooCommerce products. Category and product-category deletion requires explicit `force: true`, because those resources have no trash. `perPage: -1` aggregates all pages within the documented limits.
+Supported `resource` values are `posts`, `pages`, `products`, `categories`, `product-categories`, and `product-tags`; product resources specifically refer to Jelly Catalog and do not represent WooCommerce products. Product writes accept `productCategories`, `productTags`, and registered `meta` fields. Use `wp_api_schema` first to inspect the target site's current field definitions. Category, product-category, and product-tag deletion requires explicit `force: true`, because taxonomy terms have no trash. `perPage: -1` aggregates all pages within the documented limits.
+
+Common Jelly Catalog product `meta` structures are:
+
+| Field | Structure | Purpose |
+| --- | --- | --- |
+| `_product_sku` | `string` | Canonical product model or SKU. |
+| `_product_videourl` | `string` | Absolute product video URL. |
+| `product_file` | non-negative `integer` | Download attachment ID; `0` clears it. |
+| `_product_image_gallery` | comma-separated attachment ID `string` | Gallery such as `"12,18,24"`; `""` clears it. |
+| `_product_attributes` | `{name:string,value:string}[]` | Product specification rows. |
+| `_product_faqs` | `{name:string,value:string}[]` | FAQ rows where `name` is the question and `value` is the answer. |
+
+Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML marketing sections, `category_applications`, `product_cat_faqs`, and the `"0" | "1"` field `category_inherit_parent_content`. The live OPTIONS result remains authoritative because other active plugins may add fields.
 
 ### SEO, post content, and media (5)
 
@@ -224,3 +242,9 @@ The current release removes `wp_client_add`, the build-time plaintext credential
 npm run build
 npm test
 ```
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for contribution checks, [SECURITY.md](./SECURITY.md) for private vulnerability reporting, and [CHANGELOG.md](./CHANGELOG.md) for release notes.
+
+## License
+
+Released under the [MIT License](./LICENSE).

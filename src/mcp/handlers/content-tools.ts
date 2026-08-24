@@ -19,7 +19,7 @@ import {
 } from "../../lib/wp-client.js";
 
 /** 纯 MCP 内容工具支持的 WordPress 资源名称。 */
-export type ContentResourceName = "posts" | "pages" | "products" | "categories" | "product-categories";
+export type ContentResourceName = "posts" | "pages" | "products" | "categories" | "product-categories" | "product-tags";
 
 /** WordPress REST 内容实体中业务逻辑会读取的最小字段集合。 */
 export interface WordPressResourceEntity {
@@ -89,6 +89,12 @@ export interface ResourceBodyInput {
   featuredMedia?: number;
   /** 文章分类 ID 数组，空数组表示清空。 */
   categories?: number[];
+  /** Jelly Catalog 产品分类 ID 数组，空数组表示清空。 */
+  productCategories?: number[];
+  /** Jelly Catalog 产品标签 ID 数组，空数组表示清空。 */
+  productTags?: number[];
+  /** 目标 REST 资源已经注册并允许写入的 meta 字段。 */
+  meta?: Record<string, unknown>;
   /** taxonomy 资源名称。 */
   name?: string;
   /** taxonomy 资源描述。 */
@@ -266,13 +272,13 @@ function assertOptionalNonNegativeId(id: number | undefined, label: string): voi
   }
 }
 
-/** 校验分类数组仅包含正安全整数，同时允许空数组清空分类。 */
-function assertCategories(categories: number[] | undefined): void {
-  if (categories !== undefined && (
-    !Array.isArray(categories)
-    || categories.some((id) => !Number.isSafeInteger(id) || id <= 0)
+/** 校验 taxonomy ID 数组仅包含正安全整数，同时允许空数组清空关联。 */
+function assertTaxonomyIds(ids: number[] | undefined, label: string): void {
+  if (ids !== undefined && (
+    !Array.isArray(ids)
+    || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
   )) {
-    throw new Error("Categories must contain only positive integers.");
+    throw new Error(`${label} must contain only positive integers.`);
   }
 }
 
@@ -296,9 +302,28 @@ function assertResourceBodyFields(resource: ContentResourceName, input: Resource
       "contentFile",
       "gutenberg",
       "featuredMedia",
-      "categories"
+      "categories",
+      "productCategories",
+      "productTags"
     ])
     : findProvidedFields(input, ["name", "description", "parent"]);
+
+  if (config.kind === "content") {
+    if (resource !== "posts" && input.categories !== undefined) {
+      unsupportedFields.push("categories");
+    }
+    if (resource !== "products") {
+      if (input.productCategories !== undefined) {
+        unsupportedFields.push("productCategories");
+      }
+      if (input.productTags !== undefined) {
+        unsupportedFields.push("productTags");
+      }
+    }
+  }
+  if (resource === "product-tags" && input.parent !== undefined) {
+    unsupportedFields.push("parent");
+  }
 
   if (unsupportedFields.length > 0) {
     throw new Error(
@@ -317,12 +342,15 @@ async function buildResourceBody(resource: ContentResourceName, input: ResourceB
       name: input.name,
       slug: input.slug,
       description: input.description,
-      parent: input.parent
+      parent: input.parent,
+      meta: input.meta
     });
   }
 
   assertOptionalNonNegativeId(input.featuredMedia, "Featured media");
-  assertCategories(input.categories);
+  assertTaxonomyIds(input.categories, "Categories");
+  assertTaxonomyIds(input.productCategories, "Product categories");
+  assertTaxonomyIds(input.productTags, "Product tags");
   const resolvedContent = await resolveContentInput({
     content: input.content,
     contentFile: input.contentFile
@@ -340,7 +368,10 @@ async function buildResourceBody(resource: ContentResourceName, input: ResourceB
     excerpt: input.excerpt,
     content,
     featured_media: input.featuredMedia,
-    categories: input.categories
+    categories: input.categories,
+    product_cat: input.productCategories,
+    product_tag: input.productTags,
+    meta: input.meta
   });
 }
 

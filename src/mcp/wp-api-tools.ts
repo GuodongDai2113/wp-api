@@ -57,11 +57,15 @@ import {
   type JellyFormInquiryListInput,
   type JellyFormSettingsUpdateInput
 } from "./handlers/jelly-form-tools.js";
+import { getApiSchema, type ApiSchemaInput } from "./handlers/api-schema-tools.js";
+import { getWpStructure, type StructureGetInput } from "./handlers/structure-tools.js";
 
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [
   "wp_client_list",
   "wp_client_use",
+  "wp_structure_get",
+  "wp_api_schema",
   "wp_resource_list",
   "wp_resource_get",
   "wp_resource_create",
@@ -338,6 +342,8 @@ async function executeRemoteTool(
   }
 
   switch (toolName) {
+    case "wp_api_schema":
+      return getApiSchema(client, input as unknown as ApiSchemaInput);
     case "wp_resource_list":
       return listResource(client, input as unknown as ResourceListInput);
     case "wp_resource_get":
@@ -399,6 +405,8 @@ export async function executeWpApiTool(
       return listStoredClients(context);
     case "wp_client_use":
       return useStoredClient(readRequiredString(validatedInput, "name"), context);
+    case "wp_structure_get":
+      return getWpStructure(validatedInput as StructureGetInput);
     case "wp_package_pack_theme":
     case "wp_package_pack_plugin":
       return createPackageArchive(

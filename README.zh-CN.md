@@ -1,6 +1,6 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 30 个结构化工具，覆盖 client、内容、SEO、Elementor、媒体、插件/主题及询价管理。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 32 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
@@ -106,22 +106,40 @@ wp-api-config
 
 ## 工具列表
 
-服务共暴露 30 个工具。
+服务共暴露 32 个工具。
 
 ### Client 配置（2 个）
 
 - `wp_client_use`：设置当前激活的连接。
 - `wp_client_list`：列出连接及当前激活名称，不返回用户名或密码。
 
+### 本地结构与 REST 接口查询（2 个）
+
+- `wp_structure_get`：查询 `post`、`page`、`product`、`category`、`product-category`、`media`、`seo-meta`、`elementor-page`、`elementor-element` 的稳定使用结构；省略 `structure` 时列出目录。该本地工具不要求已保存 WordPress client。
+- `wp_api_schema`：省略 `apiPath` 时读取目标站点的 `/wp-json/` 路由索引；传入 `wp/v2/product` 等相对路径时读取该接口实时返回的 `OPTIONS` schema，便于在调用前确认方法、参数和资源字段。
+
 ### WordPress 资源（5 个）
 
-- `wp_resource_list`：列出文章、页面、分类或 Jelly Catalog 产品与产品分类。
+- `wp_resource_list`：列出文章、页面、分类或 Jelly Catalog 产品、产品分类与产品标签。
 - `wp_resource_get`：按 ID 读取单个资源。
 - `wp_resource_create`：创建内容或分类项。
 - `wp_resource_update`：更新内容或分类项。
 - `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
 
-`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`；其中产品相关资源专指 Jelly Catalog，不代表 WooCommerce 产品。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
+`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`、`product-tags`；其中产品相关资源专指 Jelly Catalog，不代表 WooCommerce 产品。产品写入支持 `productCategories`、`productTags` 和已注册的 `meta` 字段，写入前可先用 `wp_api_schema` 查看目标站点的实时字段定义。分类、产品分类和产品标签没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
+
+常用 Jelly Catalog 产品 `meta` 结构：
+
+| 字段 | 结构 | 用途 |
+| --- | --- | --- |
+| `_product_sku` | `string` | 规范的产品型号或 SKU。 |
+| `_product_videourl` | `string` | 产品视频绝对 URL。 |
+| `product_file` | 非负 `integer` | 下载附件 ID，`0` 表示清空。 |
+| `_product_image_gallery` | 逗号分隔附件 ID `string` | 例如 `"12,18,24"`，`""` 表示清空。 |
+| `_product_attributes` | `{name:string,value:string}[]` | 产品规格属性行。 |
+| `_product_faqs` | `{name:string,value:string}[]` | FAQ 行，`name` 是问题，`value` 是答案。 |
+
+产品分类 `meta` 还包括 `thumbnail_id`、`banner_id`、标题字段、HTML 营销内容、`category_applications`、`product_cat_faqs`，以及取值为 `"0" | "1"` 的 `category_inherit_parent_content`。其他插件仍可能追加字段，因此应以目标站点实时返回的 OPTIONS 结果为准。
 
 ### SEO、文章内容与媒体（5 个）
 
@@ -224,3 +242,9 @@ wp-api-config
 npm run build
 npm test
 ```
+
+贡献与验证要求见 [CONTRIBUTING.md](./CONTRIBUTING.md)，安全问题私密报告方式见 [SECURITY.md](./SECURITY.md)，版本变更见 [CHANGELOG.md](./CHANGELOG.md)。
+
+## 许可证
+
+本项目采用 [MIT License](./LICENSE)。

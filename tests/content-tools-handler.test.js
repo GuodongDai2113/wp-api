@@ -99,6 +99,64 @@ test("content handler preserves explicit clearing values", async () => {
   }]);
 });
 
+test("content handler maps Jelly Catalog taxonomy and REST meta fields", async () => {
+  const calls = [];
+  const client = {
+    /** 记录 Jelly Catalog 产品创建请求。 */
+    async create(route, body) {
+      calls.push({ route, body });
+      return { id: 11 };
+    }
+  };
+
+  await createResource(client, {
+    resource: "products",
+    title: "Catalog product",
+    productCategories: [2, 5],
+    productTags: [],
+    meta: {
+      _product_sku: "JC-100",
+      _product_attributes: [{ name: "Material", value: "Steel" }]
+    }
+  });
+
+  assert.deepEqual(calls, [{
+    route: "product",
+    body: {
+      title: "Catalog product",
+      product_cat: [2, 5],
+      product_tag: [],
+      meta: {
+        _product_sku: "JC-100",
+        _product_attributes: [{ name: "Material", value: "Steel" }]
+      }
+    }
+  }]);
+});
+
+test("content handler maps Jelly Catalog product tag resources", async () => {
+  const calls = [];
+  const client = {
+    /** 记录产品标签创建请求。 */
+    async create(route, body) {
+      calls.push({ route, body });
+      return { id: 12 };
+    }
+  };
+
+  await createResource(client, {
+    resource: "product-tags",
+    name: "Industrial"
+  });
+
+  assert.deepEqual(calls, [{ route: "product_tag", body: { name: "Industrial" } }]);
+
+  await assert.rejects(
+    () => createResource(client, { resource: "product-tags", name: "Child", parent: 4 }),
+    /not supported for product-tags: parent/
+  );
+});
+
 /** 验证 taxonomy 删除必须显式确认永久删除，确认后固定向 client 传递 force。 */
 test("content handler requires force for taxonomy deletion", async () => {
   const calls = [];

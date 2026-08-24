@@ -218,7 +218,11 @@ export function normalizeWordPressBaseUrl(baseUrl: string): string {
 
 /** 拼接 WordPress REST API URL，并附加查询参数。 */
 function joinApiUrl(baseUrl: string, apiPath: string, query?: QueryParams): string {
-  const url = new URL(`${normalizeWordPressBaseUrl(baseUrl)}/wp-json/${apiPath}`);
+  const apiRoot = new URL(`${normalizeWordPressBaseUrl(baseUrl)}/wp-json/`);
+  const url = new URL(`${apiRoot.toString()}${apiPath}`);
+  if (url.origin !== apiRoot.origin || !url.pathname.startsWith(apiRoot.pathname)) {
+    throw new TypeError("WordPress API path must remain inside the wp-json root.");
+  }
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value === undefined || value === null || value === "") {
       continue;

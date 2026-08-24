@@ -408,6 +408,25 @@ test("WordPressClient accepts HTTP and HTTPS base URLs while rejecting unsafe UR
   assert.equal(loopbackClient.baseUrl, "http://127.0.0.1:8080/wordpress");
 });
 
+test("WordPressClient rejects API paths that escape the wp-json root after URL normalization", async () => {
+  let fetchCalled = false;
+  const client = new WordPressClient({
+    baseUrl: "https://example.com/wordpress",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("Unexpected fetch");
+    }
+  });
+
+  await assert.rejects(
+    () => client.requestApiPath("%2e%2e/admin"),
+    /remain inside the wp-json root/
+  );
+  assert.equal(fetchCalled, false);
+});
+
 test("WordPressClient rejects authenticated redirects without forwarding credentials", async () => {
   const calls = [];
   const client = new WordPressClient({
