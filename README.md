@@ -116,7 +116,7 @@ The server exposes exactly 32 tools.
 ### Structure and REST schema discovery (2)
 
 - `wp_structure_get` — query stable usage structures for `post`, `page`, `product`, `category`, `product-category`, `media`, `seo-meta`, `elementor-page`, or `elementor-element`; omit `structure` to list the catalog. This local tool does not require a saved WordPress client.
-- `wp_api_schema` — omit `apiPath` to inspect the target site's `/wp-json/` route index, or pass a relative path such as `wp/v2/product` to read its live `OPTIONS` schema before constructing a request.
+- `wp_api_schema` — omit `apiPath` to read a compact, searchable, paginated `/wp-json/` route summary, or pass a relative path such as `wp/v2/product` to read its live `OPTIONS` schema. Root summaries default to 50 routes and accept `search`, `offset`, and `limit`; use `detail: "full"` only when the original complete WordPress response is required.
 
 ### WordPress resources (5)
 

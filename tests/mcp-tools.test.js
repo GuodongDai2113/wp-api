@@ -115,11 +115,31 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
 
 test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", async () => {
   const calls = [];
+  const rootSchema = {
+    namespaces: ["wp/v2", "jelly-form/v1"],
+    routes: {
+      "/wp/v2/posts": {
+        namespace: "wp/v2",
+        endpoints: [{ methods: ["GET", "POST"] }]
+      },
+      "/wp/v2/pages": {
+        namespace: "wp/v2",
+        endpoints: [{ methods: ["GET"] }]
+      },
+      "/jelly-form/v1/settings": {
+        namespace: "jelly-form/v1",
+        endpoints: [{ methods: ["GET"] }, { methods: ["POST", "GET"] }]
+      }
+    }
+  };
   const client = createRemoteClientStub({
     /** 记录接口结构查询使用的 API 路径和 HTTP 方法。 */
     async requestApiPath(apiPath, options = {}) {
       calls.push({ apiPath, options });
-      return { data: { namespace: apiPath || "root" }, pagination: { total: 0, totalPages: 0 } };
+      return {
+        data: apiPath === "" ? rootSchema : { namespace: apiPath },
+        pagination: { total: 0, totalPages: 0 }
+      };
     }
   });
   const context = {
@@ -129,17 +149,38 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
     }
   };
 
-  const index = await executeWpApiTool("wp_api_schema", {}, context);
+  const index = await executeWpApiTool("wp_api_schema", { search: "wp/v2", limit: 1 }, context);
+  const fullIndex = await executeWpApiTool("wp_api_schema", { detail: "full" }, context);
   const route = await executeWpApiTool("wp_api_schema", { apiPath: "/wp/v2/product/" }, context);
 
   assert.deepEqual(calls, [
     { apiPath: "", options: { method: "GET" } },
+    { apiPath: "", options: { method: "GET" } },
     { apiPath: "wp/v2/product", options: { method: "OPTIONS" } }
   ]);
-  assert.deepEqual(index, { apiPath: "", method: "GET", schema: { namespace: "root" } });
+  assert.deepEqual(index, {
+    apiPath: "",
+    method: "GET",
+    detail: "summary",
+    schema: {
+      namespaces: ["wp/v2", "jelly-form/v1"],
+      routes: [{ path: "/wp/v2/pages", namespace: "wp/v2", methods: ["GET"] }],
+      total: 2,
+      offset: 0,
+      limit: 1,
+      hasMore: true
+    }
+  });
+  assert.deepEqual(fullIndex, {
+    apiPath: "",
+    method: "GET",
+    detail: "full",
+    schema: rootSchema
+  });
   assert.deepEqual(route, {
     apiPath: "wp/v2/product",
     method: "OPTIONS",
+    detail: "full",
     schema: { namespace: "wp/v2/product" }
   });
 
@@ -150,6 +191,10 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
   await assert.rejects(
     () => executeWpApiTool("wp_api_schema", { apiPath: "%2e%2e/admin" }, context),
     /safe unencoded wp-json relative path/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_api_schema", { limit: 101 }, context),
+    /between 1 and 100/
   );
 });
 

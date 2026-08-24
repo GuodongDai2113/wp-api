@@ -181,7 +181,7 @@ Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `w
 | 工具 | 必填输入 | 可选输入 | 说明 |
 | --- | --- | --- | --- |
 | `wp_structure_get` | 无 | `structure` | 省略时列出结构目录；指定名称时返回字段结构、MCP 工具、响应结构、示例和注意事项；纯本地，不需要 client |
-| `wp_api_schema` | 无 | `apiPath`、通用连接字段 | 省略 `apiPath` 时读取 `/wp-json/` 路由索引；传入 `wp/v2/product` 等相对路径时以 `OPTIONS` 读取实时接口定义 |
+| `wp_api_schema` | 无 | `apiPath`、`search`、`offset`、`limit`、`detail`、通用连接字段 | 省略 `apiPath` 时返回 `/wp-json/` 路由摘要，默认最多 50 条；传入具体路径时以 `OPTIONS` 读取实时接口定义；`detail: "full"` 返回 WordPress 原始完整响应 |
 
 `wp_structure_get` 支持：
 
@@ -199,6 +199,14 @@ media | seo-meta | elementor-page | elementor-element
 ```json
 { "apiPath": "wp/v2/pages" }
 ```
+
+查询根路由目录时可按路径或 namespace 筛选并分页：
+
+```json
+{ "search": "jelly-form/v1", "offset": 0, "limit": 20 }
+```
+
+根路由摘要包含 `namespaces`、轻量 `routes`、`total`、`offset`、`limit` 和 `hasMore`。大型工具结果只在 `structuredContent.result` 中保留完整数据，文本内容会改为大小提示，避免把同一份 JSON 重复传输。
 
 ### 5.3 WordPress 资源（5 个）
 

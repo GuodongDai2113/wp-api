@@ -116,7 +116,7 @@ wp-api-config
 ### 本地结构与 REST 接口查询（2 个）
 
 - `wp_structure_get`：查询 `post`、`page`、`product`、`category`、`product-category`、`media`、`seo-meta`、`elementor-page`、`elementor-element` 的稳定使用结构；省略 `structure` 时列出目录。该本地工具不要求已保存 WordPress client。
-- `wp_api_schema`：省略 `apiPath` 时读取目标站点的 `/wp-json/` 路由索引；传入 `wp/v2/product` 等相对路径时读取该接口实时返回的 `OPTIONS` schema，便于在调用前确认方法、参数和资源字段。
+- `wp_api_schema`：省略 `apiPath` 时读取精简、可搜索、可分页的 `/wp-json/` 路由摘要，默认返回 50 条并支持 `search`、`offset`、`limit`；传入 `wp/v2/product` 等相对路径时读取实时 `OPTIONS` schema。仅在确实需要 WordPress 原始完整响应时使用 `detail: "full"`。
 
 ### WordPress 资源（5 个）
 

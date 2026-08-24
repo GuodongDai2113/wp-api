@@ -10,6 +10,8 @@
 
 ### Changed
 
+- `wp_api_schema` 的根路由查询默认返回可搜索、可分页的轻量摘要，并支持显式 `detail: "full"` 原始响应。
+- 超过 8 KiB 的 MCP 结果不再在文本内容中重复完整 JSON；完整数据仍保留在 `structuredContent.result`。
 - 为全部 MCP 工具增加只读、破坏性、幂等性和外部交互 annotations。
 - 从本地结构目录移除 `product-tag`；`product-tags` 资源操作保持可用。
 - 补充 npm 发布元数据、许可证和安全报告说明。

@@ -121,6 +121,10 @@ const elementorDataSchema = z.array(z.record(z.unknown())).describe("Elementor e
 
 /** 将任意结构化数据包装为 MCP 工具响应。 */
 function toToolResult(data: unknown) {
+  const formattedJson = `${JSON.stringify(data, null, 2)}\n`;
+  const text = Buffer.byteLength(formattedJson, "utf8") <= 8 * 1024
+    ? formattedJson
+    : `Result is ${Buffer.byteLength(formattedJson, "utf8")} bytes; complete data is available in structuredContent.result.\n`;
   return {
     structuredContent: {
       result: data
@@ -128,7 +132,7 @@ function toToolResult(data: unknown) {
     content: [
       {
         type: "text" as const,
-        text: `${JSON.stringify(data, null, 2)}\n`
+        text
       }
     ]
   };
@@ -207,11 +211,15 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_api_schema",
     {
       title: "Inspect WordPress REST API schema",
-      description: "Discover the target site's live REST routes, request arguments, supported methods, and resource fields. Omit apiPath for the wp-json route index, or pass a path such as wp/v2/product to read its OPTIONS schema before sending data.",
+      description: "Discover the target site's live REST routes, request arguments, supported methods, and resource fields. Omit apiPath for a filtered, paginated route summary, or pass a path such as wp/v2/product to read its OPTIONS schema before sending data.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_api_schema,
       inputSchema: {
         ...globalInputShape,
-        apiPath: nonBlankStringSchema.optional().describe("Path below wp-json, for example wp/v2/product, wp/v2/product_cat, or jelly-form/v1/settings. Omit to list all registered routes.")
+        apiPath: nonBlankStringSchema.optional().describe("Path below wp-json, for example wp/v2/product, wp/v2/product_cat, or jelly-form/v1/settings. Omit to list registered route summaries."),
+        search: nonBlankStringSchema.optional().describe("Case-insensitive route path or namespace filter used when apiPath is omitted."),
+        offset: z.number().int().nonnegative().optional().describe("Number of matching route summaries to skip; defaults to 0."),
+        limit: z.number().int().min(1).max(100).optional().describe("Maximum route summaries to return; defaults to 50 and cannot exceed 100."),
+        detail: z.enum(["summary", "full"]).optional().describe("Return a compact root route summary by default, or the original complete WordPress response with full.")
       },
       outputSchema
     },
