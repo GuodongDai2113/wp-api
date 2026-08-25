@@ -107,7 +107,14 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
     "wp_plugin_list",
     "wp_theme_push",
     "wp_elementor_get_tokens",
-    "wp_elementor_add_widget"
+    "wp_elementor_add_widget",
+    "wp_elementor_cache_clear",
+    "wp_elementor_read",
+    "wp_elementor_init",
+    "wp_elementor_export",
+    "wp_elementor_structure",
+    "wp_elementor_get_element",
+    "wp_elementor_find"
   ]) {
     assert.equal(registrations.has(removedName), false);
   }
@@ -132,12 +139,39 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
       }
     }
   };
+  const routeSchema = {
+    namespace: "wp/v2",
+    methods: ["GET", "POST"],
+    endpoints: [
+      {
+        methods: ["GET"],
+        args: {
+          context: { type: "string", enum: ["view", "edit"], default: "view", description: "Long remote description omitted from the compact result." }
+        }
+      },
+      {
+        methods: ["POST"],
+        args: {
+          title: { type: "string", required: true, description: "Long remote description omitted from the compact result." },
+          meta: { type: "object", properties: { product_sku: { type: "string" } } }
+        }
+      }
+    ],
+    schema: {
+      properties: {
+        id: { type: "integer", readonly: true, description: "Long remote description omitted from the compact result." },
+        title: { type: "string" },
+        meta: { type: "object", properties: { product_sku: { type: "string" } } }
+      }
+    },
+    _links: { self: [{ href: "https://example.com/wp-json/wp/v2/product" }] }
+  };
   const client = createRemoteClientStub({
     /** 记录接口结构查询使用的 API 路径和 HTTP 方法。 */
     async requestApiPath(apiPath, options = {}) {
       calls.push({ apiPath, options });
       return {
-        data: apiPath === "" ? rootSchema : { namespace: apiPath },
+        data: apiPath === "" ? rootSchema : routeSchema,
         pagination: { total: 0, totalPages: 0 }
       };
     }
@@ -152,10 +186,12 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
   const index = await executeWpApiTool("wp_api_schema", { search: "wp/v2", limit: 1 }, context);
   const fullIndex = await executeWpApiTool("wp_api_schema", { detail: "full" }, context);
   const route = await executeWpApiTool("wp_api_schema", { apiPath: "/wp/v2/product/" }, context);
+  const fullRoute = await executeWpApiTool("wp_api_schema", { apiPath: "wp/v2/product", detail: "full" }, context);
 
   assert.deepEqual(calls, [
     { apiPath: "", options: { method: "GET" } },
     { apiPath: "", options: { method: "GET" } },
+    { apiPath: "wp/v2/product", options: { method: "OPTIONS" } },
     { apiPath: "wp/v2/product", options: { method: "OPTIONS" } }
   ]);
   assert.deepEqual(index, {
@@ -180,9 +216,35 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
   assert.deepEqual(route, {
     apiPath: "wp/v2/product",
     method: "OPTIONS",
-    detail: "full",
-    schema: { namespace: "wp/v2/product" }
+    detail: "summary",
+    schema: {
+      namespace: "wp/v2",
+      methods: ["GET", "POST"],
+      endpoints: [
+        {
+          methods: ["GET"],
+          arguments: {
+            context: { type: "string", enum: ["view", "edit"], default: "view" }
+          }
+        },
+        {
+          methods: ["POST"],
+          arguments: {
+            title: { type: "string", required: true },
+            meta: { type: "object", properties: { product_sku: { type: "string" } } }
+          }
+        }
+      ],
+      fields: {
+        id: { type: "integer", readonly: true },
+        title: { type: "string" },
+        meta: { type: "object", properties: { product_sku: { type: "string" } } }
+      }
+    }
   });
+  assert.deepEqual(fullRoute.schema, routeSchema);
+  assert.equal(fullRoute.detail, "full");
+  assert.equal(JSON.stringify(route).length < JSON.stringify(fullRoute).length, true);
 
   await assert.rejects(
     () => executeWpApiTool("wp_api_schema", { apiPath: "wp/v2/../users" }, context),
@@ -198,7 +260,7 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
   );
 });
 
-test("本地结构目录无需 WordPress client 即可列出并查询常用结构", async () => {
+test("本地结构目录按需返回最小片段且无需 WordPress client", async () => {
   let resolverCalls = 0;
   const context = {
     /** 记录本地结构工具不应触发的远程 client 解析。 */
@@ -213,25 +275,30 @@ test("本地结构目录无需 WordPress client 即可列出并查询常用结�
   assert.equal(names.includes("post"), true);
   assert.equal(names.includes("page"), true);
   assert.equal(names.includes("product-category"), true);
-  assert.equal(names.includes("product-tag"), false);
+  assert.equal(names.includes("product-tag"), true);
   assert.equal(names.includes("elementor-page"), true);
 
-  const page = await executeWpApiTool("wp_structure_get", { structure: "page" }, context);
-  assert.equal(page.remoteSchemaPath, "wp/v2/pages");
-  assert.equal(page.writeShape.resource, "required literal pages");
+  const pageOverview = await executeWpApiTool("wp_structure_get", { structure: "page" }, context);
+  const pageWrite = await executeWpApiTool("wp_structure_get", { structure: "page", section: "write" }, context);
+  const pageFull = await executeWpApiTool("wp_structure_get", { structure: "page", section: "full" }, context);
+  assert.equal(pageOverview.remoteSchemaPath, "wp/v2/pages");
+  assert.equal("writeShape" in pageOverview, false);
+  assert.equal(pageWrite.section, "write");
+  assert.equal(pageWrite.value.resource, "required literal pages");
+  assert.equal(JSON.stringify(pageOverview).length < JSON.stringify(pageFull).length, true);
 
-  const element = await executeWpApiTool("wp_structure_get", { structure: "elementor-element" }, context);
-  assert.match(element.writeShape.elements, /recursive/);
+  const elementor = await executeWpApiTool("wp_structure_get", { structure: "elementor-page", section: "write" }, context);
+  assert.match(elementor.value.update, /elementId/);
+  const productTag = await executeWpApiTool("wp_structure_get", { structure: "product-tag" }, context);
+  assert.equal(productTag.remoteSchemaPath, "wp/v2/product_tag");
   assert.equal(resolverCalls, 0);
 
   await assert.rejects(
     () => executeWpApiTool("wp_structure_get", { structure: "unknown" }, context),
     /Unknown structure/
   );
-  await assert.rejects(
-    () => executeWpApiTool("wp_structure_get", { structure: "product-tag" }, context),
-    /Unknown structure/
-  );
+  await assert.rejects(() => executeWpApiTool("wp_structure_get", { section: "write" }, context), /requires a structure/);
+  await assert.rejects(() => executeWpApiTool("wp_structure_get", { structure: "page", section: "unknown" }, context), /Unknown structure section/);
 });
 
 test("MCP 站点 URL schema 接受无凭据的 HTTP 或 HTTPS 根地址", () => {

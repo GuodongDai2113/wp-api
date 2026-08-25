@@ -1,6 +1,6 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 32 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor、媒体、插件/主题及询价管理。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 29 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor 页面正文、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
@@ -106,7 +106,7 @@ wp-api-config
 
 ## 工具列表
 
-服务共暴露 32 个工具。
+服务共暴露 29 个工具。
 
 ### Client 配置（2 个）
 
@@ -115,8 +115,8 @@ wp-api-config
 
 ### 本地结构与 REST 接口查询（2 个）
 
-- `wp_structure_get`：查询 `post`、`page`、`product`、`category`、`product-category`、`media`、`seo-meta`、`elementor-page`、`elementor-element` 的稳定使用结构；省略 `structure` 时列出目录。该本地工具不要求已保存 WordPress client。
-- `wp_api_schema`：省略 `apiPath` 时读取精简、可搜索、可分页的 `/wp-json/` 路由摘要，默认返回 50 条并支持 `search`、`offset`、`limit`；传入 `wp/v2/product` 等相对路径时读取实时 `OPTIONS` schema。仅在确实需要 WordPress 原始完整响应时使用 `detail: "full"`。
+- `wp_structure_get`：按需查询 `post`、`page`、`product`、`category`、`product-category`、`product-tag`、`media`、`seo-meta` 和 Elementor 结构。指定 `section: "write"`、`"response"` 或 `"example"` 只返回所需片段；默认返回概览，`"full"` 才返回完整定义。该工具纯本地且不要求 WordPress client。
+- `wp_api_schema`：省略 `apiPath` 时读取精简、可搜索、可分页的 `/wp-json/` 路由摘要；传入 `wp/v2/product` 等路径时也默认只返回方法、参数约束和字段摘要。仅在摘要缺少必要约束时使用 `detail: "full"`。
 
 ### WordPress 资源（5 个）
 
@@ -147,18 +147,17 @@ wp-api-config
 - `wp_seo_update`：更新或显式清空 Rank Math REST meta。
 - `wp_post_link`：列出、新增、更新或删除可编辑文章正文中的链接。
 - `wp_post_content_replace`：替换文章中的所有精确文本匹配。
-- `wp_media_upload`：上传本地位图，并可设置附件元数据。
+- `wp_media_upload`：本地 JPEG/PNG 先压缩为 WebP 再上传，GIF/AVIF/WebP 原样上传，并可设置附件元数据。
 
-资源创建/更新支持直接传 `content` 或读取本地 `contentFile`。设置 `gutenberg: true` 后，会在上传前把解析出的 HTML 转换成 Gutenberg 区块标记。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。
+资源创建/更新支持直接传 `content` 或读取本地 `contentFile`。设置 `gutenberg: true` 后，会先用 HTML5 parser 解析正文，再按明确的标签、属性和 [WordPress 允许协议](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/)列表清理，最后生成 Gutenberg 区块标记。事件属性、内联样式、`javascript:`、`data:` 和活动嵌入内容会被移除；普通未知容器会展开并保留其中的安全文本。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会在内存中以质量 85 转换为 WebP 后再上传；GIF、AVIF 和已有 WebP 保持原格式。
 
-### Elementor（6 个）
+### Elementor 页面正文（3 个）
 
-- `wp_elementor_init`：仅在元素树为空的页面上初始化 Elementor meta。
-- `wp_elementor_export`：导出原始 Elementor 元素树。
-- `wp_elementor_import`：整体替换 Elementor 元素树。
-- `wp_elementor_structure`：返回精简的元素层级结构。
-- `wp_elementor_get_element`：按 ID 读取单个元素及其 settings。
-- `wp_elementor_find`：按元素类型、组件类型、文本或 setting 搜索。
+- `wp_elementor_get`：只对 `pages` 生效；默认返回页面 `revision`、包含正文的元素 ID 与可修改 settings，可用 `searchText` 定位旧标题或文本；`view: "data"` 才返回完整树用于备份。
+- `wp_elementor_update`：把最新读取的 `revision` 作为 `expectedRevision`，按 `elementId` 局部合并现有正文字段，可在一次保存中修改多个标题或文本；拒绝过期或非正文修改，并在保存后自动刷新 Elementor 缓存。
+- `wp_elementor_import`：用完整 `data` 覆盖页面 Elementor 树，并在保存后自动刷新 Elementor 缓存；需要备份时先调用读取工具的 `data` 视图。
+
+目标站点必须通过 WordPress REST API（`show_in_rest`）暴露 Elementor 私有页面 meta `_elementor_data`，并在写入响应中返回该值；站点侧桥接还应通过 Elementor document 层保存，或主动失效其生成数据与元素缓存。REST meta 集成缺失时工具会明确失败，不会把隐藏数据误判为空页面。
 
 ### 插件、主题与本地打包（8 个）
 

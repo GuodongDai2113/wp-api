@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import sharp from "sharp";
 
 import { WordPressClient, WordPressApiError } from "../build/lib/wp-client.js";
 
@@ -175,7 +176,14 @@ test("WordPressClient list fetches all pages when per_page is -1", async () => {
 test("WordPressClient uploads a local image file to the media endpoint", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-"));
   const filePath = path.join(tempDir, "hero image.png");
-  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const bytes = await sharp({
+    create: {
+      width: 64,
+      height: 32,
+      channels: 4,
+      background: { r: 20, g: 80, b: 160, alpha: 0.5 }
+    }
+  }).png().toBuffer();
   const calls = [];
   await writeFile(filePath, bytes);
 
@@ -185,7 +193,7 @@ test("WordPressClient uploads a local image file to the media endpoint", async (
     appPassword: "secret",
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
-      return new Response(JSON.stringify({ id: 33, source_url: "https://example.com/hero-image.png" }), {
+      return new Response(JSON.stringify({ id: 33, source_url: "https://example.com/hero-image.webp" }), {
         status: 201,
         headers: { "content-type": "application/json" }
       });
@@ -200,9 +208,14 @@ test("WordPressClient uploads a local image file to the media endpoint", async (
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers.Authorization, "Basic YWRtaW46c2VjcmV0");
   assert.equal(calls[0].init.headers.Accept, "application/json");
-  assert.equal(calls[0].init.headers["Content-Type"], "image/png");
-  assert.equal(calls[0].init.headers["Content-Disposition"], 'attachment; filename="hero image.png"');
-  assert.deepEqual(Buffer.from(calls[0].init.body), bytes);
+  assert.equal(calls[0].init.headers["Content-Type"], "image/webp");
+  assert.equal(calls[0].init.headers["Content-Disposition"], 'attachment; filename="hero image.webp"');
+  const uploadedBytes = Buffer.from(calls[0].init.body);
+  const uploadedMetadata = await sharp(uploadedBytes).metadata();
+  assert.equal(uploadedMetadata.format, "webp");
+  assert.equal(uploadedMetadata.width, 64);
+  assert.equal(uploadedMetadata.height, 32);
+  assert.equal(uploadedMetadata.hasAlpha, true);
 
   await rm(tempDir, { recursive: true, force: true });
 });
@@ -211,7 +224,14 @@ test("WordPressClient updates media metadata after uploading when provided", asy
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-"));
   const filePath = path.join(tempDir, "photo.jpg");
   const calls = [];
-  await writeFile(filePath, Buffer.from([0xff, 0xd8, 0xff]));
+  await sharp({
+    create: {
+      width: 32,
+      height: 16,
+      channels: 3,
+      background: { r: 180, g: 120, b: 60 }
+    }
+  }).jpeg().toFile(filePath);
 
   const client = new WordPressClient({
     baseUrl: "https://example.com",
@@ -242,6 +262,8 @@ test("WordPressClient updates media metadata after uploading when provided", asy
 
   assert.equal(result.id, 44);
   assert.equal(calls.length, 2);
+  assert.equal(calls[0].init.headers["Content-Type"], "image/webp");
+  assert.equal(calls[0].init.headers["Content-Disposition"], 'attachment; filename="photo.webp"');
   assert.equal(calls[1].url, "https://example.com/wp-json/wp/v2/media/44");
   assert.equal(calls[1].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
@@ -594,7 +616,14 @@ test("WordPressClient enforces local media and plugin package size and ZIP bound
 test("WordPressClient removes an uploaded attachment when metadata update fails", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-cleanup-"));
   const imagePath = path.join(tempDir, "photo.jpg");
-  await writeFile(imagePath, Buffer.from([0xff, 0xd8, 0xff]));
+  await sharp({
+    create: {
+      width: 32,
+      height: 16,
+      channels: 3,
+      background: { r: 90, g: 120, b: 150 }
+    }
+  }).jpeg().toFile(imagePath);
   const calls = [];
   const client = new WordPressClient({
     baseUrl: "https://example.com",

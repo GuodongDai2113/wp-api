@@ -52,6 +52,50 @@ export interface ApiSchemaResult {
   schema: unknown;
 }
 
+/** 单个 REST 参数或响应字段的紧凑约束说明。 */
+export interface ApiValueSummary {
+  /** WordPress 声明的 JSON 类型。 */
+  type?: unknown;
+  /** 参数是否为必填项。 */
+  required?: boolean;
+  /** 字段是否只读。 */
+  readonly?: boolean;
+  /** 字符串或数值使用的格式。 */
+  format?: string;
+  /** 允许使用的枚举值。 */
+  enum?: unknown[];
+  /** 简单标量默认值。 */
+  default?: string | number | boolean | null;
+  /** 数值允许的最小值。 */
+  minimum?: number;
+  /** 数值允许的最大值。 */
+  maximum?: number;
+  /** 数组元素的紧凑约束。 */
+  items?: ApiValueSummary;
+  /** 对象直接子字段的紧凑约束。 */
+  properties?: Record<string, ApiValueSummary>;
+}
+
+/** 单个 REST endpoint 的紧凑方法与参数说明。 */
+export interface ApiEndpointSummary {
+  /** 该 endpoint 支持的 HTTP 方法。 */
+  methods: string[];
+  /** 参数名称及必要约束；省略冗长描述文本。 */
+  arguments: Record<string, ApiValueSummary>;
+}
+
+/** 指定 REST 路径的轻量 OPTIONS 摘要。 */
+export interface ApiPathSummary {
+  /** 路径所属 namespace；无法读取时为 null。 */
+  namespace: string | null;
+  /** 路径支持的全部去重 HTTP 方法。 */
+  methods: string[];
+  /** 各 endpoint 的方法和参数摘要。 */
+  endpoints: ApiEndpointSummary[];
+  /** 响应 schema 字段及其必要约束。 */
+  fields: Record<string, ApiValueSummary>;
+}
+
 /** 判断未知值是否为可安全读取属性的普通对象。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -74,6 +118,97 @@ function collectRouteMethods(routeDefinition: unknown): string[] {
     }
   }
   return [...methods].sort();
+}
+
+/** 读取未知数组中的字符串值并去重排序。 */
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.filter((item): item is string => typeof item === "string"))].sort();
+}
+
+/** 判断未知值是否是适合保留在摘要中的简单标量。 */
+function isScalar(value: unknown): value is string | number | boolean | null {
+  return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+/** 提取 Agent 做参数选择所需的约束，并限制递归深度以控制输出体积。 */
+function summarizeApiValue(value: unknown, depth = 0): ApiValueSummary {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const summary: ApiValueSummary = {};
+  if (typeof value.type === "string" || Array.isArray(value.type)) {
+    summary.type = value.type;
+  }
+  if (typeof value.required === "boolean") {
+    summary.required = value.required;
+  }
+  if (typeof value.readonly === "boolean") {
+    summary.readonly = value.readonly;
+  }
+  if (typeof value.format === "string") {
+    summary.format = value.format;
+  }
+  if (Array.isArray(value.enum)) {
+    summary.enum = value.enum;
+  }
+  if (isScalar(value.default)) {
+    summary.default = value.default;
+  }
+  if (typeof value.minimum === "number") {
+    summary.minimum = value.minimum;
+  }
+  if (typeof value.maximum === "number") {
+    summary.maximum = value.maximum;
+  }
+
+  if (depth < 2 && isRecord(value.items)) {
+    summary.items = summarizeApiValue(value.items, depth + 1);
+  }
+  if (depth < 2 && isRecord(value.properties)) {
+    summary.properties = Object.fromEntries(
+      Object.entries(value.properties).map(([name, definition]) => [name, summarizeApiValue(definition, depth + 1)])
+    );
+  }
+  return summary;
+}
+
+/** 将参数或字段定义表压缩为不含描述文本和链接信息的必要约束。 */
+function summarizeApiValueMap(value: unknown): Record<string, ApiValueSummary> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([name, definition]) => [name, summarizeApiValue(definition)])
+  );
+}
+
+/** 将指定 REST 路径的 OPTIONS 响应压缩为方法、参数和字段摘要。 */
+export function summarizeApiPathSchema(data: unknown): ApiPathSummary {
+  const root = isRecord(data) ? data : {};
+  const endpoints = Array.isArray(root.endpoints)
+    ? root.endpoints.filter(isRecord).map((endpoint): ApiEndpointSummary => ({
+      methods: readStringArray(endpoint.methods),
+      arguments: summarizeApiValueMap(endpoint.args)
+    }))
+    : [];
+  const methods = new Set(readStringArray(root.methods));
+  for (const endpoint of endpoints) {
+    for (const method of endpoint.methods) {
+      methods.add(method);
+    }
+  }
+  const responseSchema = isRecord(root.schema) ? root.schema : {};
+
+  return {
+    namespace: typeof root.namespace === "string" ? root.namespace : null,
+    methods: [...methods].sort(),
+    endpoints,
+    fields: summarizeApiValueMap(responseSchema.properties)
+  };
 }
 
 /** 将 WordPress REST 根索引压缩为可筛选、可分页的轻量路由目录。 */
@@ -155,13 +290,15 @@ export async function getApiSchema(
   const apiPath = normalizeApiSchemaPath(input.apiPath);
   const method = apiPath === "" ? "GET" : "OPTIONS";
   const response = await client.requestApiPath(apiPath, { method });
-  const detail = apiPath === "" ? input.detail ?? "summary" : "full";
+  const detail = input.detail ?? "summary";
   return {
     apiPath,
     method,
     detail,
-    schema: apiPath === "" && detail === "summary"
-      ? summarizeApiRouteIndex(response.data, input)
-      : response.data
+    schema: detail === "full"
+      ? response.data
+      : apiPath === ""
+        ? summarizeApiRouteIndex(response.data, input)
+        : summarizeApiPathSchema(response.data)
   };
 }

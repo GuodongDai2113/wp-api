@@ -1,3 +1,11 @@
+import {
+  html as parse5Html,
+  parse,
+  parseFragment,
+  serialize,
+  type DefaultTreeAdapterTypes
+} from "parse5";
+
 /** HTML void 元素集合，用于识别不需要闭合标签的节点。 */
 const VOID_TAGS = new Set([
   "area",
@@ -35,6 +43,269 @@ const BLOCK_TAGS = new Set([
   "ul"
 ]);
 
+/** 允许保留的文章 HTML 标签，与当前转换器支持的块级和行内内容范围一致。 */
+const ALLOWED_HTML_TAGS = new Set([
+  "a",
+  "abbr",
+  "b",
+  "blockquote",
+  "br",
+  "caption",
+  "cite",
+  "code",
+  "dd",
+  "del",
+  "div",
+  "dl",
+  "dt",
+  "em",
+  "figcaption",
+  "figure",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "i",
+  "img",
+  "ins",
+  "kbd",
+  "li",
+  "mark",
+  "ol",
+  "p",
+  "pre",
+  "q",
+  "s",
+  "samp",
+  "small",
+  "span",
+  "strong",
+  "sub",
+  "sup",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "time",
+  "tr",
+  "u",
+  "ul",
+  "var"
+]);
+
+/** 必须连同子节点一起删除的活动内容、嵌入内容和表单标签。 */
+const DROP_WITH_CONTENT_TAGS = new Set([
+  "applet",
+  "base",
+  "button",
+  "embed",
+  "form",
+  "iframe",
+  "input",
+  "link",
+  "math",
+  "meta",
+  "noscript",
+  "object",
+  "option",
+  "script",
+  "select",
+  "style",
+  "svg",
+  "template",
+  "textarea"
+]);
+
+/** 所有允许标签都可以保留的通用、非活动 HTML 属性。 */
+const GLOBAL_ALLOWED_ATTRIBUTES = new Set([
+  "align",
+  "class",
+  "dir",
+  "id",
+  "lang",
+  "role",
+  "title"
+]);
+
+/** 各标签额外允许保留的语义属性。 */
+const TAG_ALLOWED_ATTRIBUTES: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
+  a: new Set(["download", "href", "hreflang", "rel", "target", "type"]),
+  blockquote: new Set(["cite"]),
+  del: new Set(["cite", "datetime"]),
+  img: new Set(["alt", "decoding", "fetchpriority", "height", "loading", "sizes", "src", "srcset", "width"]),
+  ins: new Set(["cite", "datetime"]),
+  li: new Set(["value"]),
+  ol: new Set(["reversed", "start", "type"]),
+  q: new Set(["cite"]),
+  table: new Set(["summary"]),
+  td: new Set(["colspan", "headers", "rowspan"]),
+  th: new Set(["abbr", "colspan", "headers", "rowspan", "scope"]),
+  time: new Set(["datetime"])
+});
+
+/** WordPress `wp_allowed_protocols()` 默认允许在 HTML 属性中使用的 URL 协议。 */
+const ALLOWED_URL_PROTOCOLS = new Set([
+  "fax",
+  "feed",
+  "ftp",
+  "ftps",
+  "gopher",
+  "http",
+  "https",
+  "irc",
+  "irc6",
+  "ircs",
+  "mailto",
+  "mms",
+  "news",
+  "nntp",
+  "rtsp",
+  "sms",
+  "svn",
+  "tel",
+  "telnet",
+  "urn",
+  "webcal",
+  "xmpp"
+]);
+
+/** 需要执行 URL 协议校验的标签属性组合。 */
+const URL_ATTRIBUTES = new Set(["a.href", "blockquote.cite", "del.cite", "img.src", "ins.cite", "q.cite"]);
+
+/** 判断 parse5 子节点是否是 HTML 元素。 */
+function isElementNode(node: DefaultTreeAdapterTypes.ChildNode): node is DefaultTreeAdapterTypes.Element {
+  return "tagName" in node;
+}
+
+/** 判断 parse5 子节点是否是纯文本节点。 */
+function isTextNode(node: DefaultTreeAdapterTypes.ChildNode): node is DefaultTreeAdapterTypes.TextNode {
+  return node.nodeName === "#text";
+}
+
+/** 在 parse5 节点树中递归查找第一个指定标签元素。 */
+function findElementByTag(
+  parent: DefaultTreeAdapterTypes.ParentNode,
+  tagName: string
+): DefaultTreeAdapterTypes.Element | undefined {
+  for (const child of parent.childNodes) {
+    if (!isElementNode(child)) {
+      continue;
+    }
+    if (child.tagName === tagName) {
+      return child;
+    }
+    const nested = findElementByTag(child, tagName);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+/** 判断属性名是否属于显式允许的通用属性、标签属性或 ARIA 属性。 */
+function isAllowedAttribute(tagName: string, attributeName: string): boolean {
+  return GLOBAL_ALLOWED_ATTRIBUTES.has(attributeName)
+    || TAG_ALLOWED_ATTRIBUTES[tagName]?.has(attributeName) === true
+    || /^aria-[a-z0-9_-]+$/.test(attributeName);
+}
+
+/** 判断 URL 是否使用 WordPress 允许的协议，或属于相对 URL、锚点和查询字符串。 */
+function isAllowedUrl(value: string): boolean {
+  const normalized = value.trim().replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
+  if (!normalized) {
+    return true;
+  }
+  const scheme = normalized.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]?.toLowerCase();
+  return scheme === undefined || ALLOWED_URL_PROTOCOLS.has(scheme);
+}
+
+/** 判断响应式图片 srcset 中的每个候选 URL 是否都使用允许协议。 */
+function isAllowedSrcset(value: string): boolean {
+  return value.split(",").every((candidate) => {
+    const url = candidate.trim().split(/\s+/, 1)[0] ?? "";
+    return url.length > 0 && isAllowedUrl(url);
+  });
+}
+
+/** 按标签和协议允许列表过滤单个 HTML 元素的属性。 */
+function sanitizeElementAttributes(element: DefaultTreeAdapterTypes.Element): void {
+  element.attrs = element.attrs.filter((attribute) => {
+    const attributeName = attribute.name.toLowerCase();
+    if (!isAllowedAttribute(element.tagName, attributeName)) {
+      return false;
+    }
+    if (attributeName === "srcset") {
+      return isAllowedSrcset(attribute.value);
+    }
+    if (URL_ATTRIBUTES.has(`${element.tagName}.${attributeName}`)) {
+      return isAllowedUrl(attribute.value);
+    }
+    return true;
+  });
+}
+
+/** 递归清理子节点：保留允许元素，展开普通未知元素，并删除活动内容及注释。 */
+function sanitizeChildNodes(parent: DefaultTreeAdapterTypes.ParentNode): void {
+  const sanitizedChildren: DefaultTreeAdapterTypes.ChildNode[] = [];
+
+  for (const child of parent.childNodes) {
+    if (isTextNode(child)) {
+      child.parentNode = parent;
+      sanitizedChildren.push(child);
+      continue;
+    }
+    if (!isElementNode(child)) {
+      continue;
+    }
+
+    const tagName = child.tagName.toLowerCase();
+    const isHtmlElement = child.namespaceURI === parse5Html.NS.HTML;
+    if (!isHtmlElement || DROP_WITH_CONTENT_TAGS.has(tagName)) {
+      continue;
+    }
+
+    sanitizeChildNodes(child);
+    if (ALLOWED_HTML_TAGS.has(tagName)) {
+      sanitizeElementAttributes(child);
+      child.parentNode = parent;
+      sanitizedChildren.push(child);
+      continue;
+    }
+
+    for (const grandchild of child.childNodes) {
+      if ("parentNode" in grandchild) {
+        grandchild.parentNode = parent;
+      }
+      sanitizedChildren.push(grandchild);
+    }
+  }
+
+  parent.childNodes = sanitizedChildren;
+}
+
+/** 使用 HTML5 解析器和明确允许列表清理待转换的文章 HTML。 */
+function sanitizeHtmlFragment(source: string): string {
+  if (/<(?:!doctype|html|head|body)\b/i.test(source)) {
+    const document = parse(source);
+    const body = findElementByTag(document, "body");
+    if (body) {
+      sanitizeChildNodes(body);
+      return serialize(body).trim();
+    }
+    sanitizeChildNodes(document);
+    return serialize(document).trim();
+  }
+
+  const fragment = parseFragment(source);
+  sanitizeChildNodes(fragment);
+  return serialize(fragment).trim();
+}
+
 /** HTML 顶层节点的最小表示，用于在不引入 DOM 依赖的情况下转换内容。 */
 interface HtmlNode {
   /** 节点标签名；纯文本节点使用空字符串。 */
@@ -63,31 +334,12 @@ export function convertHtmlToGutenberg(html: string): string {
     return "";
   }
 
-  const bodyHtml = stripDocumentShell(html);
+  const bodyHtml = sanitizeHtmlFragment(html);
   const nodes = readTopLevelNodes(bodyHtml);
   return nodes
     .map(convertNodeToBlock)
     .filter(Boolean)
     .join("\n\n");
-}
-
-/** 移除完整 HTML 文档外壳，只保留可转换的正文片段。 */
-function stripDocumentShell(html: string): string {
-  let result = html
-    .replace(/<!doctype[^>]*>/gi, "")
-    .replace(/<head\b[\s\S]*?<\/head>/gi, "")
-    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[\s\S]*?<\/style>/gi, "");
-
-  const bodyMatch = result.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
-  if (bodyMatch?.[1]) {
-    result = bodyMatch[1];
-  }
-
-  return result
-    .replace(/<\/?html\b[^>]*>/gi, "")
-    .replace(/<\/?body\b[^>]*>/gi, "")
-    .trim();
 }
 
 /** 读取 HTML 片段中的顶层节点，避免把块级结构错误包进段落。 */

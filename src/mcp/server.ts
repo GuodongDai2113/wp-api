@@ -4,7 +4,7 @@ import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./wp-api-tools.js";
-import { WP_STRUCTURE_NAMES } from "./handlers/structure-tools.js";
+import { WP_STRUCTURE_NAMES, WP_STRUCTURE_SECTIONS } from "./handlers/structure-tools.js";
 
 /** 判断站点地址是否是适合作为 WordPress 根地址的 HTTP(S) URL。 */
 function isSafeSiteUrl(value: string): boolean {
@@ -55,12 +55,9 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_post_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_post_content_replace: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_media_upload: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  wp_elementor_init: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  wp_elementor_export: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_elementor_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_elementor_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_elementor_import: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  wp_elementor_structure: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  wp_elementor_get_element: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  wp_elementor_find: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_package_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_package_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_package_install: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -119,8 +116,30 @@ const elementorSettingsSchema = z.record(z.unknown()).describe("Elementor settin
 /** Elementor 元素数组 schema。 */
 const elementorDataSchema = z.array(z.record(z.unknown())).describe("Elementor element tree array.");
 
-/** 将任意结构化数据包装为 MCP 工具响应。 */
-function toToolResult(data: unknown) {
+/** Elementor 单元素局部正文修改 schema。 */
+const elementorContentChangeSchema = z.object({
+  elementId: nonBlankStringSchema.describe("Element ID copied from wp_elementor_get."),
+  settings: elementorSettingsSchema.describe("Only changed content keys already shown by wp_elementor_get for this element.")
+}).strict();
+
+/**
+ * 将任意结构化数据包装为 MCP 工具响应。
+ * `structuredOnly` 为真时，文本只保留短提示，避免把同一份 JSON 再序列化一次。
+ */
+function toToolResult(data: unknown, structuredOnly = false) {
+  if (structuredOnly) {
+    return {
+      structuredContent: {
+        result: data
+      },
+      content: [
+        {
+          type: "text" as const,
+          text: "Compact result is available in structuredContent.result.\n"
+        }
+      ]
+    };
+  }
   const formattedJson = `${JSON.stringify(data, null, 2)}\n`;
   const text = Buffer.byteLength(formattedJson, "utf8") <= 8 * 1024
     ? formattedJson
@@ -138,9 +157,15 @@ function toToolResult(data: unknown) {
   };
 }
 
-/** 创建一个绑定具体工具名和上下文的 MCP 工具回调。 */
+/** 创建绑定具体工具名和上下文的 MCP 回调，并为结构查询及 Elementor 读取启用单份结构化输出。 */
 function createToolCallback(toolName: WpApiToolName, context: WpApiToolContext) {
-  return async (input: WpApiToolInput) => toToolResult(await executeWpApiTool(toolName, input, context));
+  const structuredOnly = toolName === "wp_structure_get"
+    || toolName === "wp_api_schema"
+    || toolName === "wp_elementor_get";
+  return async (input: WpApiToolInput) => toToolResult(
+    await executeWpApiTool(toolName, input, context),
+    structuredOnly
+  );
 }
 
 /** 注册一个 Elementor MCP 工具。 */
@@ -197,10 +222,11 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_structure_get",
     {
       title: "Get WordPress data structure",
-      description: "Read the local usage catalog for posts, pages, Jelly Catalog resources, media, SEO, and Elementor. Omit structure to list available definitions. Use wp_api_schema afterward when the target site's live schema is needed.",
+      description: "Read a small local usage guide for posts, pages, Jelly Catalog resources, media, SEO, and Elementor. Query the needed structure and section directly; use full only for compatibility or exhaustive inspection.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_structure_get,
       inputSchema: {
-        structure: z.enum(WP_STRUCTURE_NAMES).optional().describe("Structure to inspect. Omit to list every available structure name.")
+        structure: z.enum(WP_STRUCTURE_NAMES).optional().describe("Structure to inspect. Omit only when the available names are unknown."),
+        section: z.enum(WP_STRUCTURE_SECTIONS).optional().describe("Smallest section needed: overview (default), write, response, example, or full.")
       },
       outputSchema
     },
@@ -211,7 +237,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_api_schema",
     {
       title: "Inspect WordPress REST API schema",
-      description: "Discover the target site's live REST routes, request arguments, supported methods, and resource fields. Omit apiPath for a filtered, paginated route summary, or pass a path such as wp/v2/product to read its OPTIONS schema before sending data.",
+      description: "Discover the target site's live REST routes, request arguments, methods, and fields. Both route indexes and OPTIONS responses are compact by default; request detail full only when omitted constraints are required.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_api_schema,
       inputSchema: {
         ...globalInputShape,
@@ -219,7 +245,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         search: nonBlankStringSchema.optional().describe("Case-insensitive route path or namespace filter used when apiPath is omitted."),
         offset: z.number().int().nonnegative().optional().describe("Number of matching route summaries to skip; defaults to 0."),
         limit: z.number().int().min(1).max(100).optional().describe("Maximum route summaries to return; defaults to 50 and cannot exceed 100."),
-        detail: z.enum(["summary", "full"]).optional().describe("Return a compact root route summary by default, or the original complete WordPress response with full.")
+        detail: z.enum(["summary", "full"]).optional().describe("Return a compact summary by default for both indexes and specific routes; full returns the original WordPress response.")
       },
       outputSchema
     },
@@ -390,11 +416,11 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_media_upload",
     {
       title: "Upload WordPress media",
-      description: "Upload a local image file readable by the MCP server process to the WordPress media library.",
+      description: "Upload a local bitmap readable by the MCP server process. JPEG and PNG inputs are compressed to WebP in memory before upload; GIF, AVIF, and existing WebP files remain unchanged.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_media_upload,
       inputSchema: {
         ...globalInputShape,
-        filePath: z.string().min(1).describe("Local image file path readable by the MCP server process."),
+        filePath: z.string().min(1).describe("Local .avif, .gif, .jpeg, .jpg, .png, or .webp path readable by the MCP server process. JPEG and PNG are uploaded as WebP."),
         title: z.string().optional().describe("Media title."),
         altText: z.string().optional().describe("Media alt text."),
         caption: z.string().optional().describe("Media caption."),
@@ -408,71 +434,38 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   registerElementorTool(
     server,
     context,
-    "wp_elementor_init",
-    "Initialize Elementor page data",
-    "Initialize Elementor metadata only when the page has no existing elements; use import for intentional replacement.",
+    "wp_elementor_get",
+    "Read Elementor page content",
+    "Read editable content from a WordPress page. The default content view returns only element IDs and existing content settings, plus update guidance. Use searchText to locate text or view data only for a full backup before import.",
     {
       ...elementorBaseShape,
-      data: elementorDataSchema.optional(),
-      pageSettings: elementorSettingsSchema.optional()
+      view: z.enum(["content", "data"]).optional().describe("content (default) returns editable text/content fields; data returns the complete element tree for backup or import."),
+      searchText: nonBlankStringSchema.optional().describe("Case-insensitive filter across editable content values; only valid with the content view.")
     }
   );
 
   registerElementorTool(
     server,
     context,
-    "wp_elementor_export",
-    "Export Elementor data",
-    "Read the raw Elementor element tree from a page.",
-    elementorBaseShape
+    "wp_elementor_update",
+    "Update Elementor page content",
+    "Partially update existing page content by element ID. First call wp_elementor_get, then copy each elementId and send only changed setting keys. Layout, style, new elements, and unknown settings are rejected; all changes are saved once and the site-wide Elementor cache is refreshed automatically.",
+    {
+      ...elementorBaseShape,
+      expectedRevision: nonBlankStringSchema.describe("Revision copied from the latest wp_elementor_get result. The update is rejected if the page changed meanwhile."),
+      changes: z.array(elementorContentChangeSchema).min(1).max(100).describe("One or more content-only element updates applied in a single page save.")
+    }
   );
 
   registerElementorTool(
     server,
     context,
     "wp_elementor_import",
-    "Import Elementor data",
-    "Replace a page Elementor element tree with a provided array.",
+    "Replace Elementor page data",
+    "Replace the complete Elementor element tree of an existing WordPress page, then refresh the site-wide Elementor cache automatically. This is the only tool for structural replacement; read view data first when a backup is needed.",
     {
       ...elementorBaseShape,
       data: elementorDataSchema
-    }
-  );
-
-  registerElementorTool(
-    server,
-    context,
-    "wp_elementor_structure",
-    "Get Elementor structure",
-    "Read a lightweight Elementor page structure with IDs, element types, widget types, and key settings.",
-    elementorBaseShape
-  );
-
-  registerElementorTool(
-    server,
-    context,
-    "wp_elementor_get_element",
-    "Get Elementor element settings",
-    "Read settings for one Elementor element by ID.",
-    {
-      ...elementorBaseShape,
-      elementId: z.string().min(1).describe("Elementor element ID.")
-    }
-  );
-
-  registerElementorTool(
-    server,
-    context,
-    "wp_elementor_find",
-    "Find Elementor elements",
-    "Search Elementor elements by element type, widget type, text, setting key, or setting value.",
-    {
-      ...elementorBaseShape,
-      widgetType: z.string().optional().describe("Widget type filter."),
-      elementType: z.string().optional().describe("Element type filter."),
-      searchText: z.string().optional().describe("Case-insensitive text search across string settings."),
-      settingKey: z.string().optional().describe("Required setting key."),
-      settingValue: z.string().optional().describe("Required setting value.")
     }
   );
 
@@ -669,7 +662,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
 export function createWpApiMcpServer(context: WpApiToolContext = {}): McpServer {
   const server = new McpServer({
     name: "wp-api",
-    version: "2.0.0"
+    version: "2.1.0"
   });
   registerWpApiTools(server, context);
   return server;

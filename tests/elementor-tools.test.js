@@ -3,18 +3,17 @@ import assert from "node:assert/strict";
 
 import {
   executeElementorTool,
-  exportElementorPage,
-  findElementorPageElements,
-  getElementorElement,
-  getElementorStructure,
   importElementorPage,
-  initializeElementorPage
+  readElementorPage,
+  updateElementorPageContent
 } from "../build/mcp/handlers/elementor-tools.js";
+import { createElementorRevision } from "../build/lib/elementor.js";
 
-/** 构造包含 Elementor 元数据的 WordPress REST 测试实体。 */
+/** 构造包含 Elementor 元数据的 WordPress REST 页面实体。 */
 function elementorEntity(data) {
   return {
     id: 12,
+    type: "page",
     meta: {
       _elementor_data: JSON.stringify(data),
       _elementor_edit_mode: "builder"
@@ -22,151 +21,185 @@ function elementorEntity(data) {
   };
 }
 
-test("initializeElementorPage writes structured MCP data and page settings directly", async () => {
+/** 构造同时包含正文与样式的测试元素树。 */
+function contentTree() {
+  return [{
+    id: "root001",
+    elType: "container",
+    settings: { flex_direction: "column", background_color: "#fff" },
+    elements: [
+      {
+        id: "head001",
+        elType: "widget",
+        widgetType: "heading",
+        settings: { title: "Old heading", title_color: "#000" },
+        elements: []
+      },
+      {
+        id: "text001",
+        elType: "widget",
+        widgetType: "text-editor",
+        settings: { editor: "Body copy" },
+        elements: []
+      }
+    ]
+  }];
+}
+
+/** 验证默认读取只返回可修改正文，并明确告诉 Agent 如何构造局部修改。 */
+test("readElementorPage returns content-only edit targets and guidance", async () => {
   const calls = [];
-  const tree = [{ id: "root001", elType: "container", settings: {}, elements: [] }];
   const client = {
-    /** 返回尚未包含 Elementor 元素的现有页面。 */
-    async request() {
-      return { data: elementorEntity([]), pagination: { total: 0, totalPages: 0 } };
-    },
-    async update(route, id, body) {
-      calls.push({ route, id, body });
-      return elementorEntity(tree);
+    /** 记录页面读取，并返回固定 Elementor 页面。 */
+    async request(route, options) {
+      calls.push({ route, options });
+      return { data: elementorEntity(contentTree()), pagination: { total: 0, totalPages: 0 } };
     }
   };
 
-  const result = await initializeElementorPage(client, {
-    postId: 12,
-    data: tree,
-    pageSettings: { hide_title: "yes" }
-  });
+  const result = await readElementorPage(client, { postId: 12, searchText: "heading" });
 
-  assert.deepEqual(result, {
-    post_id: 12,
-    resource: "pages",
-    initialized: true
-  });
-  assert.deepEqual(calls, [{
-    route: "pages",
-    id: 12,
-    body: {
-      meta: {
-        _elementor_data: JSON.stringify(tree),
-        _elementor_edit_mode: "builder",
-        _elementor_template_type: "wp-page",
-        _elementor_page_settings: { hide_title: "yes" }
-      }
-    }
-  }]);
+  assert.deepEqual(calls, [{ route: "pages/12", options: { query: { context: "edit" } } }]);
+  assert.deepEqual(result.elements, [{ elementId: "head001", settings: { title: "Old heading" } }]);
+  assert.equal(result.view, "content");
+  assert.equal(result.count, 1);
+  assert.equal(result.revision, createElementorRevision(contentTree()));
+  assert.match(result.how_to_update, /wp_elementor_update.*revision.*expectedRevision.*elementId.*title/);
+  assert.doesNotMatch(JSON.stringify(result), /widgetType|title_color|flex_direction/);
 });
 
-test("exportElementorPage parses the REST JSON string in edit context", async () => {
-  const calls = [];
-  const tree = [{ id: "head001", elType: "widget", widgetType: "heading", settings: { title: "Hero" }, elements: [] }];
+/** 验证完整数据只在显式 data 视图下返回，以便覆盖前备份。 */
+test("readElementorPage returns full data only when requested", async () => {
+  const tree = contentTree();
   const client = {
-    async request(route, options) {
-      calls.push({ route, options });
+    /** 返回固定 Elementor 页面。 */
+    async request() {
       return { data: elementorEntity(tree), pagination: { total: 0, totalPages: 0 } };
     }
   };
 
-  const result = await exportElementorPage(client, { postId: 12 });
+  const result = await readElementorPage(client, { postId: 12, view: "data" });
 
-  assert.deepEqual(calls, [{ route: "pages/12", options: { query: { context: "edit" } } }]);
-  assert.deepEqual(result, {
-    post_id: 12,
-    resource: "pages",
-    json: tree
-  });
+  assert.equal(result.view, "data");
+  assert.deepEqual(result.data, tree);
+  assert.equal(result.elements_count, 3);
+  assert.equal(result.revision, createElementorRevision(tree));
+  assert.equal("how_to_update" in result, false);
 });
 
-test("importElementorPage writes a nested tree and reports the recursive count", async () => {
+/** 验证多项正文修改只读取和保存页面一次，并完整保留布局与样式。 */
+test("updateElementorPageContent applies partial changes in one page save", async () => {
   const calls = [];
-  const tree = [{
-    id: "root001",
-    elType: "container",
-    settings: {},
-    elements: [{ id: "head001", elType: "widget", widgetType: "heading", settings: {}, elements: [] }]
-  }];
   const client = {
+    /** 返回修改前的 Elementor 页面。 */
+    async request(route, options) {
+      calls.push({ method: "read", route, options });
+      return { data: elementorEntity(contentTree()), pagination: { total: 0, totalPages: 0 } };
+    },
+    /** 记录局部修改最终执行的唯一页面写入。 */
+    async update(route, id, body) {
+      calls.push({ method: "write", route, id, body });
+      return elementorEntity(JSON.parse(body.meta._elementor_data));
+    },
+    /** 记录页面保存后的 Elementor 全站缓存刷新。 */
+    async requestApiPath(apiPath, options) {
+      calls.push({ method: "cache", apiPath, options });
+      return { data: { success: true }, pagination: { total: 0, totalPages: 0 } };
+    }
+  };
+
+  const result = await updateElementorPageContent(client, {
+    postId: 12,
+    expectedRevision: createElementorRevision(contentTree()),
+    changes: [
+      { elementId: "head001", settings: { title: "New heading" } },
+      { elementId: "text001", settings: { editor: "New body" } }
+    ]
+  });
+
+  assert.equal(result.updated, true);
+  assert.deepEqual(result.changes, [
+    { elementId: "head001", fields: ["title"] },
+    { elementId: "text001", fields: ["editor"] }
+  ]);
+  assert.equal(result.cache_refreshed, true);
+  assert.equal(calls.length, 3);
+  const savedTree = JSON.parse(calls[1].body.meta._elementor_data);
+  assert.equal(savedTree[0].settings.background_color, "#fff");
+  assert.equal(savedTree[0].elements[0].settings.title, "New heading");
+  assert.equal(savedTree[0].elements[0].settings.title_color, "#000");
+  assert.equal(savedTree[0].elements[1].settings.editor, "New body");
+  assert.equal(calls[1].route, "pages");
+  assert.equal(calls[1].id, 12);
+  assert.deepEqual(calls[2], { method: "cache", apiPath: "elementor/v1/cache", options: { method: "DELETE" } });
+});
+
+/** 验证覆盖导入直接替换完整页面树并报告递归元素数量。 */
+test("importElementorPage replaces the complete page tree", async () => {
+  const calls = [];
+  const tree = contentTree();
+  const client = {
+    /** 记录覆盖导入的页面写入。 */
     async update(route, id, body) {
       calls.push({ route, id, body });
       return elementorEntity(tree);
+    },
+    /** 记录覆盖导入后的 Elementor 全站缓存刷新。 */
+    async requestApiPath(apiPath, options) {
+      calls.push({ apiPath, options });
+      return { data: { success: true }, pagination: { total: 0, totalPages: 0 } };
     }
   };
 
   const result = await importElementorPage(client, { postId: 12, data: tree });
 
-  assert.equal(result.elements_count, 2);
+  assert.equal(result.imported, true);
+  assert.equal(result.elements_count, 3);
+  assert.equal(result.cache_refreshed, true);
   assert.equal(calls[0].route, "pages");
-  assert.equal(calls[0].id, 12);
   assert.deepEqual(JSON.parse(calls[0].body.meta._elementor_data), tree);
-  assert.equal("_elementor_page_settings" in calls[0].body.meta, false);
+  assert.deepEqual(calls[1], { apiPath: "elementor/v1/cache", options: { method: "DELETE" } });
 });
 
-test("structure, get-element, and find handlers read without mutating the page", async () => {
-  const calls = [];
-  const tree = [{
-    id: "root001",
-    elType: "container",
-    settings: { flex_direction: "column" },
-    elements: [{
-      id: "head001",
-      elType: "widget",
-      widgetType: "heading",
-      settings: { title: "Hero section", color: "blue" },
-      elements: []
-    }]
-  }];
+/** 验证页面已保存但缓存刷新失败时返回明确的部分成功错误。 */
+test("Elementor writes report cache failures after persistence", async () => {
+  let writes = 0;
   const client = {
-    async request(route, options) {
-      calls.push({ route, options });
-      return { data: elementorEntity(tree), pagination: { total: 0, totalPages: 0 } };
+    /** 返回修改前的 Elementor 页面。 */
+    async request() {
+      return { data: elementorEntity(contentTree()), pagination: { total: 0, totalPages: 0 } };
+    },
+    /** 保存页面数据并记录已经发生的持久化。 */
+    async update(route, id, body) {
+      writes += 1;
+      return elementorEntity(JSON.parse(body.meta._elementor_data));
+    },
+    /** 模拟 Elementor 缓存端点失败。 */
+    async requestApiPath() {
+      throw new Error("cache endpoint unavailable");
     }
   };
 
-  const structure = await getElementorStructure(client, { postId: 12 });
-  const element = await getElementorElement(client, { postId: 12, elementId: "head001" });
-  const found = await findElementorPageElements(client, {
-    postId: 12,
-    widgetType: "heading",
-    searchText: "HERO",
-    settingKey: "title",
-    settingValue: "Hero section"
-  });
-
-  assert.deepEqual(structure.structure, [{
-    id: "root001",
-    elType: "container",
-    settings_summary: { flex_direction: "column" },
-    elements: [{
-      id: "head001",
-      elType: "widget",
-      widgetType: "heading",
-      settings_summary: { title: "Hero section" }
-    }]
-  }]);
-  assert.deepEqual(element, {
-    post_id: 12,
-    resource: "pages",
-    element_id: "head001",
-    elType: "widget",
-    widgetType: "heading",
-    settings: { title: "Hero section", color: "blue" }
-  });
-  assert.equal(found.count, 1);
-  assert.equal(found.matches[0].element_id, "head001");
-  assert.equal(calls.length, 3);
-  assert.equal(calls.every((call) => call.route === "pages/12"), true);
+  await assert.rejects(
+    () => updateElementorPageContent(client, {
+      postId: 12,
+      expectedRevision: createElementorRevision(contentTree()),
+      changes: [{ elementId: "head001", settings: { title: "Saved heading" } }]
+    }),
+    /page data was saved.*cache refresh failed.*endpoint unavailable/
+  );
+  assert.equal(writes, 1);
 });
 
-test("Elementor handlers reject missing elements and invalid MCP input before writes", async () => {
+/** 验证局部修改拒绝布局、样式、不存在元素和资源覆盖，失败时不写页面。 */
+test("Elementor update rejects non-content operations before writing", async () => {
   let writes = 0;
   const client = {
+    /** 返回固定 Elementor 页面。 */
     async request() {
-      return { data: elementorEntity([]), pagination: { total: 0, totalPages: 0 } };
+      return { data: elementorEntity(contentTree()), pagination: { total: 0, totalPages: 0 } };
     },
+    /** 记录所有不应发生的写入。 */
     async update() {
       writes += 1;
       return {};
@@ -174,119 +207,88 @@ test("Elementor handlers reject missing elements and invalid MCP input before wr
   };
 
   await assert.rejects(
-    () => getElementorElement(client, { postId: 12, elementId: "missing" }),
-    /Element not found: missing/
-  );
-  await assert.rejects(() => importElementorPage(client, { postId: 12 }), /data is required/);
-  await assert.rejects(
-    () => importElementorPage(client, { postId: 12, data: "[]" }),
-    /data must be an Elementor element array/
+    () => updateElementorPageContent(client, { postId: 12, expectedRevision: createElementorRevision(contentTree()), changes: [{ elementId: "head001", settings: { title_color: "#fff" } }] }),
+    /not editable/
   );
   await assert.rejects(
-    () => initializeElementorPage(client, { postId: 12, pageSettings: [] }),
-    /pageSettings must be an object/
-  );
-  await assert.rejects(() => exportElementorPage(client, { postId: 0 }), /postId must be a positive integer/);
-  await assert.rejects(
-    () => exportElementorPage(client, { postId: 12, resource: "posts" }),
-    /do not accept resource/
+    () => updateElementorPageContent(client, { postId: 12, expectedRevision: createElementorRevision(contentTree()), changes: [{ elementId: "missing", settings: { title: "New" } }] }),
+    /not found/
   );
   await assert.rejects(
-    () => findElementorPageElements(client, { postId: 12, searchText: 3 }),
-    /searchText must be a string/
+    () => readElementorPage(client, { postId: 12, resource: "posts" }),
+    /pages is always used/
   );
   await assert.rejects(
-    () => executeElementorTool("wp_elementor_unknown", client, { postId: 12 }),
-    /Unknown Elementor MCP tool/
+    () => readElementorPage(client, { postId: 12, view: "data", searchText: "heading" }),
+    /only supported by the content view/
   );
   assert.equal(writes, 0);
 });
 
-test("executeElementorTool dispatches the supported pure MCP tool names", async () => {
+/** 验证页面在读取后发生变化时，局部修改会拒绝旧版本并且不执行写入。 */
+test("Elementor update rejects a stale revision before writing", async () => {
+  let writes = 0;
   const client = {
+    /** 返回已变化的当前 Elementor 页面。 */
     async request() {
-      return { data: elementorEntity([]), pagination: { total: 0, totalPages: 0 } };
+      const tree = contentTree();
+      tree[0].elements[0].settings.title = "Changed elsewhere";
+      return { data: elementorEntity(tree), pagination: { total: 0, totalPages: 0 } };
     },
+    /** 记录并发冲突时不应发生的页面写入。 */
     async update() {
+      writes += 1;
       return {};
     }
   };
 
-  const initResult = await executeElementorTool("wp_elementor_init", client, { postId: 12 });
-  const exportResult = await executeElementorTool("wp_elementor_export", client, { postId: 12 });
+  await assert.rejects(
+    () => updateElementorPageContent(client, {
+      postId: 12,
+      expectedRevision: createElementorRevision(contentTree()),
+      changes: [{ elementId: "head001", settings: { title: "New heading" } }]
+    }),
+    /changed after it was read/
+  );
+  assert.equal(writes, 0);
+});
+
+/** 验证分发器只接受读取、局部修改和覆盖导入三个页面内容工具。 */
+test("executeElementorTool dispatches only the three supported tools", async () => {
+  const client = {
+    /** 返回空 Elementor 页面。 */
+    async request() {
+      return { data: elementorEntity([]), pagination: { total: 0, totalPages: 0 } };
+    },
+    /** 接受测试中的空树覆盖写入。 */
+    async update() {
+      return elementorEntity([]);
+    },
+    /** 接受测试中的全站缓存清理请求。 */
+    async requestApiPath() {
+      return { data: { success: true }, pagination: { total: 0, totalPages: 0 } };
+    }
+  };
+
+  const readResult = await executeElementorTool("wp_elementor_get", client, { postId: 12 });
+  await assert.rejects(
+    () => executeElementorTool("wp_elementor_update", client, { postId: 12, expectedRevision: createElementorRevision([]), changes: [{ elementId: "missing", settings: { title: "New" } }] }),
+    /not found/
+  );
   const importResult = await executeElementorTool("wp_elementor_import", client, { postId: 12, data: [] });
 
-  assert.equal(initResult.initialized, true);
-  assert.deepEqual(exportResult.json, []);
+  assert.equal(readResult.view, "content");
   assert.equal(importResult.imported, true);
+  await assert.rejects(
+    () => executeElementorTool("wp_elementor_export", client, { postId: 12 }),
+    /Unknown Elementor MCP tool/
+  );
 });
 
-/** Elementor 初始化不能覆盖已经存在的元素树，应引导调用方显式使用 import。 */
-test("initializeElementorPage refuses to overwrite an existing page", async () => {
-  let writes = 0;
-  const existingTree = [{ id: "existing", elType: "container", settings: {}, elements: [] }];
-  const client = {
-    /** 返回已经包含 Elementor 元素的页面。 */
-    async request() {
-      return { data: elementorEntity(existingTree), pagination: { total: 0, totalPages: 0 } };
-    },
-    /** 记录所有不应发生的覆盖写入。 */
-    async update() {
-      writes += 1;
-      return {};
-    }
-  };
-
-  await assert.rejects(
-    () => initializeElementorPage(client, { postId: 12 }),
-    /already contains elements.*wp_elementor_import/
-  );
-  assert.equal(writes, 0);
-});
-
-/** Elementor 写入在请求 WordPress 前拒绝畸形节点和超过安全深度的元素树。 */
-test("Elementor handlers bound element shape and tree depth", async () => {
-  let writes = 0;
-  const client = {
-    /** 返回尚未包含 Elementor 元素的现有页面。 */
-    async request() {
-      return { data: elementorEntity([]), pagination: { total: 0, totalPages: 0 } };
-    },
-    /** 记录所有不应发生的远端写入调用。 */
-    async update() {
-      writes += 1;
-      return {};
-    }
-  };
-
-  await assert.rejects(
-    () => importElementorPage(client, {
-      postId: 12,
-      data: [{ id: "broken", elType: "widget", settings: {} }]
-    }),
-    /must have an elements array/
-  );
-
-  let nested = { id: "node100", elType: "container", settings: {}, elements: [] };
-  for (let index = 99; index >= 0; index -= 1) {
-    nested = {
-      id: `node${index}`,
-      elType: "container",
-      settings: {},
-      elements: [nested]
-    };
-  }
-  await assert.rejects(
-    () => initializeElementorPage(client, { postId: 12, data: [nested] }),
-    /maximum tree depth of 100/
-  );
-  assert.equal(writes, 0);
-});
-
-/** Elementor 读取同样拒绝目标站点返回的畸形或无界元素数据。 */
-test("Elementor handlers validate remote element trees before traversal", async () => {
-  const client = {
-    /** 返回缺少必填 settings 的模拟 Elementor 元数据。 */
+/** 验证读取和覆盖导入都会拒绝畸形或超过安全深度的元素树。 */
+test("Elementor handlers validate remote and imported element trees", async () => {
+  const malformedClient = {
+    /** 返回缺少 settings 的畸形远端元素。 */
     async request() {
       return {
         data: elementorEntity([{ id: "broken", elType: "widget", elements: [] }]),
@@ -294,9 +296,43 @@ test("Elementor handlers validate remote element trees before traversal", async 
       };
     }
   };
+  await assert.rejects(() => readElementorPage(malformedClient, { postId: 12 }), /must have a settings object or an empty array/);
 
+  const hiddenMetaClient = {
+    /** 模拟未通过 WordPress REST 注册 Elementor 私有元数据的页面。 */
+    async request() {
+      return { data: { id: 12, type: "page", meta: {} }, pagination: { total: 0, totalPages: 0 } };
+    }
+  };
   await assert.rejects(
-    () => getElementorStructure(client, { postId: 12 }),
-    /must have a settings object/
+    () => readElementorPage(hiddenMetaClient, { postId: 12 }),
+    /not exposed.*show_in_rest/
+  );
+
+  const emptySettingsClient = {
+    /** 返回符合 Elementor 官方格式、使用空 settings 数组的容器。 */
+    async request() {
+      return {
+        data: elementorEntity([{ id: "empty001", elType: "container", settings: [], elements: [] }]),
+        pagination: { total: 0, totalPages: 0 }
+      };
+    }
+  };
+  const emptySettingsResult = await readElementorPage(emptySettingsClient, { postId: 12 });
+  assert.deepEqual(emptySettingsResult.elements, []);
+
+  let nested = { id: "node100", elType: "container", settings: {}, elements: [] };
+  for (let index = 99; index >= 0; index -= 1) {
+    nested = { id: `node${index}`, elType: "container", settings: {}, elements: [nested] };
+  }
+  const noWriteClient = {
+    /** 拒绝所有不应到达的页面写入。 */
+    async update() {
+      throw new Error("Unexpected write");
+    }
+  };
+  await assert.rejects(
+    () => importElementorPage(noWriteClient, { postId: 12, data: [nested] }),
+    /maximum tree depth of 100/
   );
 });

@@ -1,81 +1,107 @@
+import { createHash } from "node:crypto";
+
 /** Elementor 元素 settings 对象。 */
 export type ElementorSettings = Record<string, unknown>;
 
+/** Elementor 原始 settings；官方格式允许未配置元素使用空数组。 */
+export type ElementorRawSettings = ElementorSettings | [];
+
 /** Elementor 元素树节点。 */
 export interface ElementorElement {
-  /** Elementor 7 位十六进制元素 ID。 */
+  /** Elementor 元素 ID。 */
   id: string;
   /** Elementor 元素类型，例如 container 或 widget。 */
   elType: string;
-  /** widget 元素的组件类型，容器通常为 null。 */
+  /** widget 元素的组件类型；仅为兼容原始 Elementor 数据保留。 */
   widgetType?: string | null;
   /** 是否为嵌套容器或内部元素。 */
   isInner?: boolean;
-  /** 当前元素的 Elementor settings。 */
-  settings: ElementorSettings;
+  /** 当前元素的 Elementor settings；未配置时可能是官方格式中的空数组。 */
+  settings: ElementorRawSettings;
   /** 子元素列表。 */
   elements: ElementorElement[];
-  /** 保留 Elementor 未来或站点插件扩展的额外字段。 */
+  /** Elementor 或站点插件扩展的额外字段。 */
   [key: string]: unknown;
 }
 
-/** Elementor 结构摘要节点。 */
-export interface ElementorStructureSummary {
-  /** Elementor 元素 ID。 */
-  id: string;
-  /** Elementor 元素类型。 */
-  elType: string;
-  /** widget 元素的组件类型。 */
-  widgetType?: string;
-  /** 便于阅读的关键 settings 摘要。 */
-  settings_summary?: ElementorSettings;
-  /** 子元素摘要列表。 */
-  elements?: ElementorStructureSummary[];
+/** Agent 可读取和局部修改的单个内容元素。 */
+export interface ElementorEditableContent {
+  /** 局部修改时使用的稳定元素 ID。 */
+  elementId: string;
+  /** 该元素当前存在且允许修改的内容字段。 */
+  settings: ElementorSettings;
 }
 
-/** Elementor 元素搜索条件。 */
-export interface ElementorFindFilters {
-  /** 按 widget 类型过滤。 */
-  widgetType?: string;
-  /** 按元素类型过滤。 */
-  elementType?: string;
-  /** 在字符串 settings 值中搜索的文本。 */
-  searchText?: string;
-  /** 要求存在的 settings key。 */
-  settingKey?: string;
-  /** 要求匹配的 settings 值。 */
-  settingValue?: string;
+/** 单个元素的局部内容修改请求。 */
+export interface ElementorContentChange {
+  /** 要修改的 Elementor 元素 ID。 */
+  elementId: string;
+  /** 只包含本次需要修改的现有内容字段。 */
+  settings: ElementorSettings;
 }
 
-/** Elementor 元素搜索结果。 */
-export interface ElementorFindMatch {
-  /** 匹配元素 ID。 */
-  element_id: string;
-  /** 匹配元素类型。 */
-  elType: string;
-  /** 匹配 widget 类型。 */
-  widgetType: string;
-  /** 前几个可读字符串 settings。 */
-  settings_preview: ElementorSettings;
+/** 已应用的单个元素修改摘要。 */
+export interface ElementorAppliedChange {
+  /** 已修改的 Elementor 元素 ID。 */
+  elementId: string;
+  /** 已修改的顶层内容字段名称。 */
+  fields: string[];
 }
 
 /** Elementor 元数据构造选项。 */
 export interface BuildElementorMetaOptions {
-  /** Elementor 模板类型，例如 wp-page 或 wp-post。 */
+  /** Elementor 模板类型；本项目固定页面写入时使用 wp-page。 */
   templateType?: string;
-  /** Elementor 页面级 settings。 */
-  pageSettings?: ElementorSettings;
 }
 
-/** 结构摘要中保留的 widget settings key。 */
-const SUMMARY_WIDGET_KEYS = ["title", "editor", "text", "image", "link", "html", "header_size"];
+/** 常见重复内容字段；其数组值应整体替换。 */
+const REPEATER_CONTENT_KEYS = new Set(["tabs", "items", "slides", "icon_list", "carousel", "gallery"]);
 
-/** 结构摘要中保留的容器 settings key。 */
-const SUMMARY_CONTAINER_KEYS = ["flex_direction", "content_width", "container_type"];
+/** 明确不属于正文内容的设置名称片段。 */
+const NON_CONTENT_KEY_PARTS = [
+  "align",
+  "animation",
+  "background",
+  "border",
+  "breakpoint",
+  "color",
+  "css",
+  "font",
+  "gap",
+  "height",
+  "hover",
+  "margin",
+  "mobile",
+  "motion",
+  "opacity",
+  "padding",
+  "position",
+  "responsive",
+  "shadow",
+  "size",
+  "spacing",
+  "tablet",
+  "transform",
+  "typography",
+  "width",
+  "z_index"
+];
 
 /** 判断未知值是否为普通对象。 */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 判断 setting 名称是否表达可编辑正文，而不是布局、样式或响应式配置。 */
+export function isElementorContentSettingKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  if (NON_CONTENT_KEY_PARTS.some((part) => normalized.includes(part))) {
+    return false;
+  }
+  if (REPEATER_CONTENT_KEYS.has(normalized)) {
+    return true;
+  }
+  return /(?:^|_)(?:title|text|editor|paragraph|content|description|caption|label|name|job|url|link|image|html|shortcode)$/.test(normalized);
 }
 
 /** 在元素树中查找指定 ID 的元素。 */
@@ -84,154 +110,141 @@ export function findElementById(tree: ElementorElement[], elementId: string): El
     if (element.id === elementId) {
       return element;
     }
-
     const found = findElementById(element.elements ?? [], elementId);
     if (found) {
       return found;
     }
   }
-
   return null;
 }
-
 
 /** 统计元素树中的元素数量。 */
 export function countElements(tree: ElementorElement[]): number {
   return tree.reduce((total, element) => total + 1 + countElements(element.elements ?? []), 0);
 }
 
-/** 简化 Elementor 元素树，保留 ID、类型、widget 类型和关键 settings。 */
-export function simplifyElementorStructure(tree: ElementorElement[]): ElementorStructureSummary[] {
-  return tree.map((element) => {
-    const summary: ElementorStructureSummary = {
-      id: element.id,
-      elType: element.elType
-    };
-
-    if (element.widgetType) {
-      summary.widgetType = element.widgetType;
-    }
-
-    const settingsSummary = extractSettingsSummary(element);
-    if (Object.keys(settingsSummary).length > 0) {
-      summary.settings_summary = settingsSummary;
-    }
-
-    if ((element.elements ?? []).length > 0) {
-      summary.elements = simplifyElementorStructure(element.elements);
-    }
-
-    return summary;
-  });
+/** 为读取到的完整元素树生成并发修改校验值。 */
+export function createElementorRevision(tree: ElementorElement[]): string {
+  return createHash("sha256").update(JSON.stringify(tree)).digest("hex");
 }
 
-/** 从元素 settings 中提取适合展示的少量关键字段。 */
-function extractSettingsSummary(element: ElementorElement): ElementorSettings {
-  const summary: ElementorSettings = {};
-  const settings = element.settings ?? {};
-
-  for (const key of SUMMARY_WIDGET_KEYS) {
-    if (settings[key] !== undefined && settings[key] !== "") {
-      summary[key] = summarizeSettingValue(settings[key]);
-    }
-  }
-
-  if (element.elType === "container") {
-    for (const key of SUMMARY_CONTAINER_KEYS) {
-      if (settings[key] !== undefined && settings[key] !== "") {
-        summary[key] = summarizeSettingValue(settings[key]);
-      }
-    }
-  }
-
-  return summary;
-}
-
-/** 缩短过长的字符串 settings 值。 */
-function summarizeSettingValue(value: unknown): unknown {
-  if (typeof value === "string" && value.length > 100) {
-    return `${value.slice(0, 100)}...`;
-  }
-
-  return value;
-}
-
-/** 根据条件递归搜索 Elementor 元素。 */
-export function findElements(tree: ElementorElement[], filters: ElementorFindFilters = {}): ElementorFindMatch[] {
-  const matches: ElementorFindMatch[] = [];
-  collectElementMatches(tree, filters, matches);
-  return matches;
-}
-
-/** 递归收集符合条件的元素。 */
-function collectElementMatches(
+/** 从完整 Elementor 树中提取 Agent 修改正文所需的元素 ID 和现有内容字段。 */
+export function extractElementorEditableContent(
   tree: ElementorElement[],
-  filters: ElementorFindFilters,
-  matches: ElementorFindMatch[]
+  searchText?: string
+): ElementorEditableContent[] {
+  const result: ElementorEditableContent[] = [];
+  const normalizedSearch = searchText?.trim().toLowerCase() ?? "";
+  collectEditableContent(tree, normalizedSearch, result);
+  return result;
+}
+
+/** 递归收集包含可编辑内容字段并符合可选文本筛选的元素。 */
+function collectEditableContent(
+  tree: ElementorElement[],
+  normalizedSearch: string,
+  result: ElementorEditableContent[]
 ): void {
   for (const element of tree) {
-    if (elementMatchesFilters(element, filters)) {
-      matches.push({
-        element_id: element.id,
-        elType: element.elType,
-        widgetType: element.widgetType ?? "",
-        settings_preview: buildSettingsPreview(element.settings ?? {})
-      });
-    }
-
-    collectElementMatches(element.elements ?? [], filters, matches);
-  }
-}
-
-/** 判断单个元素是否符合搜索条件。 */
-function elementMatchesFilters(element: ElementorElement, filters: ElementorFindFilters): boolean {
-  if (filters.elementType && element.elType !== filters.elementType) {
-    return false;
-  }
-
-  if (filters.widgetType && element.widgetType !== filters.widgetType) {
-    return false;
-  }
-
-  if (filters.settingKey) {
-    if (!(filters.settingKey in (element.settings ?? {}))) {
-      return false;
-    }
-
-    if (filters.settingValue !== undefined && String(element.settings[filters.settingKey]) !== filters.settingValue) {
-      return false;
-    }
-  }
-
-  if (filters.searchText) {
-    const search = filters.searchText.toLowerCase();
-    const found = Object.values(element.settings ?? {}).some((value) =>
-      typeof value === "string" && value.toLowerCase().includes(search)
+    const elementSettings = isObject(element.settings) ? element.settings : {};
+    const settings = Object.fromEntries(
+      Object.entries(elementSettings).filter(([key, value]) =>
+        isElementorContentSettingKey(key) && value !== undefined && value !== ""
+      )
     );
-
-    if (!found) {
-      return false;
+    if (
+      Object.keys(settings).length > 0
+      && (normalizedSearch === "" || JSON.stringify(settings).toLowerCase().includes(normalizedSearch))
+    ) {
+      result.push({ elementId: element.id, settings });
     }
+    collectEditableContent(element.elements ?? [], normalizedSearch, result);
   }
-
-  return true;
 }
 
-/** 构造搜索结果中的 settings 预览。 */
-function buildSettingsPreview(settings: ElementorSettings): ElementorSettings {
-  const preview: ElementorSettings = {};
+/** 判断两个 JSON 值是否具有可安全局部替换的相同顶层类型。 */
+function hasCompatibleJsonType(current: unknown, incoming: unknown): boolean {
+  if (Array.isArray(current) || Array.isArray(incoming)) {
+    return Array.isArray(current) && Array.isArray(incoming);
+  }
+  if (isObject(current) || isObject(incoming)) {
+    return isObject(current) && isObject(incoming);
+  }
+  return typeof current === typeof incoming;
+}
 
-  for (const [key, value] of Object.entries(settings)) {
-    if (Object.keys(preview).length >= 5) {
-      break;
-    }
-
-    if (typeof value === "string" && value !== "") {
-      preview[key] = summarizeSettingValue(value);
-    }
+/** 深合并内容对象并整体替换数组或标量，避免局部链接、图片更新丢失同级值。 */
+function mergeContentValue(current: unknown, incoming: unknown, fieldPath: string): unknown {
+  if (!hasCompatibleJsonType(current, incoming)) {
+    throw new TypeError(`${fieldPath} must keep the value type returned by wp_elementor_get.`);
+  }
+  if (!isObject(current) || !isObject(incoming)) {
+    return incoming;
   }
 
-  return preview;
+  const merged: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(incoming)) {
+    merged[key] = key in current
+      ? mergeContentValue(current[key], value, `${fieldPath}.${key}`)
+      : value;
+  }
+  return merged;
+}
+
+/**
+ * 校验并应用一批局部正文修改。
+ * 每个元素只能出现一次，且只能修改读取工具会暴露的现有内容字段。
+ */
+export function applyElementorContentChanges(
+  tree: ElementorElement[],
+  changes: ElementorContentChange[]
+): ElementorAppliedChange[] {
+  const seenElementIds = new Set<string>();
+  const prepared: Array<{
+    /** 待更新的原始元素引用。 */
+    element: ElementorElement;
+    /** 校验完成后的新 settings。 */
+    settings: ElementorSettings;
+    /** 本次修改的字段名称。 */
+    fields: string[];
+  }> = [];
+
+  for (const change of changes) {
+    if (seenElementIds.has(change.elementId)) {
+      throw new Error(`Duplicate Elementor element change: ${change.elementId}`);
+    }
+    seenElementIds.add(change.elementId);
+    const element = findElementById(tree, change.elementId);
+    if (!element) {
+      throw new Error(`Elementor element not found: ${change.elementId}`);
+    }
+
+    const fields = Object.keys(change.settings);
+    if (fields.length === 0) {
+      throw new Error(`Elementor change settings must not be empty: ${change.elementId}`);
+    }
+    if (!isObject(element.settings)) {
+      throw new Error(`Elementor element has no editable content settings: ${change.elementId}`);
+    }
+    const currentSettings = element.settings;
+    const nextSettings: ElementorSettings = { ...currentSettings };
+    for (const key of fields) {
+      if (!isElementorContentSettingKey(key) || !(key in currentSettings)) {
+        throw new Error(`Elementor content field is not editable or does not exist: ${change.elementId}.${key}`);
+      }
+      nextSettings[key] = mergeContentValue(
+        currentSettings[key],
+        change.settings[key],
+        `${change.elementId}.${key}`
+      );
+    }
+    prepared.push({ element, settings: nextSettings, fields });
+  }
+
+  for (const update of prepared) {
+    update.element.settings = update.settings;
+  }
+  return prepared.map((update) => ({ elementId: update.element.id, fields: update.fields }));
 }
 
 /** 将 REST meta 中的 `_elementor_data` 解析为 Elementor 元素数组。 */
@@ -239,56 +252,31 @@ export function parseElementorData(value: unknown): ElementorElement[] {
   if (Array.isArray(value)) {
     return value as ElementorElement[];
   }
-
   if (typeof value !== "string" || value.trim() === "") {
     return [];
   }
-
   const parsed = JSON.parse(value) as unknown;
-  return Array.isArray(parsed) ? parsed as ElementorElement[] : [];
+  if (!Array.isArray(parsed)) {
+    throw new Error("Elementor _elementor_data must contain a JSON array.");
+  }
+  return parsed as ElementorElement[];
 }
 
-/** 从 WordPress REST 实体中读取 Elementor 元素树。 */
+/** 从 WordPress REST 页面实体中读取 Elementor 元素树。 */
 export function readElementorDataFromEntity(entity: unknown): ElementorElement[] {
-  if (!isObject(entity) || !isObject(entity.meta)) {
-    return [];
+  if (
+    !isObject(entity)
+    || !isObject(entity.meta)
+    || !Object.prototype.hasOwnProperty.call(entity.meta, "_elementor_data")
+  ) {
+    throw new Error(
+      "Elementor _elementor_data is not exposed by the pages REST response; register this private meta with show_in_rest before using Elementor tools."
+    );
   }
-
   return parseElementorData(entity.meta._elementor_data);
 }
 
-/** 从 Elementor 默认 Kit 列表响应中读取第一个有效的正整数 ID。 */
-export function readDefaultKitId(entities: unknown): number {
-  if (!Array.isArray(entities) || !isObject(entities[0])) {
-    throw new Error("Default Elementor Kit was not found.");
-  }
-
-  const id = entities[0].id;
-  if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) {
-    throw new Error("Default Elementor Kit was not found.");
-  }
-
-  return id;
-}
-
-/** 从 WordPress REST 实体中安全读取 Elementor 页面级设置。 */
-export function readElementorPageSettings(entity: unknown): ElementorSettings {
-  if (!isObject(entity) || !isObject(entity.meta) || !isObject(entity.meta._elementor_page_settings)) {
-    return {};
-  }
-
-  return entity.meta._elementor_page_settings;
-}
-
-/** 对当前 Elementor 页面设置和更新值执行顶层浅合并。 */
-export function mergeElementorPageSettings(
-  current: ElementorSettings,
-  updates: ElementorSettings
-): ElementorSettings {
-  return { ...current, ...updates };
-}
-
-/** 构造写回 WordPress REST API 的 Elementor meta 请求体。 */
+/** 构造写回 WordPress 页面 REST API 的 Elementor meta 请求体。 */
 export function buildElementorMeta(
   data: ElementorElement[],
   options: BuildElementorMetaOptions = {}
@@ -297,14 +285,8 @@ export function buildElementorMeta(
     _elementor_data: JSON.stringify(data),
     _elementor_edit_mode: "builder"
   };
-
   if (options.templateType) {
     meta._elementor_template_type = options.templateType;
   }
-
-  if (options.pageSettings !== undefined) {
-    meta._elementor_page_settings = options.pageSettings;
-  }
-
   return { meta };
 }

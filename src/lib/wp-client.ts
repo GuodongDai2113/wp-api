@@ -3,6 +3,8 @@ import { lookup as lookupHostname } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, extname } from "node:path";
 
+import { prepareMediaImage } from "./image-compression.js";
+
 /** 单次 WordPress 请求默认允许等待的最长时间。 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -92,9 +94,9 @@ export interface UploadMediaOptions {
   caption?: string;
   /** 写入 WordPress 媒体库的描述。 */
   description?: string;
-  /** 覆盖根据文件扩展名推断出的 MIME 类型。 */
+  /** 覆盖根据文件扩展名推断出的源 MIME 类型；JPEG/PNG 转换后固定使用 image/webp。 */
   contentType?: string;
-  /** 覆盖上传时发送给 WordPress 的文件名。 */
+  /** 覆盖上传时发送给 WordPress 的文件名；JPEG/PNG 转换后扩展名固定为 .webp。 */
   filename?: string;
 }
 
@@ -933,20 +935,21 @@ export class WordPressClient {
     return result.data;
   }
 
-  /** 从本地路径读取文件，并上传到 WordPress 媒体库。 */
+  /** 从本地路径读取图片，按需压缩为 WebP 后上传到 WordPress 媒体库。 */
   async uploadMediaFromFile<T = unknown>(filePath: string, options: UploadMediaOptions = {}): Promise<T> {
     const filename = options.filename ?? basename(filePath);
     const inferredContentType = inferImageContentType(filePath);
     inferImageContentType(filename);
     const contentType = validateMediaContentType(options.contentType, inferredContentType);
     const fileBytes = await readLocalFileWithinLimit(filePath, this.maxMediaFileBytes, "Media file");
+    const preparedImage = await prepareMediaImage(fileBytes, filename, inferredContentType);
     const result = await this.requestApiPathWithRawBody<T>("wp/v2/media", {
       method: "POST",
       headers: {
-        "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(filename)}"`
+        "Content-Type": preparedImage.convertedToWebp ? preparedImage.contentType : contentType,
+        "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(preparedImage.filename)}"`
       },
-      body: fileBytes as BodyInit
+      body: preparedImage.bytes as BodyInit
     });
     const metadataBody = buildMediaMetadataBody(options);
 

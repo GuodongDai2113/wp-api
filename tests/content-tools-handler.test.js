@@ -72,6 +72,28 @@ test("content handler resolves contentFile and converts Gutenberg content", asyn
   assert.match(calls[0].body.content, /<p>File body<\/p>/);
 });
 
+/** 验证资源写入路径会提交清理后的 Gutenberg 内容，而不会把活动 HTML 传给 WordPress。 */
+test("content handler sanitizes active HTML before Gutenberg writes", async () => {
+  const calls = [];
+  const client = {
+    /** 记录资源创建请求，以便确认最终传给 WordPress 的正文已经完成安全清理。 */
+    async create(route, body) {
+      calls.push({ route, body });
+      return { id: 18, ...body };
+    }
+  };
+
+  await createResource(client, {
+    resource: "posts",
+    content: '<p onclick="alert(1)"><a href="javascript:alert(2)">Unsafe</a><a href="/safe">Safe</a></p>',
+    gutenberg: true
+  });
+
+  assert.equal(calls[0].route, "posts");
+  assert.doesNotMatch(calls[0].body.content, /onclick|javascript:/i);
+  assert.match(calls[0].body.content, /<a>Unsafe<\/a><a href="\/safe">Safe<\/a>/);
+});
+
 /** 验证资源更新保留空字符串、0 和空数组所表达的显式清空操作。 */
 test("content handler preserves explicit clearing values", async () => {
   const calls = [];

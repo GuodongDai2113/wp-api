@@ -1,6 +1,6 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 32 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
+`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 29 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
 
 ## 1. 安装和启动入口
 
@@ -165,7 +165,7 @@ wp-api-config
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 32 个 MCP 工具
+## 5. 29 个 MCP 工具
 
 ### 5.1 Client（2 个）
 
@@ -180,20 +180,20 @@ Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `w
 
 | 工具 | 必填输入 | 可选输入 | 说明 |
 | --- | --- | --- | --- |
-| `wp_structure_get` | 无 | `structure` | 省略时列出结构目录；指定名称时返回字段结构、MCP 工具、响应结构、示例和注意事项；纯本地，不需要 client |
-| `wp_api_schema` | 无 | `apiPath`、`search`、`offset`、`limit`、`detail`、通用连接字段 | 省略 `apiPath` 时返回 `/wp-json/` 路由摘要，默认最多 50 条；传入具体路径时以 `OPTIONS` 读取实时接口定义；`detail: "full"` 返回 WordPress 原始完整响应 |
+| `wp_structure_get` | 无 | `structure`、`section` | 省略结构时列目录；指定结构后默认返回概览，也可只取 `write`、`response` 或 `example`；`full` 返回完整兼容结构；纯本地，不需要 client |
+| `wp_api_schema` | 无 | `apiPath`、`search`、`offset`、`limit`、`detail`、通用连接字段 | 根路径返回分页路由摘要；具体路径以 `OPTIONS` 读取实时定义后默认压缩为方法、参数约束和字段；`detail: "full"` 返回原始响应 |
 
 `wp_structure_get` 支持：
 
 ```text
-post | page | product | category | product-category
-media | seo-meta | elementor-page | elementor-element
+post | page | product | category | product-category | product-tag
+media | seo-meta | elementor-page
 ```
 
-推荐 Agent 先调用本地结构目录理解 MCP 字段和标准示例，再调用 `wp_api_schema` 检查目标站点当前插件实际注册的 REST schema。例如：
+Agent 已能从工具输入 schema 看到通用字段，因此不必先列目录。应直接请求任务需要的最小片段；只有插件动态字段无法由本地目录确定时，再调用 `wp_api_schema`。例如：
 
 ```json
-{ "structure": "elementor-page" }
+{ "structure": "elementor-page", "section": "write" }
 ```
 
 ```json
@@ -206,7 +206,7 @@ media | seo-meta | elementor-page | elementor-element
 { "search": "jelly-form/v1", "offset": 0, "limit": 20 }
 ```
 
-根路由摘要包含 `namespaces`、轻量 `routes`、`total`、`offset`、`limit` 和 `hasMore`。大型工具结果只在 `structuredContent.result` 中保留完整数据，文本内容会改为大小提示，避免把同一份 JSON 重复传输。
+根路由摘要包含 `namespaces`、轻量 `routes`、`total`、`offset`、`limit` 和 `hasMore`；具体路径摘要只保留 `methods`、各 endpoint 的必要参数约束和响应 `fields`。结构查询和 Elementor 读取结果只在 `structuredContent.result` 中保留一份，文本内容仅提供定位提示，避免重复序列化到 Agent 上下文。
 
 ### 5.3 WordPress 资源（5 个）
 
@@ -241,7 +241,7 @@ posts | pages | products | categories | product-categories | product-tags
 
 - `title`, `slug`, `status`, `excerpt`
 - `content` 或 `contentFile`；两者同时存在时 `content` 优先
-- `gutenberg`：将解析后的 HTML 转换为 Gutenberg 区块标记
+- `gutenberg`：先按标签、属性和 WordPress URL 协议允许列表清理解析后的 HTML，再转换为 Gutenberg 区块标记；事件属性、内联样式、活动协议和嵌入内容不会保留
 - `featuredMedia`：非负附件 ID，`0` 表示清空
 - `categories`：文章分类正整数 ID 数组，`[]` 表示清空
 - `productCategories`：Jelly Catalog 产品分类正整数 ID 数组，映射为 REST `product_cat`
@@ -329,22 +329,37 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 - `description`
 - 通用连接字段
 
-允许的位图扩展名为 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。上传成功后，如果提供了附件元数据，服务会再更新媒体实体。
+允许的位图扩展名为 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会先在内存中自动校正 EXIF 方向、按参考插件的尺寸阈值缩放，再以质量 85 编码为 WebP；正方形大图缩至 800×800，任一边达到 2000 或 4000 像素时分别缩至 80% 或 50%。GIF、AVIF 和已有 WebP 保持原样，避免动画丢失和重复有损压缩。转换完成后才会发出上传请求，且不会改写源文件或创建临时图片。上传成功后，如果提供了附件元数据，服务会再更新媒体实体。
 
-### 5.6 Elementor（6 个）
+### 5.6 Elementor 页面正文（3 个）
 
-Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工具都要求正整数 `postId`，并支持通用连接字段。
+Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工具都要求正整数 `postId` 并支持通用连接字段；不提供部件创建、布局、样式或页面设置能力。目标站点必须把私有页面 meta `_elementor_data` 以 `show_in_rest` 注册并在写入响应中返回；站点侧桥接还应通过 Elementor document 层保存，或主动失效其生成数据与元素缓存。REST meta 集成缺失时工具会明确失败，避免隐藏 meta 被误判为空页面。
 
 | 工具 | 额外输入 | 说明 |
 | --- | --- | --- |
-| `wp_elementor_init` | `data?`, `pageSettings?` | 仅当现有元素树为空时初始化 Elementor meta；未传 `data` 时写入空元素树 |
-| `wp_elementor_export` | 无 | 返回完整原始元素树 `json` |
-| `wp_elementor_import` | `data` | 用结构化数组整体替换元素树 |
-| `wp_elementor_structure` | 无 | 返回 ID、元素类型、widget 类型和关键 setting 的精简树 |
-| `wp_elementor_get_element` | `elementId` | 返回单个元素的完整 settings |
-| `wp_elementor_find` | `widgetType?`, `elementType?`, `searchText?`, `settingKey?`, `settingValue?` | 所有已提供条件按“且”匹配 |
+| `wp_elementor_get` | `view?`, `searchText?` | 返回当前页面 `revision`；默认附带 `elementId` 和可修改正文 settings，`searchText` 可定位旧文案；仅 `view: "data"` 返回完整树 |
+| `wp_elementor_update` | `expectedRevision`, `changes` | 校验最新读取版本后按 `elementId` 合并已有正文字段；最多 100 个元素、一次保存，并自动刷新 Elementor 全站缓存 |
+| `wp_elementor_import` | `data` | 整体覆盖完整元素树，空数组会清空 Elementor 页面内容；保存后自动刷新 Elementor 全站缓存 |
 
-`data` 必须是 Elementor 元素对象数组，`pageSettings` 必须是对象。init 会先读取页面并拒绝覆盖非空元素树；import 会整体覆盖页面的 Elementor 元数据，调用前应先用 export 备份当前元素树。
+修改标题时先读取旧内容：
+
+```json
+{ "postId": 20, "searchText": "旧标题" }
+```
+
+读取结果会返回 `revision` 以及类似 `{ "elementId": "a1b2c3d4", "settings": { "title": "旧标题" } }` 的元素，随后回传版本并只发送变化字段：
+
+```json
+{
+  "postId": 20,
+  "expectedRevision": "<读取结果中的 revision>",
+  "changes": [
+    { "elementId": "a1b2c3d4", "settings": { "title": "新标题" } }
+  ]
+}
+```
+
+局部修改要求值类型与读取结果一致。对象字段会深合并，数组字段整体替换；这样修改链接 URL 时不会意外删除同一链接对象中的其它值。页面在读取后已被其他编辑器修改时，过期的 `expectedRevision` 会被拒绝。完整覆盖前可先读取 `{ "postId": 20, "view": "data" }` 作为备份。
 
 ### 5.7 插件、主题与本地打包（8 个）
 

@@ -24,9 +24,12 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   });
 
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 32);
+  assert.equal(tools.tools.length, 29);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_add"), false);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_get"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_cache_clear"), false);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_read"), false);
   assert.deepEqual(tools.tools.find((tool) => tool.name === "wp_resource_delete").annotations, {
     readOnlyHint: false,
     destructiveHint: true,
@@ -42,6 +45,14 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   assert.deepEqual(success.structuredContent, {
     result: { activeClient: null, clients: [] }
   });
+
+  const compactStructure = await client.callTool({
+    name: "wp_structure_get",
+    arguments: { structure: "product-category", section: "write" }
+  });
+  assert.equal(compactStructure.content[0].text, "Compact result is available in structuredContent.result.\n");
+  assert.equal(compactStructure.structuredContent.result.section, "write");
+  assert.equal(compactStructure.content[0].text.includes("category_applications"), false);
 
   const failure = await client.callTool({
     name: "wp_resource_get",

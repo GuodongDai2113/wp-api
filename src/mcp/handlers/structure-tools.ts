@@ -5,19 +5,27 @@ export const WP_STRUCTURE_NAMES = [
   "product",
   "category",
   "product-category",
+  "product-tag",
   "media",
   "seo-meta",
-  "elementor-page",
-  "elementor-element"
+  "elementor-page"
 ] as const;
 
 /** 可通过本地结构目录查询的结构名称联合类型。 */
 export type WpStructureName = typeof WP_STRUCTURE_NAMES[number];
 
+/** 本地结构定义可按需返回的片段名称。 */
+export const WP_STRUCTURE_SECTIONS = ["overview", "write", "response", "example", "full"] as const;
+
+/** 本地结构定义片段名称联合类型。 */
+export type WpStructureSection = typeof WP_STRUCTURE_SECTIONS[number];
+
 /** 本地结构目录工具接收的输入。 */
 export interface StructureGetInput {
   /** 要查询的结构名称；省略时返回全部可用结构摘要。 */
   structure?: string;
+  /** 要返回的最小结构片段；默认只返回概览。 */
+  section?: string;
 }
 
 /** 单个结构的稳定说明。 */
@@ -50,6 +58,24 @@ export interface StructureSummary {
   title: string;
   /** 可用于查询目标站点实时定义的 REST 路径。 */
   remoteSchemaPath: string | null;
+}
+
+/** 单个结构默认返回的轻量概览。 */
+export interface StructureOverview extends StructureSummary {
+  /** 结构用途和适用边界。 */
+  description: string;
+  /** 使用该结构时必须注意的少量关键约束。 */
+  notes: string[];
+}
+
+/** 单个按需结构片段的稳定包装。 */
+export interface StructureSectionResult {
+  /** 结构目录中的唯一名称。 */
+  name: WpStructureName;
+  /** 当前返回的结构片段名称。 */
+  section: Exclude<WpStructureSection, "overview" | "full">;
+  /** 片段对应的字段结构或调用示例。 */
+  value: Record<string, unknown>;
 }
 
 /** 构造 WordPress 内容资源共用的响应字段定义。 */
@@ -158,7 +184,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "WordPress page",
       description: "Standard hierarchical WordPress page. Elementor tools also operate on this resource through page meta.",
       remoteSchemaPath: "wp/v2/pages",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_elementor_init", "wp_elementor_export", "wp_elementor_import", "wp_elementor_structure", "wp_elementor_get_element", "wp_elementor_find"],
+      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
       writeShape: {
         ...contentWrite,
         resource: "required literal pages",
@@ -280,14 +306,42 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       },
       notes: ["Deletion requires force=true.", "Use empty strings, empty arrays, 0, or string 0 according to each field's declared clearing value."]
     },
+    "product-tag": {
+      name: "product-tag",
+      title: "Jelly Catalog product tag (product_tag)",
+      description: "Non-hierarchical Jelly Catalog product_tag taxonomy assigned to catalog products.",
+      remoteSchemaPath: "wp/v2/product_tag",
+      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete"],
+      writeShape: {
+        resource: "required literal product-tags",
+        id: "required positive integer for update/get/delete; omit for create",
+        name: "string; required when creating a term",
+        slug: "string",
+        description: "string",
+        meta: "object; only registered REST term meta fields are writable",
+        force: "delete only; must be true because taxonomy terms have no trash"
+      },
+      responseShape: {
+        id: "integer; term ID",
+        count: "integer; assigned product count",
+        description: "string",
+        link: "string; public archive URL",
+        name: "string",
+        slug: "string",
+        taxonomy: "literal product_tag",
+        meta: "object; registered term meta fields"
+      },
+      example: { resource: "product-tags", name: "Stainless Steel", slug: "stainless-steel" },
+      notes: ["Deletion requires force=true.", "Product tags do not accept a parent field."]
+    },
     media: {
       name: "media",
       title: "WordPress media attachment",
-      description: "WordPress media library attachment created by uploading a local bitmap through wp_media_upload.",
+      description: "WordPress media attachment uploaded from a local bitmap; JPEG and PNG sources are converted to WebP before upload.",
       remoteSchemaPath: "wp/v2/media",
       mcpTools: ["wp_media_upload", "wp_api_schema"],
       writeShape: {
-        filePath: "required string; local .avif, .gif, .jpeg, .jpg, .png, or .webp path",
+        filePath: "required string; local .avif, .gif, .jpeg, .jpg, .png, or .webp path; JPEG/PNG upload as WebP",
         title: "string",
         altText: "string; mapped to REST alt_text",
         caption: "string",
@@ -309,7 +363,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
         source_url: "string; uploaded file URL"
       },
       example: { filePath: "C:/content/product.jpg", title: "Product front view", altText: "Product front view" },
-      notes: ["The MCP tool intentionally rejects SVG and non-bitmap files.", "Upload first, then reuse the returned id in content or taxonomy writes."]
+      notes: ["JPEG and PNG are converted in memory to quality-85 WebP before any network request.", "GIF, AVIF, and existing WebP remain unchanged.", "The MCP tool intentionally rejects SVG and non-bitmap files.", "Upload first, then reuse the returned id in content or taxonomy writes."]
     },
     "seo-meta": {
       name: "seo-meta",
@@ -336,64 +390,27 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     },
     "elementor-page": {
       name: "elementor-page",
-      title: "Elementor page document",
-      description: "Page-level Elementor document stored in WordPress page meta and manipulated through dedicated Elementor tools.",
+      title: "Elementor page content",
+      description: "Content-only reading and partial editing plus explicit full replacement for existing WordPress pages; writes refresh Elementor caches automatically.",
       remoteSchemaPath: "wp/v2/pages",
-      mcpTools: ["wp_elementor_init", "wp_elementor_export", "wp_elementor_import", "wp_elementor_structure", "wp_elementor_get_element", "wp_elementor_find"],
+      mcpTools: ["wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
       writeShape: {
         postId: "required positive WordPress page ID",
-        data: "ElementorElement[]; required for import and optional for init",
-        pageSettings: "object; optional for init",
-        storedMeta: {
-          _elementor_data: "JSON string containing ElementorElement[]",
-          _elementor_edit_mode: "string elementor",
-          _elementor_template_type: "string such as wp-page",
-          _elementor_page_settings: "object"
-        }
+        read: "view content by default; optional searchText filters editable values; view data returns a full backup",
+        update: "expectedRevision:string plus changes:{elementId:string,settings:object}[]; copy the revision, element IDs and setting keys from the latest content read result",
+        import: "data:ElementorElement[]; replaces the complete page element tree"
       },
       responseShape: {
-        export: "ElementorElement[]",
-        structure: "lightweight recursive nodes with id, elType, widgetType, settings summary, and elements",
-        getElement: "one full ElementorElement including settings and child elements",
-        find: "matching elements with IDs, types, settings, and paths"
+        read: "revision plus content elements with elementId and editable settings, or the complete data tree when view=data",
+        update: "updated=true, cache_refreshed=true, plus changed element IDs and field names",
+        import: "imported=true, cache_refreshed=true, plus recursive element count"
       },
       example: {
         postId: 20,
-        data: [{ id: "a1b2c3d4", elType: "container", settings: {}, elements: [] }],
-        pageSettings: {}
+        expectedRevision: "<revision from wp_elementor_get>",
+        changes: [{ elementId: "a1b2c3d4", settings: { title: "New heading" } }]
       },
-      notes: ["Use export before import because import replaces the complete element tree.", "Use init only when the page has no existing Elementor elements.", "Do not send _elementor_data directly through wp_resource_update; use the dedicated Elementor tools."]
-    },
-    "elementor-element": {
-      name: "elementor-element",
-      title: "Elementor element tree node",
-      description: "Recursive node used in Elementor page data for containers, sections, columns, and widgets.",
-      remoteSchemaPath: null,
-      mcpTools: ["wp_elementor_init", "wp_elementor_import", "wp_elementor_export", "wp_elementor_get_element", "wp_elementor_find"],
-      writeShape: {
-        id: "required non-empty Elementor element ID; normally 8 lowercase hexadecimal characters",
-        elType: "required string; commonly container, section, column, or widget",
-        widgetType: "string; required for widget nodes, for example heading, text-editor, image, or button",
-        settings: "object; widget- or container-specific settings",
-        elements: "ElementorElement[]; recursive child nodes",
-        isInner: "optional boolean"
-      },
-      responseShape: {
-        id: "string",
-        elType: "string",
-        widgetType: "string when the node is a widget",
-        settings: "object",
-        elements: "recursive ElementorElement[]",
-        isInner: "optional boolean"
-      },
-      example: {
-        id: "b2c3d4e5",
-        elType: "widget",
-        widgetType: "heading",
-        settings: { title: "Hello world", header_size: "h2" },
-        elements: []
-      },
-      notes: ["Settings are widget-specific; inspect an existing element with export/get-element before constructing complex widgets.", "Element IDs must be unique within the page tree."]
+      notes: ["Call wp_elementor_get before update and copy its revision, the returned elementId, and only changed setting keys.", "A stale expectedRevision is rejected to avoid overwriting a newer Elementor edit.", "Import replaces the full page tree; use get with view=data first when a backup is required.", "Update and import automatically clear the site-wide Elementor cache after the page data is verified.", "All three tools only write content through the WordPress pages route; cache refresh uses Elementor's DELETE elementor/v1/cache endpoint.", "The target site must expose _elementor_data through REST."]
     }
   };
 }
@@ -406,9 +423,19 @@ function isWpStructureName(value: string): value is WpStructureName {
   return (WP_STRUCTURE_NAMES as readonly string[]).includes(value);
 }
 
-/** 查询本地结构目录；省略名称时返回可进一步查询的结构列表。 */
-export function getWpStructure(input: StructureGetInput = {}): StructureDefinition | { structures: StructureSummary[] } {
+/** 判断字符串是否是受支持的结构片段名称。 */
+function isWpStructureSection(value: string): value is WpStructureSection {
+  return (WP_STRUCTURE_SECTIONS as readonly string[]).includes(value);
+}
+
+/** 查询本地结构目录；默认只返回概览，并允许按需获取写入、响应、示例或完整定义。 */
+export function getWpStructure(
+  input: StructureGetInput = {}
+): StructureDefinition | StructureOverview | StructureSectionResult | { structures: StructureSummary[] } {
   if (input.structure === undefined) {
+    if (input.section !== undefined) {
+      throw new TypeError("section requires a structure name.");
+    }
     return {
       structures: WP_STRUCTURE_NAMES.map((name) => ({
         name,
@@ -420,5 +447,33 @@ export function getWpStructure(input: StructureGetInput = {}): StructureDefiniti
   if (typeof input.structure !== "string" || !isWpStructureName(input.structure)) {
     throw new Error(`Unknown structure: ${String(input.structure)}. Supported structures: ${WP_STRUCTURE_NAMES.join(", ")}.`);
   }
-  return STRUCTURE_CATALOG[input.structure];
+  if (input.section !== undefined && (typeof input.section !== "string" || !isWpStructureSection(input.section))) {
+    throw new TypeError(`Unknown structure section: ${String(input.section)}. Supported sections: ${WP_STRUCTURE_SECTIONS.join(", ")}.`);
+  }
+
+  const definition = STRUCTURE_CATALOG[input.structure];
+  const section = input.section ?? "overview";
+  if (section === "full") {
+    return definition;
+  }
+  if (section === "overview") {
+    return {
+      name: definition.name,
+      title: definition.title,
+      description: definition.description,
+      remoteSchemaPath: definition.remoteSchemaPath,
+      notes: definition.notes
+    };
+  }
+
+  const values = {
+    write: definition.writeShape,
+    response: definition.responseShape,
+    example: definition.example
+  } satisfies Record<Exclude<WpStructureSection, "overview" | "full">, Record<string, unknown>>;
+  return {
+    name: definition.name,
+    section,
+    value: values[section]
+  };
 }

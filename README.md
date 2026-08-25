@@ -106,7 +106,7 @@ All remote tools accept optional `client` and `siteUrl` fields. `client` selects
 
 ## Tools
 
-The server exposes exactly 32 tools.
+The server exposes exactly 29 tools.
 
 ### Client configuration (2)
 
@@ -115,8 +115,8 @@ The server exposes exactly 32 tools.
 
 ### Structure and REST schema discovery (2)
 
-- `wp_structure_get` — query stable usage structures for `post`, `page`, `product`, `category`, `product-category`, `media`, `seo-meta`, `elementor-page`, or `elementor-element`; omit `structure` to list the catalog. This local tool does not require a saved WordPress client.
-- `wp_api_schema` — omit `apiPath` to read a compact, searchable, paginated `/wp-json/` route summary, or pass a relative path such as `wp/v2/product` to read its live `OPTIONS` schema. Root summaries default to 50 routes and accept `search`, `offset`, and `limit`; use `detail: "full"` only when the original complete WordPress response is required.
+- `wp_structure_get` — query stable usage guidance for WordPress, Jelly Catalog, media, SEO, and Elementor. Request `section: "write"`, `"response"`, or `"example"` directly to receive only that fragment; the default is an overview and `"full"` is the compatibility escape hatch. The local catalog includes `product-tag` and requires no saved client.
+- `wp_api_schema` — omit `apiPath` for a compact, searchable, paginated `/wp-json/` route index, or pass a path such as `wp/v2/product` for a compact live summary of methods, argument constraints, and fields. Use `detail: "full"` only when the summary omits a required constraint.
 
 ### WordPress resources (5)
 
@@ -147,18 +147,17 @@ Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML mar
 - `wp_seo_update` — update or explicitly clear Rank Math REST meta fields.
 - `wp_post_link` — list, add, update, or remove links in editable raw post content.
 - `wp_post_content_replace` — replace every exact text occurrence in a post.
-- `wp_media_upload` — upload a local bitmap and optionally set attachment metadata.
+- `wp_media_upload` — compress a local JPEG/PNG to WebP before upload, or upload GIF/AVIF/WebP unchanged, and optionally set attachment metadata.
 
-Resource create/update accepts inline `content` or a local `contentFile`. Set `gutenberg: true` to convert resolved HTML into Gutenberg block markup before upload. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`.
+Resource create/update accepts inline `content` or a local `contentFile`. With `gutenberg: true`, the server parses the resolved body with an HTML5 parser, filters it through explicit tag and attribute allowlists plus the [WordPress allowed protocol](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/) list, and then generates Gutenberg block markup. Event attributes, inline styles, `javascript:`, `data:`, and active embedded content are removed; ordinary unknown containers are unwrapped while their safe text is preserved. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`. JPEG and PNG inputs are converted in memory to quality-85 WebP before upload; GIF, AVIF, and existing WebP files are left unchanged.
 
-### Elementor (6)
+### Elementor page content (3)
 
-- `wp_elementor_init` — initialize Elementor metadata only on a page whose element tree is empty.
-- `wp_elementor_export` — export the raw Elementor element tree.
-- `wp_elementor_import` — replace the Elementor element tree.
-- `wp_elementor_structure` — return a lightweight element hierarchy.
-- `wp_elementor_get_element` — read one element and its settings by ID.
-- `wp_elementor_find` — search by element type, widget type, text, or setting.
+- `wp_elementor_get` — pages only; returns a revision, element IDs, and editable content settings by default, accepts `searchText` to locate existing copy, and returns the full backup tree only with `view: "data"`.
+- `wp_elementor_update` — partially merge existing content settings using the latest read `revision` as `expectedRevision`; multiple text/title changes are saved once, stale or non-content changes are rejected, and the Elementor cache is refreshed automatically.
+- `wp_elementor_import` — replace the complete page Elementor tree and refresh the Elementor cache automatically; use the read data view first when a backup is required.
+
+The target site must expose Elementor's private `_elementor_data` page meta through the WordPress REST API (`show_in_rest`) and return it after writes. That site-side bridge should save through Elementor's document layer or invalidate Elementor's generated data and element caches. The tools fail explicitly when REST meta access is unavailable instead of treating hidden data as an empty page.
 
 ### Plugins, themes, and local packaging (8)
 
