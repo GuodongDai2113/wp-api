@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -26,10 +26,19 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   const tools = await client.listTools();
   assert.equal(tools.tools.length, 29);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_client_get"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_client_use"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_add"), false);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_rest_api"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_api_schema"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_get"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_cache_clear"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_read"), false);
+  const restApiTool = tools.tools.find((tool) => tool.name === "wp_rest_api");
+  assert.deepEqual(restApiTool.inputSchema.required, ["domain"]);
+  assert.equal(Object.hasOwn(restApiTool.inputSchema.properties, "domain"), true);
+  assert.equal(Object.hasOwn(restApiTool.inputSchema.properties, "client"), false);
+  assert.equal(Object.hasOwn(restApiTool.inputSchema.properties, "siteUrl"), false);
   assert.deepEqual(tools.tools.find((tool) => tool.name === "wp_resource_delete").annotations, {
     readOnlyHint: false,
     destructiveHint: true,
@@ -43,7 +52,7 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   });
   assert.equal(success.isError, undefined);
   assert.deepEqual(success.structuredContent, {
-    result: { activeClient: null, clients: [] }
+    result: []
   });
 
   const compactStructure = await client.callTool({
@@ -59,5 +68,81 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
     arguments: { resource: "posts", id: 1 }
   });
   assert.equal(failure.isError, true);
-  assert.match(failure.content[0].text, /No client selected/);
+  assert.match(failure.content[0].text, /client/i);
+});
+
+test("MCP transport 把超过 8 KiB 的完整结果保存为本地 JSON 文件", async (t) => {
+  const resultDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-results-"));
+  t.after(() => rm(resultDirectory, { recursive: true, force: true }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createWpApiMcpServer({
+    resultDirectory,
+    allowedLocalRoots: [resultDirectory],
+    /** 返回包含大型正文的 WordPress client，以触发通用结果落盘。 */
+    async resolveClientImpl() {
+      return {
+        /** 返回超过 MCP 内联阈值的固定页面实体。 */
+        async get() {
+          return { id: 1, content: { raw: "x".repeat(9 * 1024) } };
+        },
+        /** 返回固定的轻量 Elementor 页面，验证 data 视图仍会强制落盘。 */
+        async request() {
+          return {
+            data: {
+              id: 12,
+              type: "page",
+              meta: {
+                _elementor_data: JSON.stringify([{
+                  id: "head001",
+                  elType: "widget",
+                  widgetType: "heading",
+                  settings: { title: "Heading" },
+                  elements: []
+                }])
+              }
+            },
+            pagination: { total: 0, totalPages: 0 }
+          };
+        },
+        /** 回显 Elementor 导入提交的数据，供 handler 完成落盘校验。 */
+        async update(route, id, body) {
+          return { id, type: "page", meta: body.meta };
+        },
+        /** 接受 Elementor 保存后的缓存刷新请求。 */
+        async requestApiPath() {
+          return { data: { success: true }, pagination: { total: 0, totalPages: 0 } };
+        }
+      };
+    }
+  });
+  const client = new Client({ name: "wp-api-large-result-test-client", version: "1.0.0" });
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const result = await client.callTool({
+    name: "wp_resource_get",
+    arguments: { client: "test", resource: "pages", id: 1 }
+  });
+  assert.equal(result.structuredContent.result.stored, true);
+  assert.equal(result.structuredContent.result.media_type, "application/json");
+  assert.match(result.content[0].text, /stored locally/);
+  const storedPayload = JSON.parse(await readFile(result.structuredContent.result.file_path, "utf8"));
+  assert.equal(storedPayload.content.raw.length, 9 * 1024);
+
+  const elementorData = await client.callTool({
+    name: "wp_elementor_get",
+    arguments: { client: "test", postId: 12, view: "data" }
+  });
+  assert.equal(elementorData.structuredContent.result.stored, true);
+  const elementorImport = await client.callTool({
+    name: "wp_elementor_import",
+    arguments: { client: "test", postId: 12, dataFile: elementorData.structuredContent.result.file_path }
+  });
+  assert.equal(elementorImport.structuredContent.result.imported, true);
+  assert.equal(elementorImport.structuredContent.result.match, true);
 });

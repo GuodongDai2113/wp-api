@@ -19,14 +19,6 @@ export interface WordPressConnectionInput {
   siteUrl?: string;
 }
 
-/** client 列表工具返回的安全结构。 */
-export interface ClientListResult {
-  /** 当前激活的 client 名称；尚未选择时为 null。 */
-  activeClient: string | null;
-  /** 已移除应用密码的 client 列表。 */
-  clients: PublicClient[];
-}
-
 /** 校验 MCP client 字符串字段存在且不是空字符串。 */
 function requireNonEmptyString(value: unknown, fieldName: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -35,38 +27,41 @@ function requireNonEmptyString(value: unknown, fieldName: string): string {
   return value;
 }
 
-/** 返回全部已保存 client 与当前激活名称，且不暴露应用密码。 */
+/** 返回全部已保存 client 的名称和站点地址，且不暴露账号或应用密码。 */
 export async function listStoredClients(
   context: WordPressConnectionContext = {}
-): Promise<ClientListResult> {
+): Promise<PublicClient[]> {
   const store = new ConfigStore({ configDir: context.configDir });
   return store.listClients();
 }
 
-/** 将一个已保存 client 设为当前激活项，并返回不含密码的公开信息。 */
-export async function useStoredClient(
+/** 返回指定已保存 client 的名称和站点地址，不存在时立即报错。 */
+export async function getStoredClient(
   name: string,
   context: WordPressConnectionContext = {}
 ): Promise<PublicClient> {
   const store = new ConfigStore({ configDir: context.configDir });
-  return store.setActiveClient(requireNonEmptyString(name, "Client name"));
+  const requestedName = requireNonEmptyString(name, "Client name");
+  const client = await store.getClient(requestedName);
+  if (!client) {
+    throw new Error(`Client "${requestedName}" not found.`);
+  }
+  return { name: client.name, siteUrl: client.siteUrl };
 }
 
 /**
- * 根据显式 client 或当前激活项创建 WordPressClient。
+ * 根据显式 client 名称创建 WordPressClient。
  * 临时站点地址只能改变同源路径，确保保存的应用密码不会发送到其他源。
  */
 export async function resolveWordPressClient(
   input: WordPressConnectionInput,
   context: WordPressConnectionContext = {}
 ): Promise<WordPressClient> {
-  const requestedClient = input.client === undefined
-    ? undefined
-    : requireNonEmptyString(input.client, "Client");
+  const requestedClient = requireNonEmptyString(input.client, "Client");
   const store = new ConfigStore({ configDir: context.configDir });
-  const storedClient = await store.getResolvedClient(requestedClient);
+  const storedClient = await store.getClient(requestedClient);
   if (!storedClient) {
-    throw new Error("No client selected. Add a client and select it with wp_client_use first.");
+    throw new Error(`Client "${requestedClient}" not found.`);
   }
 
   const savedSiteUrl = normalizeWordPressBaseUrl(storedClient.siteUrl);

@@ -94,15 +94,15 @@ cwd = "C:/absolute/path/to/allowed-workspace"
 wp-api-config
 ```
 
-该命令在 `127.0.0.1` 的随机端口启动临时网页并自动打开浏览器。页面可以新增、编辑、删除、测试连接和选择默认连接；密码保存后不再回显。服务显式关闭或空闲 15 分钟后退出。
+该命令在 `127.0.0.1` 的随机端口启动临时网页并自动打开浏览器。页面可以新增、编辑、删除和测试连接；密码保存后不再回显。服务显式关闭或空闲 15 分钟后退出。
 
 凭据默认保存在当前用户的 `~/.wp-api/`：`vault.json` 使用 AES-256-GCM 保存包含用户名和密码的密文，`vault.key` 保存每台主机独立生成的随机密钥。可同时为 `wp-api-config` 和 MCP host 设置相同的 `WP_API_CONFIG_DIR` 来覆盖目录。构建产物和 npm 包不包含凭据。
 
 配置页面不读取旧版明文配置。升级时请在页面中重新录入连接，并手动安全删除旧的 `config/config.json`、`build/config/config.json` 或 `*.plaintext-backup`。
 
-凭据库写入使用原子替换和跨进程文件锁。`wp_client_list` 只返回连接名称、站点 URL 和默认连接名称；用户名、密码及密码状态都不会通过 MCP 返回。
+凭据库写入使用原子替换和跨进程文件锁。`wp_client_list` 返回全部连接名称和站点 URL；`wp_client_get` 返回一个匹配连接，不存在时直接报错。两个工具都不会返回用户名、密码或密码状态。
 
-所有远端工具都接受可选的 `client` 和 `siteUrl`。`client` 可以在不改变当前激活项的情况下选用另一个已保存连接；`siteUrl` 只能修改已保存 URL 同一 origin 下的路径，不能把已保存凭据转发到其他主机。
+除独立公开查询工具 `wp_rest_api` 外，所有远端工具都要求显式传入 `client`，并接受可选的 `siteUrl`。认证请求中的 `siteUrl` 只能修改已保存 URL 同一 origin 下的路径。`wp_rest_api` 不接受这两个字段，只接受裸 `domain`，固定拼接 HTTPS 地址且绝不发送已保存凭据。
 
 ## 工具列表
 
@@ -110,13 +110,13 @@ wp-api-config
 
 ### Client 配置（2 个）
 
-- `wp_client_use`：设置当前激活的连接。
-- `wp_client_list`：列出连接及当前激活名称，不返回用户名或密码。
+- `wp_client_list`：列出全部连接名称和站点 URL，不返回用户名或密码。
+- `wp_client_get`：返回一个指定连接的名称和站点 URL，不存在时直接报错。
 
 ### 本地结构与 REST 接口查询（2 个）
 
 - `wp_structure_get`：按需查询 `post`、`page`、`product`、`category`、`product-category`、`product-tag`、`media`、`seo-meta` 和 Elementor 结构。指定 `section: "write"`、`"response"` 或 `"example"` 只返回所需片段；默认返回概览，`"full"` 才返回完整定义。该工具纯本地且不要求 WordPress client。
-- `wp_api_schema`：省略 `apiPath` 时读取精简、可搜索、可分页的 `/wp-json/` 路由摘要；传入 `wp/v2/product` 等路径时也默认只返回方法、参数约束和字段摘要。仅在摘要缺少必要约束时使用 `detail: "full"`。
+- `wp_rest_api`：必填裸域名 `domain`，例如 `example.com`；工具固定请求 `https://{domain}/...`，不读取 client 或发送凭据。`apiPath` 默认 `wp-json`，用于读取精简、可搜索、可分页的根路由摘要；查到目标路由后传入 `wp-json/wp/v2/product` 等完整 REST 路径，读取方法、参数约束和字段摘要。仅在摘要缺少必要约束时使用 `detail: "full"`。
 
 ### WordPress 资源（5 个）
 
@@ -126,7 +126,7 @@ wp-api-config
 - `wp_resource_update`：更新内容或分类项。
 - `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
 
-`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`、`product-tags`；其中产品相关资源专指 Jelly Catalog，不代表 WooCommerce 产品。产品写入支持 `productCategories`、`productTags` 和已注册的 `meta` 字段，写入前可先用 `wp_api_schema` 查看目标站点的实时字段定义。分类、产品分类和产品标签没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
+`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`、`product-tags`；其中产品相关资源专指 Jelly Catalog，不代表 WooCommerce 产品。产品写入支持 `productCategories`、`productTags` 和已注册的 `meta` 字段，写入前可先用 `wp_rest_api` 查看目标站点的实时字段定义。分类、产品分类和产品标签没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
 
 常用 Jelly Catalog 产品 `meta` 结构：
 
@@ -149,13 +149,13 @@ wp-api-config
 - `wp_post_content_replace`：替换文章中的所有精确文本匹配。
 - `wp_media_upload`：本地 JPEG/PNG 先压缩为 WebP 再上传，GIF/AVIF/WebP 原样上传，并可设置附件元数据。
 
-资源创建/更新支持直接传 `content` 或读取本地 `contentFile`。设置 `gutenberg: true` 后，会先用 HTML5 parser 解析正文，再按明确的标签、属性和 [WordPress 允许协议](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/)列表清理，最后生成 Gutenberg 区块标记。事件属性、内联样式、`javascript:`、`data:` 和活动嵌入内容会被移除；普通未知容器会展开并保留其中的安全文本。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会在内存中以质量 85 转换为 WebP 后再上传；GIF、AVIF 和已有 WebP 保持原格式。
+资源创建/更新支持直接传 `content` 或读取本地 `contentFile`；大型 REST meta 可通过包含完整 JSON 对象的 `metaFile` 提交，`meta` 和 `metaFile` 不能同时使用。设置 `gutenberg: true` 后，会先用 HTML5 parser 解析正文，再按明确的标签、属性和 [WordPress 允许协议](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/)列表清理，最后生成 Gutenberg 区块标记。事件属性、内联样式、`javascript:`、`data:` 和活动嵌入内容会被移除；普通未知容器会展开并保留其中的安全文本。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会在内存中以质量 85 转换为 WebP 后再上传；GIF、AVIF 和已有 WebP 保持原格式。
 
 ### Elementor 页面正文（3 个）
 
-- `wp_elementor_get`：只对 `pages` 生效；默认返回页面 `revision`、包含正文的元素 ID 与可修改 settings，可用 `searchText` 定位旧标题或文本；`view: "data"` 才返回完整树用于备份。
-- `wp_elementor_update`：把最新读取的 `revision` 作为 `expectedRevision`，按 `elementId` 局部合并现有正文字段，可在一次保存中修改多个标题或文本；拒绝过期或非正文修改，并在保存后自动刷新 Elementor 缓存。
-- `wp_elementor_import`：用完整 `data` 覆盖页面 Elementor 树，并在保存后自动刷新 Elementor 缓存；需要备份时先调用读取工具的 `data` 视图。
+- `wp_elementor_get`：只对 `pages` 生效；默认返回页面 `revision`、包含正文的元素 ID 与可修改 settings，可用 `searchText` 定位旧标题或文本；`view: "data"` 会把完整树保存为本地结果文件用于备份或导入。
+- `wp_elementor_update`：把最新读取的 `revision` 作为 `expectedRevision`，按 `elementId` 局部合并现有正文字段，可使用内联 `changes` 或本地 JSON `changesFile`；拒绝过期或非正文修改，并在保存后自动刷新 Elementor 缓存。
+- `wp_elementor_import`：从本地 `dataFile` 读取完整元素树、覆盖页面并自动刷新 Elementor 缓存；文件可包含原始元素数组或落盘后的 `wp_elementor_get` data 结果。
 
 目标站点必须通过 WordPress REST API（`show_in_rest`）暴露 Elementor 私有页面 meta `_elementor_data`，并在写入响应中返回该值；站点侧桥接还应通过 Elementor document 层保存，或主动失效其生成数据与元素缓存。REST meta 集成缺失时工具会明确失败，不会把隐藏数据误判为空页面。
 
@@ -185,15 +185,15 @@ wp-api-config
 
 - 站点 URL 可以使用 HTTP 或 HTTPS。HTTP Basic Authentication 不提供传输加密，非可信网络应优先使用 HTTPS。
 - 站点 URL 不能嵌入用户名/密码，也不能包含 query 或 fragment。
-- 每次调用传入的 `siteUrl` 必须和已保存 URL 同源。
+- 认证调用传入的 `siteUrl` 必须和已保存 URL 同源；`wp_rest_api` 改用独立裸域名并固定发起公开 HTTPS 请求。
 - 携带 WordPress 凭据的请求不会跟随重定向；应直接配置站点的规范 URL。
-- 服务使用已保存的 WordPress Application Password 认证。请只授予该 WordPress 用户实际需要的能力。
+- 除不读取 client 的 `wp_rest_api` 公开查询外，服务使用已保存的 WordPress Application Password 认证。请只授予该 WordPress 用户实际需要的能力。
 - 凭据文件默认位于 `~/.wp-api/`，使用 AES-256-GCM 加密；密钥和密文文件均应仅允许当前系统用户访问。
 - 文件加密可避免明文误读、打包和日志泄漏，但不能抵御拥有同一系统用户任意文件及代码执行权限的恶意程序。
 
 ### 本地路径边界
 
-以下字段会读写本地文件：`contentFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
+以下字段会读写本地文件：`contentFile`、`metaFile`、Elementor `changesFile` 和 `dataFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
 
 默认情况下，这些路径必须位于 MCP 服务进程的 `cwd` 内。可以通过 `WP_API_ALLOWED_LOCAL_ROOTS` 增加可信根目录，并使用当前平台的路径分隔符：
 
@@ -201,6 +201,8 @@ wp-api-config
 - Linux/macOS：冒号，例如 `/srv/content:/srv/packages`
 
 服务同时校验词法路径和解析符号链接后的真实路径，不能借助已有符号链接逃逸。配置的根目录必须已存在且确实是目录。允许列表应尽可能收窄：所有获准调用文件工具的 Agent 都能访问这些目录。
+
+MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入 `structuredContent`，而是自动保存到当前工作目录的 `.wp-api-results`，响应只返回文件绝对路径、字节数和 SHA-256。可用 `WP_API_RESULT_DIR` 更改保存目录；如果之后要把该目录中的文件作为工具输入，目录还必须位于 `cwd` 或 `WP_API_ALLOWED_LOCAL_ROOTS` 中。结果文件可能包含站点内容，应按需清理并避免提交到版本库。8 KiB 是本项目的会话内联策略，不是 MCP 或 WordPress 的硬限制。
 
 允许列表是应用层边界，不是操作系统沙箱。应确保不受信任的本地用户或进程不能在工具执行期间修改获准目录；否则从路径校验到实际文件访问之间仍存在操作系统层面的路径替换竞态。
 
@@ -211,6 +213,7 @@ wp-api-config
 | 单次网络请求超时 | 30 秒 |
 | 单个 WordPress REST 响应 | 25 MiB |
 | 单个 `contentFile` | 25 MiB |
+| 单个 `metaFile` 或 `changesFile` | 10 MiB JSON |
 | 单个媒体文件 | 50 MiB |
 | 单个插件/主题 ZIP | 100 MiB |
 | 单个 Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层 |
@@ -233,7 +236,7 @@ wp-api-config
 
 ## 凭据存储迁移
 
-当前版本移除了 `wp_client_add`、构建时复制明文凭据以及 UI 明文导入功能。请运行 `wp-api-config` 重新录入连接，再让 MCP host 使用 `wp_client_use` 或页面设置的默认连接。每台主机都需要单独配置自己的凭据库。
+当前版本移除了 `wp_client_add`、`wp_client_use`、当前连接状态、构建时复制明文凭据以及 UI 明文导入功能。请运行 `wp-api-config` 重新录入连接，并在远端工具中显式传入已保存的 `client` 名称。每台主机都需要单独配置自己的凭据库。
 
 ## 开发
 

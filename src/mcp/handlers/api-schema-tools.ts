@@ -2,7 +2,9 @@ import type { WordPressClient } from "../../lib/wp-client.js";
 
 /** 读取远程 WordPress REST 接口结构时支持的输入。 */
 export interface ApiSchemaInput {
-  /** `wp-json/` 后的 REST API 路径；省略时读取根路由目录。 */
+  /** 目标 WordPress 站点的裸域名，不包含协议、端口、路径、查询或 fragment。 */
+  domain: string;
+  /** REST API 路径；默认为 `wp-json`，也接受省略 `wp-json/` 前缀的简写。 */
   apiPath?: string;
   /** 根路由索引的路径或 namespace 筛选文本。 */
   search?: string;
@@ -42,8 +44,12 @@ export interface ApiRouteIndexSummary {
 
 /** 远程 WordPress REST 接口结构工具返回的稳定包装结构。 */
 export interface ApiSchemaResult {
-  /** 实际请求的 `wp-json/` 相对路径，空字符串表示 REST 根索引。 */
+  /** 经过校验和小写规范化的目标域名。 */
+  domain: string;
+  /** 规范化后的 REST 路径；根索引固定为 `wp-json`。 */
   apiPath: string;
+  /** 实际发起只读请求的完整 HTTPS URL。 */
+  url: string;
   /** 为获取接口定义而使用的 HTTP 方法。 */
   method: "GET" | "OPTIONS";
   /** 当前响应采用摘要还是完整模式。 */
@@ -256,7 +262,29 @@ export function summarizeApiRouteIndex(
   };
 }
 
-/** 校验并规范化仅允许位于 `wp-json/` 内部的相对 API 路径。 */
+/** 校验并规范化目标站点裸域名，确保工具只能自行拼接 HTTPS 地址。 */
+export function normalizeRestApiDomain(domain: unknown): string {
+  if (typeof domain !== "string" || domain.trim() === "") {
+    throw new TypeError("domain is required and must be a non-blank hostname such as example.com.");
+  }
+
+  const candidate = domain.trim().toLowerCase();
+  if (
+    candidate.length > 253
+    || candidate.includes(":")
+    || candidate.includes("/")
+    || candidate.includes("?")
+    || candidate.includes("#")
+    || candidate.includes("@")
+    || candidate.includes("\\")
+    || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\.?$/.test(candidate)
+  ) {
+    throw new TypeError("domain must be a bare hostname without a protocol, port, credentials, path, query, or fragment.");
+  }
+  return candidate.replace(/\.$/, "");
+}
+
+/** 校验 REST 路径并移除可选的 `wp-json/` 前缀，返回供 WordPress client 请求的相对路径。 */
 export function normalizeApiSchemaPath(apiPath: unknown): string {
   if (apiPath === undefined) {
     return "";
@@ -265,7 +293,7 @@ export function normalizeApiSchemaPath(apiPath: unknown): string {
     throw new TypeError("apiPath must be a non-blank string when provided.");
   }
 
-  const normalized = apiPath.trim().replace(/^\/+|\/+$/g, "");
+  let normalized = apiPath.trim().replace(/^\/+|\/+$/g, "");
   if (
     normalized === ""
     || normalized.includes("%")
@@ -274,7 +302,13 @@ export function normalizeApiSchemaPath(apiPath: unknown): string {
     || normalized.includes("\\")
     || normalized.split("/").some((segment) => segment === "." || segment === "..")
   ) {
-    throw new TypeError("apiPath must be a safe unencoded wp-json relative path without a query, fragment, backslash, or dot segment.");
+    throw new TypeError("apiPath must be a safe unencoded REST path without a query, fragment, backslash, or dot segment.");
+  }
+  if (normalized === "wp-json") {
+    return "";
+  }
+  if (normalized.startsWith("wp-json/")) {
+    normalized = normalized.slice("wp-json/".length);
   }
   return normalized;
 }
@@ -287,17 +321,21 @@ export async function getApiSchema(
   if (input.detail !== undefined && input.detail !== "summary" && input.detail !== "full") {
     throw new TypeError("detail must be summary or full when provided.");
   }
-  const apiPath = normalizeApiSchemaPath(input.apiPath);
-  const method = apiPath === "" ? "GET" : "OPTIONS";
-  const response = await client.requestApiPath(apiPath, { method });
+  const domain = normalizeRestApiDomain(input.domain);
+  const requestPath = normalizeApiSchemaPath(input.apiPath);
+  const apiPath = requestPath === "" ? "wp-json" : `wp-json/${requestPath}`;
+  const method = requestPath === "" ? "GET" : "OPTIONS";
+  const response = await client.requestApiPath(requestPath, { method });
   const detail = input.detail ?? "summary";
   return {
+    domain,
     apiPath,
+    url: `https://${domain}/${apiPath}${requestPath === "" ? "/" : ""}`,
     method,
     detail,
     schema: detail === "full"
       ? response.data
-      : apiPath === ""
+      : requestPath === ""
         ? summarizeApiRouteIndex(response.data, input)
         : summarizeApiPathSchema(response.data)
   };

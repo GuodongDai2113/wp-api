@@ -1,9 +1,14 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./wp-api-tools.js";
+import { normalizeRestApiDomain } from "./handlers/api-schema-tools.js";
 import { WP_STRUCTURE_NAMES, WP_STRUCTURE_SECTIONS } from "./handlers/structure-tools.js";
 
 /** 判断站点地址是否是适合作为 WordPress 根地址的 HTTP(S) URL。 */
@@ -31,6 +36,19 @@ const siteUrlSchema = z.string().url().refine(
   "WordPress site URL must use HTTP or HTTPS and cannot contain credentials, a query, or a fragment."
 );
 
+/** `wp_rest_api` 使用的裸域名 schema，固定由服务端拼接 HTTPS 和 REST 路径。 */
+const restApiDomainSchema = z.string().refine(
+  (value) => {
+    try {
+      normalizeRestApiDomain(value);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  "Domain must be a bare hostname such as example.com, without https://, a port, credentials, path, query, or fragment."
+);
+
 /** WordPress 原生 REST 资源名称的 MCP 校验 schema。 */
 const resourceSchema = z.enum(["posts", "pages", "products", "categories", "product-categories", "product-tags"]);
 
@@ -42,9 +60,9 @@ const outputSchema = {
 /** 所有 MCP 工具的副作用、幂等性和外部交互提示。 */
 export const WP_API_TOOL_ANNOTATIONS = {
   wp_client_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  wp_client_use: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  wp_client_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_structure_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  wp_api_schema: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_rest_api: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -80,7 +98,7 @@ const nonBlankStringSchema = z.string().min(1).refine(
 
 /** 所有需要连接 WordPress 站点的工具都支持的通用输入字段。 */
 const globalInputShape = {
-  client: nonBlankStringSchema.optional().describe("Saved wp-api client name to use for this call."),
+  client: nonBlankStringSchema.describe("Required saved wp-api client name to use for this call."),
   siteUrl: siteUrlSchema.optional().describe("Temporary same-origin site URL override for this call.")
 };
 
@@ -98,7 +116,8 @@ const resourceBodyShape = {
   categories: z.array(z.number().int().positive()).optional().describe("Post category IDs; use an empty array to clear all categories."),
   productCategories: z.array(z.number().int().positive()).optional().describe("Jelly Catalog product category IDs; use an empty array to clear all product categories."),
   productTags: z.array(z.number().int().positive()).optional().describe("Jelly Catalog product tag IDs; use an empty array to clear all product tags."),
-  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. Inspect the resource route with wp_api_schema before writing plugin-specific fields."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. Inspect the resource route with wp_rest_api before writing plugin-specific fields."),
+  metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST meta object. Do not provide together with meta."),
   name: z.string().optional().describe("Taxonomy term name."),
   description: z.string().optional().describe("Taxonomy term description."),
   parent: z.number().int().nonnegative().optional().describe("Parent ID for hierarchical categories and product categories; use 0 to remove the parent. Not supported by product tags.")
@@ -113,20 +132,84 @@ const elementorBaseShape = {
 /** Elementor settings 对象 schema。 */
 const elementorSettingsSchema = z.record(z.unknown()).describe("Elementor settings object.");
 
-/** Elementor 元素数组 schema。 */
-const elementorDataSchema = z.array(z.record(z.unknown())).describe("Elementor element tree array.");
-
 /** Elementor 单元素局部正文修改 schema。 */
 const elementorContentChangeSchema = z.object({
   elementId: nonBlankStringSchema.describe("Element ID copied from wp_elementor_get."),
   settings: elementorSettingsSchema.describe("Only changed content keys already shown by wp_elementor_get for this element.")
 }).strict();
 
+/** MCP 工具结果允许直接进入会话的最大紧凑 JSON 字节数。 */
+const MAX_INLINE_RESULT_BYTES = 8 * 1024;
+
+/** 超过内联阈值后返回给 MCP host 的本地结果文件引用。 */
+interface StoredToolResult {
+  /** 表示完整结果已保存在本地文件中。 */
+  stored: true;
+  /** 保存完整 JSON 结果的绝对路径。 */
+  file_path: string;
+  /** 本地结果文件的 UTF-8 字节数。 */
+  bytes: number;
+  /** 本地结果文件内容的 SHA-256。 */
+  sha256: string;
+  /** 本地结果文件的媒体类型。 */
+  media_type: "application/json";
+}
+
+/** 将大型 MCP 结果保存到本地目录，并返回不包含原始数据的小型引用。 */
+async function storeLargeToolResult(
+  toolName: WpApiToolName,
+  serializedJson: string,
+  context: WpApiToolContext
+): Promise<StoredToolResult> {
+  const resultDirectory = resolve(context.resultDirectory ?? resolve(process.cwd(), ".wp-api-results"));
+  await mkdir(resultDirectory, { recursive: true });
+  const filePath = resolve(resultDirectory, `${toolName}-${Date.now()}-${randomUUID()}.json`);
+  const fileContents = `${serializedJson}\n`;
+  await writeFile(filePath, fileContents, { encoding: "utf8", flag: "wx" });
+  return {
+    stored: true,
+    file_path: filePath,
+    bytes: Buffer.byteLength(fileContents, "utf8"),
+    sha256: createHash("sha256").update(fileContents).digest("hex"),
+    media_type: "application/json"
+  };
+}
+
 /**
  * 将任意结构化数据包装为 MCP 工具响应。
- * `structuredOnly` 为真时，文本只保留短提示，避免把同一份 JSON 再序列化一次。
+ * 超过 8 KiB 的完整结果和 Elementor 完整 data 视图只写入本地文件，避免 structuredContent 再次占用会话上下文。
  */
-function toToolResult(data: unknown, structuredOnly = false) {
+async function toToolResult(
+  toolName: WpApiToolName,
+  data: unknown,
+  context: WpApiToolContext,
+  structuredOnly = false
+) {
+  const serializedJson = JSON.stringify(data);
+  if (serializedJson === undefined) {
+    throw new Error(`MCP tool ${toolName} returned a value that cannot be serialized as JSON.`);
+  }
+  const serializedBytes = Buffer.byteLength(serializedJson, "utf8");
+  const isElementorDataResult = toolName === "wp_elementor_get"
+    && typeof data === "object"
+    && data !== null
+    && "view" in data
+    && data.view === "data";
+  if (serializedBytes > MAX_INLINE_RESULT_BYTES || isElementorDataResult) {
+    const storedResult = await storeLargeToolResult(toolName, serializedJson, context);
+    return {
+      structuredContent: {
+        result: storedResult
+      },
+      content: [
+        {
+          type: "text" as const,
+          text: `Result is ${serializedBytes} bytes and was stored locally at ${storedResult.file_path}.\n`
+        }
+      ]
+    };
+  }
+
   if (structuredOnly) {
     return {
       structuredContent: {
@@ -141,9 +224,6 @@ function toToolResult(data: unknown, structuredOnly = false) {
     };
   }
   const formattedJson = `${JSON.stringify(data, null, 2)}\n`;
-  const text = Buffer.byteLength(formattedJson, "utf8") <= 8 * 1024
-    ? formattedJson
-    : `Result is ${Buffer.byteLength(formattedJson, "utf8")} bytes; complete data is available in structuredContent.result.\n`;
   return {
     structuredContent: {
       result: data
@@ -151,7 +231,7 @@ function toToolResult(data: unknown, structuredOnly = false) {
     content: [
       {
         type: "text" as const,
-        text
+        text: formattedJson
       }
     ]
   };
@@ -160,10 +240,12 @@ function toToolResult(data: unknown, structuredOnly = false) {
 /** 创建绑定具体工具名和上下文的 MCP 回调，并为结构查询及 Elementor 读取启用单份结构化输出。 */
 function createToolCallback(toolName: WpApiToolName, context: WpApiToolContext) {
   const structuredOnly = toolName === "wp_structure_get"
-    || toolName === "wp_api_schema"
+    || toolName === "wp_rest_api"
     || toolName === "wp_elementor_get";
   return async (input: WpApiToolInput) => toToolResult(
+    toolName,
     await executeWpApiTool(toolName, input, context),
+    context,
     structuredOnly
   );
 }
@@ -196,7 +278,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_client_list",
     {
       title: "List wp-api clients",
-      description: "List saved local wp-api clients and the active client.",
+      description: "List the names and site URLs of all saved local wp-api clients.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_client_list,
       inputSchema: {},
       outputSchema
@@ -205,17 +287,17 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
-    "wp_client_use",
+    "wp_client_get",
     {
-      title: "Use wp-api client",
-      description: "Set the active local wp-api client.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_client_use,
+      title: "Get wp-api client",
+      description: "Get one saved local wp-api client's name and site URL. Missing clients return an error.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_client_get,
       inputSchema: {
-        name: nonBlankStringSchema.describe("Saved client name to make active.")
+        name: nonBlankStringSchema.describe("Saved client name to find.")
       },
       outputSchema
     },
-    createToolCallback("wp_client_use", context)
+    createToolCallback("wp_client_get", context)
   );
 
   server.registerTool(
@@ -234,22 +316,22 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
-    "wp_api_schema",
+    "wp_rest_api",
     {
-      title: "Inspect WordPress REST API schema",
-      description: "Discover the target site's live REST routes, request arguments, methods, and fields. Both route indexes and OPTIONS responses are compact by default; request detail full only when omitted constraints are required.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_api_schema,
+      title: "Query public WordPress REST API metadata",
+      description: "Inspect a site's live public WordPress REST API without using saved clients or credentials. Provide a bare domain. Start with apiPath wp-json and optional search to discover routes, then query an exact path such as wp-json/wp/v2/posts to read its OPTIONS methods, arguments, and fields. Summary is the compact default; request full only when the summary omits a required constraint.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_rest_api,
       inputSchema: {
-        ...globalInputShape,
-        apiPath: nonBlankStringSchema.optional().describe("Path below wp-json, for example wp/v2/product, wp/v2/product_cat, or jelly-form/v1/settings. Omit to list registered route summaries."),
-        search: nonBlankStringSchema.optional().describe("Case-insensitive route path or namespace filter used when apiPath is omitted."),
-        offset: z.number().int().nonnegative().optional().describe("Number of matching route summaries to skip; defaults to 0."),
-        limit: z.number().int().min(1).max(100).optional().describe("Maximum route summaries to return; defaults to 50 and cannot exceed 100."),
-        detail: z.enum(["summary", "full"]).optional().describe("Return a compact summary by default for both indexes and specific routes; full returns the original WordPress response.")
+        domain: restApiDomainSchema.describe("Required bare domain only, for example example.com. The tool always requests https://{domain}/... and never uses saved WordPress credentials."),
+        apiPath: nonBlankStringSchema.optional().describe("REST path beginning with wp-json, for example wp-json, wp-json/wp/v2/posts, or wp-json/jelly-form/v1/settings. Defaults to wp-json. The shorter wp/v2/posts form is also accepted."),
+        search: nonBlankStringSchema.optional().describe("Case-insensitive route path or namespace filter. Use only with the wp-json root index to find the exact route before querying it."),
+        offset: z.number().int().nonnegative().optional().describe("Root-index pagination offset. Use only with apiPath wp-json; defaults to 0."),
+        limit: z.number().int().min(1).max(100).optional().describe("Root-index page size from 1 to 100. Use only with apiPath wp-json; defaults to 50."),
+        detail: z.enum(["summary", "full"]).optional().describe("Output detail. Keep the default summary for route discovery and field constraints; use full only when exact raw WordPress metadata is necessary.")
       },
       outputSchema
     },
-    createToolCallback("wp_api_schema", context)
+    createToolCallback("wp_rest_api", context)
   );
 
   server.registerTool(
@@ -453,7 +535,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     {
       ...elementorBaseShape,
       expectedRevision: nonBlankStringSchema.describe("Revision copied from the latest wp_elementor_get result. The update is rejected if the page changed meanwhile."),
-      changes: z.array(elementorContentChangeSchema).min(1).max(100).describe("One or more content-only element updates applied in a single page save.")
+      changes: z.array(elementorContentChangeSchema).min(1).max(100).optional().describe("One or more content-only element updates applied in a single page save. Do not provide together with changesFile."),
+      changesFile: nonBlankStringSchema.optional().describe("Local JSON file containing the changes array. Use for large batches; do not provide together with changes.")
     }
   );
 
@@ -462,10 +545,10 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     context,
     "wp_elementor_import",
     "Replace Elementor page data",
-    "Replace the complete Elementor element tree of an existing WordPress page, then refresh the site-wide Elementor cache automatically. This is the only tool for structural replacement; read view data first when a backup is needed.",
+    "Replace the complete Elementor element tree of an existing WordPress page from a local JSON file, then verify persistence and refresh the site-wide Elementor cache automatically. The file may contain a raw element array or a saved wp_elementor_get data result.",
     {
       ...elementorBaseShape,
-      data: elementorDataSchema
+      dataFile: nonBlankStringSchema.describe("Local JSON file containing a raw Elementor element array or a saved wp_elementor_get data result.")
     }
   );
 

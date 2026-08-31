@@ -145,6 +145,8 @@ export interface WordPressClientOptions {
   username: string;
   /** WordPress 应用密码。 */
   appPassword: string;
+  /** 请求是否使用 WordPress 应用密码认证；默认 basic，公开 schema 查询可使用 none。 */
+  authentication?: "basic" | "none";
   /** 可注入的 fetch 实现。 */
   fetchImpl?: typeof fetch;
   /** 是否输出请求日志。 */
@@ -255,6 +257,26 @@ function buildAuthenticatedHeaders(
     })
   );
   headers.Authorization = createAuthHeader(username, appPassword);
+  headers.Accept = "application/json";
+  if (jsonBody) {
+    headers["Content-Type"] = "application/json";
+  }
+  return headers;
+}
+
+/** 构造不携带凭据的公开 REST 请求头，并阻止额外请求头注入 Authorization。 */
+function buildPublicHeaders(
+  extraHeaders: Record<string, string> | undefined,
+  jsonBody: boolean
+): Record<string, string> {
+  const headers = Object.fromEntries(
+    Object.entries(extraHeaders ?? {}).filter(([name]) => {
+      const normalizedName = name.toLowerCase();
+      return normalizedName !== "authorization"
+        && normalizedName !== "accept"
+        && !(jsonBody && normalizedName === "content-type");
+    })
+  );
   headers.Accept = "application/json";
   if (jsonBody) {
     headers["Content-Type"] = "application/json";
@@ -658,6 +680,8 @@ export class WordPressClient {
   username: string;
   /** WordPress 应用密码。 */
   appPassword: string;
+  /** 当前 client 使用应用密码认证还是不携带凭据的公开访问。 */
+  authentication: "basic" | "none";
   /** 实际使用的 fetch 实现。 */
   fetchImpl: typeof fetch;
   /** 是否输出请求日志。 */
@@ -686,6 +710,7 @@ export class WordPressClient {
     baseUrl,
     username,
     appPassword,
+    authentication = "basic",
     fetchImpl,
     verbose = false,
     logger = console,
@@ -701,6 +726,7 @@ export class WordPressClient {
     this.baseUrl = normalizeWordPressBaseUrl(baseUrl);
     this.username = username;
     this.appPassword = appPassword;
+    this.authentication = authentication;
     this.fetchImpl = fetchImpl ?? fetch;
     this.verbose = verbose;
     this.logger = logger;
@@ -727,8 +753,8 @@ export class WordPressClient {
     });
   }
 
-  /** 拒绝认证请求收到的重定向，确保 Authorization 不会被自动带到其他 origin。 */
-  private async assertAuthenticatedRequestDidNotRedirect(response: Response, url: string): Promise<void> {
+  /** 拒绝 REST 请求收到的重定向；认证模式下同时确保凭据不会被带到其他 origin。 */
+  private async assertRequestDidNotRedirect(response: Response, url: string): Promise<void> {
     if (!isRedirectStatus(response.status)) {
       return;
     }
@@ -736,7 +762,7 @@ export class WordPressClient {
     throw new WordPressApiError({
       status: response.status,
       code: "unsafe_redirect",
-      message: "Authenticated WordPress requests do not follow redirects. Configure the canonical site URL instead.",
+      message: `${this.authentication === "basic" ? "Authenticated" : "Public"} WordPress requests do not follow redirects. Configure the canonical site URL instead.`,
       data: {
         requestUrl: url,
         location: response.headers.get("location")
@@ -771,7 +797,9 @@ export class WordPressClient {
   /** 直接请求 `wp-json/` 下的指定 API path。 */
   async requestApiPath<T = unknown>(apiPath: string, { method = "GET", query, body, headers: extraHeaders }: RequestOptions = {}): Promise<RequestResult<T>> {
     const url = joinApiUrl(this.baseUrl, apiPath, query);
-    const headers = buildAuthenticatedHeaders(this.username, this.appPassword, extraHeaders, body !== undefined);
+    const headers = this.authentication === "basic"
+      ? buildAuthenticatedHeaders(this.username, this.appPassword, extraHeaders, body !== undefined)
+      : buildPublicHeaders(extraHeaders, body !== undefined);
 
     if (this.verbose) {
       this.logger.error?.(`[wp-api] ${method} ${url}`);
@@ -788,7 +816,7 @@ export class WordPressClient {
       throw new WordPressNetworkError({ method, url, cause: error });
     }
 
-    await this.assertAuthenticatedRequestDidNotRedirect(response, url);
+    await this.assertRequestDidNotRedirect(response, url);
     const payload = await readResponsePayload(response, this.maxResponseBytes);
 
     if (!response.ok) {
@@ -816,7 +844,9 @@ export class WordPressClient {
     { method = "POST", headers: extraHeaders, body }: MediaUploadRequestOptions
   ): Promise<RequestResult<T>> {
     const url = joinApiUrl(this.baseUrl, apiPath);
-    const headers = buildAuthenticatedHeaders(this.username, this.appPassword, extraHeaders, false);
+    const headers = this.authentication === "basic"
+      ? buildAuthenticatedHeaders(this.username, this.appPassword, extraHeaders, false)
+      : buildPublicHeaders(extraHeaders, false);
 
     if (this.verbose) {
       this.logger.error?.(`[wp-api] ${method} ${url}`);
@@ -833,7 +863,7 @@ export class WordPressClient {
       throw new WordPressNetworkError({ method, url, cause: error });
     }
 
-    await this.assertAuthenticatedRequestDidNotRedirect(response, url);
+    await this.assertRequestDidNotRedirect(response, url);
     const payload = await readResponsePayload(response, this.maxResponseBytes);
 
     if (!response.ok) {

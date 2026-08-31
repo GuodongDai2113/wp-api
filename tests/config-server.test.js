@@ -57,7 +57,7 @@ test("配置服务只监听回环地址并保护页面和 API", async (t) => {
   assert.equal((await callApi(service, token, "/api/migrations")).status, 404);
 });
 
-test("配置 API 完成新增、编辑、测试、选择和删除且从不返回密码", async (t) => {
+test("配置 API 完成新增、编辑、测试和删除且从不返回密码", async (t) => {
   let authorization = "";
   const fetchImpl = async (_url, init) => {
     authorization = new Headers(init.headers).get("authorization") ?? "";
@@ -73,7 +73,7 @@ test("配置 API 完成新增、编辑、测试、选择和删除且从不返回
 
   assert.equal((await callApi(service, token, "/api/clients/prod/test", { method: "POST" })).status, 200);
   assert.match(authorization, /^Basic /);
-  assert.equal((await callApi(service, token, "/api/clients/prod/activate", { method: "POST" })).status, 200);
+  assert.equal((await callApi(service, token, "/api/clients/prod/activate", { method: "POST" })).status, 404);
   assert.equal((await callApi(service, token, "/api/clients", {
     method: "PUT",
     body: JSON.stringify({ originalName: "prod", name: "production", siteUrl: "https://example.com/wordpress", username: "new-editor", appPassword: "" })
@@ -81,13 +81,13 @@ test("配置 API 完成新增、编辑、测试、选择和删除且从不返回
 
   const listResponse = await callApi(service, token, "/api/clients");
   const list = await listResponse.json();
-  assert.equal(list.activeClient, "production");
+  assert.equal("activeClient" in list, false);
   assert.equal(list.clients[0].passwordSet, true);
   assert.equal("appPassword" in list.clients[0], false);
   assert.equal((await new ConfigStore({ configDir }).getClient("production")).appPassword, "first-pass");
 
   assert.equal((await callApi(service, token, "/api/clients/production", { method: "DELETE" })).status, 200);
-  assert.deepEqual(await new ConfigStore({ configDir }).listClients(), { activeClient: null, clients: [] });
+  assert.deepEqual(await new ConfigStore({ configDir }).listClients(), []);
 });
 
 test("连接测试失败返回脱敏错误且服务继续处理请求", async (t) => {

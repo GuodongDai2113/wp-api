@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { ConfigStore } from "../build/lib/config-store.js";
-import { listStoredClients, resolveWordPressClient, useStoredClient } from "../build/mcp/client-tools.js";
+import { getStoredClient, listStoredClients, resolveWordPressClient } from "../build/mcp/client-tools.js";
 
 /** 创建包含一个已加密连接的隔离测试目录。 */
 async function seedClient(t) {
@@ -16,26 +16,26 @@ async function seedClient(t) {
   return configDir;
 }
 
-test("MCP client 工具仅列出和选择不含账号密码的连接", async (t) => {
+test("MCP client 工具仅列出和查找不含账号密码的连接", async (t) => {
   const configDir = await seedClient(t);
   const summary = { name: "prod", siteUrl: "https://example.com/wordpress" };
-  assert.deepEqual(await listStoredClients({ configDir }), { activeClient: null, clients: [summary] });
-  assert.deepEqual(await useStoredClient("prod", { configDir }), summary);
-  assert.deepEqual(await listStoredClients({ configDir }), { activeClient: "prod", clients: [summary] });
+  assert.deepEqual(await listStoredClients({ configDir }), [summary]);
+  assert.deepEqual(await getStoredClient("prod", { configDir }), summary);
+  await assert.rejects(() => getStoredClient("missing", { configDir }), /Client "missing" not found/);
 });
 
 test("MCP 连接解析仅允许同源站点子路径覆盖", async (t) => {
   const configDir = await seedClient(t);
-  await useStoredClient("prod", { configDir });
-  const client = await resolveWordPressClient({ siteUrl: "https://example.com/staging/" }, { configDir });
+  const client = await resolveWordPressClient({ client: "prod", siteUrl: "https://example.com/staging/" }, { configDir });
   assert.equal(client.baseUrl, "https://example.com/staging");
   assert.equal(client.username, "editor");
-  await assert.rejects(() => resolveWordPressClient({ siteUrl: "https://other.example/staging" }, { configDir }), /same origin/);
+  await assert.rejects(() => resolveWordPressClient({ client: "prod", siteUrl: "https://other.example/staging" }, { configDir }), /same origin/);
 });
 
-test("MCP 在没有默认连接时仅让当前调用失败", async (t) => {
+test("MCP 连接解析要求显式 client 且不存在时直接报错", async (t) => {
   const configDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-empty-"));
   t.after(() => rm(configDir, { recursive: true, force: true }));
-  await assert.rejects(() => resolveWordPressClient({}, { configDir }), /No client selected/);
-  assert.deepEqual(await listStoredClients({ configDir }), { activeClient: null, clients: [] });
+  await assert.rejects(() => resolveWordPressClient({}, { configDir }), /Client must be a non-empty string/);
+  await assert.rejects(() => resolveWordPressClient({ client: "missing" }, { configDir }), /Client "missing" not found/);
+  assert.deepEqual(await listStoredClients({ configDir }), []);
 });

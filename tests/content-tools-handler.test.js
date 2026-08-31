@@ -72,6 +72,33 @@ test("content handler resolves contentFile and converts Gutenberg content", asyn
   assert.match(calls[0].body.content, /<p>File body<\/p>/);
 });
 
+/** 验证资源 meta 可以从有界本地 JSON 文件读取，并拒绝与内联 meta 混用。 */
+test("content handler resolves metaFile without putting large meta in the tool input", async (t) => {
+  const tempDir = await mkdtemp(join(tmpdir(), "wp-api-meta-handler-"));
+  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  const metaFile = join(tempDir, "meta.json");
+  await writeFile(metaFile, JSON.stringify({ product_sku: "SKU-100", flags: ["new"] }), "utf8");
+  const calls = [];
+  const client = {
+    /** 记录使用 meta 文件构造出的资源更新请求。 */
+    async update(route, id, body) {
+      calls.push({ route, id, body });
+      return { id, ...body };
+    }
+  };
+
+  await updateResource(client, { resource: "products", id: 9, metaFile });
+  assert.deepEqual(calls, [{
+    route: "product",
+    id: 9,
+    body: { meta: { product_sku: "SKU-100", flags: ["new"] } }
+  }]);
+  await assert.rejects(
+    () => updateResource(client, { resource: "products", id: 9, meta: {}, metaFile }),
+    /either meta or metaFile/
+  );
+});
+
 /** 验证资源写入路径会提交清理后的 Gutenberg 内容，而不会把活动 HTML 传给 WordPress。 */
 test("content handler sanitizes active HTML before Gutenberg writes", async () => {
   const calls = [];

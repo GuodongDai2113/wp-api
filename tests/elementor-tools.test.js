@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   executeElementorTool,
@@ -46,6 +49,25 @@ function contentTree() {
   }];
 }
 
+/** 把 Elementor 元素树写入临时 JSON 文件，并在测试结束后自动清理。 */
+async function createElementorDataFile(t, data, wrapped = false) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-data-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "elementor.json");
+  const payload = wrapped ? { post_id: 12, resource: "pages", view: "data", data } : data;
+  await writeFile(filePath, JSON.stringify(payload), "utf8");
+  return filePath;
+}
+
+/** 把 Elementor 局部修改数组写入临时 JSON 文件，并在测试结束后自动清理。 */
+async function createElementorChangesFile(t, changes) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "wp-api-elementor-changes-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "changes.json");
+  await writeFile(filePath, JSON.stringify(changes), "utf8");
+  return filePath;
+}
+
 /** 验证默认读取只返回可修改正文，并明确告诉 Agent 如何构造局部修改。 */
 test("readElementorPage returns content-only edit targets and guidance", async () => {
   const calls = [];
@@ -63,8 +85,10 @@ test("readElementorPage returns content-only edit targets and guidance", async (
   assert.deepEqual(result.elements, [{ elementId: "head001", settings: { title: "Old heading" } }]);
   assert.equal(result.view, "content");
   assert.equal(result.count, 1);
+  assert.equal(result.data_bytes, Buffer.byteLength(JSON.stringify(contentTree()), "utf8"));
   assert.equal(result.revision, createElementorRevision(contentTree()));
   assert.match(result.how_to_update, /wp_elementor_update.*revision.*expectedRevision.*elementId.*title/);
+  assert.match(result.how_to_update, /data_bytes.*10 MiB/);
   assert.doesNotMatch(JSON.stringify(result), /widgetType|title_color|flex_direction/);
 });
 
@@ -83,6 +107,7 @@ test("readElementorPage returns full data only when requested", async () => {
   assert.equal(result.view, "data");
   assert.deepEqual(result.data, tree);
   assert.equal(result.elements_count, 3);
+  assert.equal(result.data_bytes, Buffer.byteLength(JSON.stringify(tree), "utf8"));
   assert.equal(result.revision, createElementorRevision(tree));
   assert.equal("how_to_update" in result, false);
 });
@@ -125,6 +150,9 @@ test("updateElementorPageContent applies partial changes in one page save", asyn
   assert.equal(result.cache_refreshed, true);
   assert.equal(calls.length, 3);
   const savedTree = JSON.parse(calls[1].body.meta._elementor_data);
+  assert.equal(result.revision_before, createElementorRevision(contentTree()));
+  assert.equal(result.revision_after, createElementorRevision(savedTree));
+  assert.equal(result.match, true);
   assert.equal(savedTree[0].settings.background_color, "#fff");
   assert.equal(savedTree[0].elements[0].settings.title, "New heading");
   assert.equal(savedTree[0].elements[0].settings.title_color, "#000");
@@ -134,8 +162,47 @@ test("updateElementorPageContent applies partial changes in one page save", asyn
   assert.deepEqual(calls[2], { method: "cache", apiPath: "elementor/v1/cache", options: { method: "DELETE" } });
 });
 
+/** 验证 Elementor 局部修改可以从本地 JSON 文件读取，并拒绝两种修改来源混用。 */
+test("updateElementorPageContent resolves changesFile", async (t) => {
+  const tree = contentTree();
+  const changesFile = await createElementorChangesFile(t, [
+    { elementId: "head001", settings: { title: "File heading" } }
+  ]);
+  const client = {
+    /** 返回修改前的固定 Elementor 页面。 */
+    async request() {
+      return { data: elementorEntity(tree), pagination: { total: 0, totalPages: 0 } };
+    },
+    /** 回显保存后的 Elementor 页面数据。 */
+    async update(route, id, body) {
+      return elementorEntity(JSON.parse(body.meta._elementor_data));
+    },
+    /** 接受页面保存后的 Elementor 缓存刷新。 */
+    async requestApiPath() {
+      return { data: { success: true }, pagination: { total: 0, totalPages: 0 } };
+    }
+  };
+
+  const result = await updateElementorPageContent(client, {
+    postId: 12,
+    expectedRevision: createElementorRevision(tree),
+    changesFile
+  });
+  assert.equal(result.updated, true);
+  assert.equal(result.match, true);
+  await assert.rejects(
+    () => updateElementorPageContent(client, {
+      postId: 12,
+      expectedRevision: createElementorRevision(tree),
+      changes: [{ elementId: "head001", settings: { title: "Inline" } }],
+      changesFile
+    }),
+    /either changes or changesFile/
+  );
+});
+
 /** 验证覆盖导入直接替换完整页面树并报告递归元素数量。 */
-test("importElementorPage replaces the complete page tree", async () => {
+test("importElementorPage replaces the complete page tree from a local result file", async (t) => {
   const calls = [];
   const tree = contentTree();
   const client = {
@@ -151,10 +218,13 @@ test("importElementorPage replaces the complete page tree", async () => {
     }
   };
 
-  const result = await importElementorPage(client, { postId: 12, data: tree });
+  const dataFile = await createElementorDataFile(t, tree, true);
+  const result = await importElementorPage(client, { postId: 12, dataFile });
 
   assert.equal(result.imported, true);
   assert.equal(result.elements_count, 3);
+  assert.equal(result.revision_after, createElementorRevision(tree));
+  assert.equal(result.match, true);
   assert.equal(result.cache_refreshed, true);
   assert.equal(calls[0].route, "pages");
   assert.deepEqual(JSON.parse(calls[0].body.meta._elementor_data), tree);
@@ -254,7 +324,7 @@ test("Elementor update rejects a stale revision before writing", async () => {
 });
 
 /** 验证分发器只接受读取、局部修改和覆盖导入三个页面内容工具。 */
-test("executeElementorTool dispatches only the three supported tools", async () => {
+test("executeElementorTool dispatches only the three supported tools", async (t) => {
   const client = {
     /** 返回空 Elementor 页面。 */
     async request() {
@@ -275,7 +345,8 @@ test("executeElementorTool dispatches only the three supported tools", async () 
     () => executeElementorTool("wp_elementor_update", client, { postId: 12, expectedRevision: createElementorRevision([]), changes: [{ elementId: "missing", settings: { title: "New" } }] }),
     /not found/
   );
-  const importResult = await executeElementorTool("wp_elementor_import", client, { postId: 12, data: [] });
+  const dataFile = await createElementorDataFile(t, []);
+  const importResult = await executeElementorTool("wp_elementor_import", client, { postId: 12, dataFile });
 
   assert.equal(readResult.view, "content");
   assert.equal(importResult.imported, true);
@@ -286,7 +357,7 @@ test("executeElementorTool dispatches only the three supported tools", async () 
 });
 
 /** 验证读取和覆盖导入都会拒绝畸形或超过安全深度的元素树。 */
-test("Elementor handlers validate remote and imported element trees", async () => {
+test("Elementor handlers validate remote and imported element trees", async (t) => {
   const malformedClient = {
     /** 返回缺少 settings 的畸形远端元素。 */
     async request() {
@@ -331,8 +402,33 @@ test("Elementor handlers validate remote and imported element trees", async () =
       throw new Error("Unexpected write");
     }
   };
+  const nestedDataFile = await createElementorDataFile(t, [nested]);
   await assert.rejects(
-    () => importElementorPage(noWriteClient, { postId: 12, data: [nested] }),
+    () => importElementorPage(noWriteClient, { postId: 12, dataFile: nestedDataFile }),
     /maximum tree depth of 100/
   );
+});
+
+/** 验证超过 10 MiB 大小的元素树在写入前被拒绝，并携带 Agent 可执行的调整提示。 */
+test("Elementor import rejects oversized trees with actionable guidance", async (t) => {
+  const block = JSON.stringify({
+    id: "big001",
+    elType: "widget",
+    widgetType: "text-editor",
+    settings: { editor: "x".repeat(60 * 1024) },
+    elements: []
+  });
+  const oversized = [];
+  for (let index = 0; oversized.length < 200; index += 1) {
+    oversized.push({ ...JSON.parse(block), id: `big${index}` });
+  }
+  const client = {};
+  const dataFile = await createElementorDataFile(t, oversized);
+  try {
+    await importElementorPage(client, { postId: 12, dataFile });
+    assert.fail("oversized import should have been rejected");
+  } catch (error) {
+    assert.match(error.message, /maximum size of 10485760 bytes/);
+    assert.ok(error.message.includes("Split or simplify"), error.message);
+  }
 });

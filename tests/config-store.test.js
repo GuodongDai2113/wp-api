@@ -44,12 +44,8 @@ test("ConfigStore 默认使用用户级目录并允许环境变量覆盖", () =>
 test("ConfigStore 加密保存连接且公开列表不含用户名和密码", async (t) => {
   const { configDir, store } = await createStore(t);
   await store.saveClient({ name: "prod", siteUrl: "https://example.com", username: "secret-user", appPassword: "secret-pass" });
-  await store.setActiveClient("prod");
 
-  assert.deepEqual(await store.listClients(), {
-    activeClient: "prod",
-    clients: [{ name: "prod", siteUrl: "https://example.com" }]
-  });
+  assert.deepEqual(await store.listClients(), [{ name: "prod", siteUrl: "https://example.com" }]);
   assert.deepEqual(await store.listClientsForConfiguration(), [{
     name: "prod", siteUrl: "https://example.com", username: "secret-user", passwordSet: true
   }]);
@@ -60,15 +56,14 @@ test("ConfigStore 加密保存连接且公开列表不含用户名和密码", as
   assert.equal((await readFile(path.join(configDir, "vault.key"), "utf8")).trim().length > 0, true);
 });
 
-test("ConfigStore 支持重命名、保留默认选择并删除默认连接", async (t) => {
+test("ConfigStore 支持重命名和删除连接", async (t) => {
   const { store } = await createStore(t);
   await store.saveClient({ name: "old", siteUrl: "https://example.com", username: "admin", appPassword: "pass" });
-  await store.setActiveClient("old");
   await store.saveClient({ name: "new", siteUrl: "https://example.com/new", username: "editor", appPassword: "next" }, "old");
-  assert.equal((await store.listClients()).activeClient, "new");
+  assert.deepEqual(await store.listClients(), [{ name: "new", siteUrl: "https://example.com/new" }]);
   assert.equal((await store.getClient("new")).appPassword, "next");
   await store.removeClient("new");
-  assert.deepEqual(await store.listClients(), { activeClient: null, clients: [] });
+  assert.deepEqual(await store.listClients(), []);
 });
 
 test("ConfigStore 检测凭据库密文篡改", async (t) => {
@@ -84,7 +79,7 @@ test("ConfigStore 检测凭据库密文篡改", async (t) => {
 test("ConfigStore 使用跨进程锁保留并发更新", async (t) => {
   const { configDir, store } = await createStore(t);
   await Promise.all([saveFromChildProcess(configDir, "prod"), saveFromChildProcess(configDir, "staging")]);
-  assert.deepEqual((await store.listClients()).clients.map((client) => client.name), ["prod", "staging"]);
+  assert.deepEqual((await store.listClients()).map((client) => client.name), ["prod", "staging"]);
 });
 
 test("ConfigStore 原子写入并尽可能限制目录和文件权限", async (t) => {

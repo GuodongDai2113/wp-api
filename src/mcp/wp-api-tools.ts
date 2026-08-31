@@ -2,11 +2,11 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { createPackageArchive } from "../lib/package-archive.js";
-import type { WordPressClient } from "../lib/wp-client.js";
+import { WordPressClient } from "../lib/wp-client.js";
 import {
+  getStoredClient,
   listStoredClients,
   resolveWordPressClient,
-  useStoredClient,
   type WordPressConnectionContext,
   type WordPressConnectionInput
 } from "./client-tools.js";
@@ -57,15 +57,19 @@ import {
   type JellyFormInquiryListInput,
   type JellyFormSettingsUpdateInput
 } from "./handlers/jelly-form-tools.js";
-import { getApiSchema, type ApiSchemaInput } from "./handlers/api-schema-tools.js";
+import {
+  getApiSchema,
+  normalizeRestApiDomain,
+  type ApiSchemaInput
+} from "./handlers/api-schema-tools.js";
 import { getWpStructure, type StructureGetInput } from "./handlers/structure-tools.js";
 
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [
   "wp_client_list",
-  "wp_client_use",
+  "wp_client_get",
   "wp_structure_get",
-  "wp_api_schema",
+  "wp_rest_api",
   "wp_resource_list",
   "wp_resource_get",
   "wp_resource_create",
@@ -109,6 +113,8 @@ export type ResolveWordPressClientImpl = (
 export interface WpApiToolContext extends WordPressConnectionContext {
   /** 在默认工作目录之外，额外允许 MCP 工具读取或写入的本地目录。 */
   allowedLocalRoots?: string[];
+  /** 超过内联阈值的 MCP 结果保存目录；默认使用当前工作目录下的 .wp-api-results。 */
+  resultDirectory?: string;
   /** 覆盖 WordPress client 解析函数，主要用于不访问真实配置与网络的测试。 */
   resolveClientImpl?: ResolveWordPressClientImpl;
 }
@@ -279,20 +285,31 @@ async function validateToolLocalPaths(
   context: WpApiToolContext
 ): Promise<WpApiToolInput> {
   const validatedInput = { ...input };
-  let pathField: "contentFile" | "filePath" | "file" | undefined;
+  const pathFields: Array<"contentFile" | "metaFile" | "filePath" | "file" | "dataFile" | "changesFile"> = [];
 
-  if ((toolName === "wp_resource_create" || toolName === "wp_resource_update") && input.contentFile !== undefined) {
-    pathField = "contentFile";
+  if (toolName === "wp_resource_create" || toolName === "wp_resource_update") {
+    if (input.contentFile !== undefined) {
+      pathFields.push("contentFile");
+    }
+    if (input.metaFile !== undefined) {
+      pathFields.push("metaFile");
+    }
   } else if (toolName === "wp_media_upload") {
-    pathField = "filePath";
+    pathFields.push("filePath");
   } else if (toolName === "wp_package_install" || toolName === "wp_package_update") {
-    pathField = "file";
+    pathFields.push("file");
+  } else if (toolName === "wp_elementor_import") {
+    pathFields.push("dataFile");
+  } else if (toolName === "wp_elementor_update" && input.changesFile !== undefined) {
+    pathFields.push("changesFile");
   }
 
-  if (pathField !== undefined) {
-    const inputPath = readRequiredString(input, pathField);
+  if (pathFields.length > 0) {
     const allowedRoots = await resolveAllowedLocalRoots(context);
-    validatedInput[pathField] = (await validateExistingLocalPath(pathField, inputPath, allowedRoots)).realPath;
+    for (const pathField of pathFields) {
+      const inputPath = readRequiredString(input, pathField);
+      validatedInput[pathField] = (await validateExistingLocalPath(pathField, inputPath, allowedRoots)).realPath;
+    }
     return validatedInput;
   }
 
@@ -339,8 +356,6 @@ async function executeRemoteTool(
   }
 
   switch (toolName) {
-    case "wp_api_schema":
-      return getApiSchema(client, input as unknown as ApiSchemaInput);
     case "wp_resource_list":
       return listResource(client, input as unknown as ResourceListInput);
     case "wp_resource_get":
@@ -400,10 +415,25 @@ export async function executeWpApiTool(
   switch (toolName) {
     case "wp_client_list":
       return listStoredClients(context);
-    case "wp_client_use":
-      return useStoredClient(readRequiredString(validatedInput, "name"), context);
+    case "wp_client_get":
+      return getStoredClient(readRequiredString(validatedInput, "name"), context);
     case "wp_structure_get":
       return getWpStructure(validatedInput as StructureGetInput);
+    case "wp_rest_api": {
+      if (validatedInput.client !== undefined || validatedInput.siteUrl !== undefined) {
+        throw new Error("wp_rest_api does not accept client or siteUrl. Provide domain only.");
+      }
+      const domain = normalizeRestApiDomain(validatedInput.domain);
+      const publicClient = new WordPressClient({
+        baseUrl: `https://${domain}`,
+        username: "",
+        appPassword: "",
+        authentication: "none",
+        fetchImpl: context.fetchImpl,
+        logger: context.logger
+      });
+      return getApiSchema(publicClient, validatedInput as unknown as ApiSchemaInput);
+    }
     case "wp_package_pack_theme":
     case "wp_package_pack_plugin":
       return createPackageArchive(

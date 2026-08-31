@@ -4,6 +4,7 @@ node_modules/
 build/
 build/bin/
 docs/
+.wp-api-results/
 
 # 旧版本地明文 WordPress 凭据，禁止提交版本库。
 config/config.json

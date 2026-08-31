@@ -91,6 +91,8 @@ tool_timeout_sec = 120
 服务默认只允许以下路径位于进程 `cwd` 内：
 
 - 资源正文文件 `contentFile`
+- 资源 meta 文件 `metaFile`
+- Elementor 局部修改文件 `changesFile` 和完整数据文件 `dataFile`
 - 媒体文件 `filePath`
 - 安装/更新软件包的 `file`
 - 本地打包源目录 `folderPath`
@@ -118,13 +120,13 @@ C:\content;D:\packages
 wp-api-config
 ```
 
-浏览器页面支持新增、编辑、删除和测试连接，也可以直接选择默认连接。用户名与 Application Password 只提交给回环地址上的一次性配置服务，不应通过 Agent 或 MCP 工具输入。密码保存后不回显；编辑时留空表示保留原密码。
+浏览器页面支持新增、编辑、删除和测试连接。用户名与 Application Password 只提交给回环地址上的一次性配置服务，不应通过 Agent 或 MCP 工具输入。密码保存后不回显；编辑时留空表示保留原密码。
 
 凭据默认保存到当前用户的 `~/.wp-api/`。`vault.json` 是包含用户名和密码的 AES-256-GCM 密文，`vault.key` 是每台主机首次写入时生成的 256 位随机密钥。两者均使用当前用户专用文件权限，写入采用原子替换与跨进程锁。通过 `WP_API_CONFIG_DIR` 可以为多实例指定不同目录，但配置 UI 与 MCP host 必须使用同一个值。
 
 构建过程不会读取或复制凭据，npm 包中也不包含凭据。文件加密可以防止明文误读、打包和日志泄漏，但不能抵御拥有同一系统用户任意文件及代码执行权限的恶意程序。
 
-### 3.1 选择连接：`wp_client_use`
+### 3.1 查找连接：`wp_client_get`
 
 ```json
 {
@@ -132,13 +134,15 @@ wp-api-config
 }
 ```
 
-### 3.2 检查连接：`wp_client_list`
+指定名称不存在时，工具直接返回错误。
+
+### 3.2 列出连接：`wp_client_list`
 
 ```json
 {}
 ```
 
-返回结构包含 `activeClient` 和只带 `name`、`siteUrl` 的 `clients`，不包含用户名、密码或密码状态。
+返回只带 `name`、`siteUrl` 的连接数组，不包含用户名、密码或密码状态。
 
 ### 3.3 处理旧明文配置
 
@@ -146,22 +150,24 @@ wp-api-config
 
 ## 4. 通用调用约定
 
-除两个 client 工具、`wp_structure_get` 和两个纯本地打包工具外，所有远端工具均支持：
+除两个 client 工具、`wp_structure_get`、`wp_rest_api` 和两个纯本地打包工具外，其他远端工具均支持：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `client` | string，可选 | 本次调用使用的已保存 client；不改变当前激活项 |
+| `client` | string，必填 | 本次调用使用的已保存 client |
 | `siteUrl` | string，可选 | 本次调用临时使用的同源 WordPress 子路径 |
 
-不传 `client` 时使用当前激活项。没有显式 client 且没有当前激活项时，远端工具会返回错误。
+远端工具不传 `client` 时调用失败。`wp_rest_api` 是独立的公开只读工具：它不接受 `client` 或 `siteUrl`，只接受裸 `domain` 并固定拼接 HTTPS REST 地址，因此不会读取或发送本地凭据。
 
-所有工具都通过 MCP 同时返回文本 JSON 与结构化内容；结构化 payload 位于：
+不超过 8 KiB 的工具结果通过 MCP 同时返回文本 JSON 与结构化内容；结构化 payload 位于：
 
 ```json
 {
   "result": {}
 }
 ```
+
+紧凑 JSON 超过 8 KiB 时，完整结果自动保存到 `WP_API_RESULT_DIR` 或默认的 `<cwd>/.wp-api-results/`，`structuredContent.result` 只返回 `stored`、`file_path`、`bytes`、`sha256` 和 `media_type`。该阈值是避免大型工具结果占用 Agent 会话的项目策略，不是 MCP 或 WordPress 的硬限制。结果文件可能包含站点内容，应按需清理；把文件再次作为工具输入时，其目录还必须满足本地路径边界。
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
@@ -171,8 +177,8 @@ wp-api-config
 
 | 工具 | 必填输入 | 说明 |
 | --- | --- | --- |
-| `wp_client_use` | `name` | 把已保存连接设为当前激活项 |
-| `wp_client_list` | 无 | 返回 `activeClient` 及仅含名称和 URL 的 client 列表 |
+| `wp_client_list` | 无 | 返回仅含名称和 URL 的 client 数组 |
+| `wp_client_get` | `name` | 返回指定 client 的名称和 URL，不存在时直接报错 |
 
 Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `wp-api-config` 页面完成。如需彻底停用旧凭据，还应在 WordPress 端撤销对应 Application Password。
 
@@ -181,7 +187,7 @@ Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `w
 | 工具 | 必填输入 | 可选输入 | 说明 |
 | --- | --- | --- | --- |
 | `wp_structure_get` | 无 | `structure`、`section` | 省略结构时列目录；指定结构后默认返回概览，也可只取 `write`、`response` 或 `example`；`full` 返回完整兼容结构；纯本地，不需要 client |
-| `wp_api_schema` | 无 | `apiPath`、`search`、`offset`、`limit`、`detail`、通用连接字段 | 根路径返回分页路由摘要；具体路径以 `OPTIONS` 读取实时定义后默认压缩为方法、参数约束和字段；`detail: "full"` 返回原始响应 |
+| `wp_rest_api` | `domain` | `apiPath`、`search`、`offset`、`limit`、`detail` | 使用裸域名固定拼接公开 HTTPS 地址；`apiPath` 默认 `wp-json`，根路径返回分页路由摘要，具体路径以 `OPTIONS` 读取实时定义；不使用 client 凭据 |
 
 `wp_structure_get` 支持：
 
@@ -190,23 +196,23 @@ post | page | product | category | product-category | product-tag
 media | seo-meta | elementor-page
 ```
 
-Agent 已能从工具输入 schema 看到通用字段，因此不必先列目录。应直接请求任务需要的最小片段；只有插件动态字段无法由本地目录确定时，再调用 `wp_api_schema`。例如：
+Agent 已能从工具输入 schema 看到稳定的本地结构，因此不必先列目录。应直接请求任务需要的最小片段；只有插件动态字段无法由本地目录确定时，再调用 `wp_rest_api`。例如：
 
 ```json
 { "structure": "elementor-page", "section": "write" }
 ```
 
 ```json
-{ "apiPath": "wp/v2/pages" }
+{ "domain": "example.com", "apiPath": "wp-json/wp/v2/pages" }
 ```
 
 查询根路由目录时可按路径或 namespace 筛选并分页：
 
 ```json
-{ "search": "jelly-form/v1", "offset": 0, "limit": 20 }
+{ "domain": "example.com", "apiPath": "wp-json", "search": "jelly-form/v1", "offset": 0, "limit": 20 }
 ```
 
-根路由摘要包含 `namespaces`、轻量 `routes`、`total`、`offset`、`limit` 和 `hasMore`；具体路径摘要只保留 `methods`、各 endpoint 的必要参数约束和响应 `fields`。结构查询和 Elementor 读取结果只在 `structuredContent.result` 中保留一份，文本内容仅提供定位提示，避免重复序列化到 Agent 上下文。
+根路由摘要包含 `namespaces`、轻量 `routes`、`total`、`offset`、`limit` 和 `hasMore`；具体路径摘要只保留 `methods`、各 endpoint 的必要参数约束和响应 `fields`。结构查询和 Elementor 读取的小型结果只在 `structuredContent.result` 中保留一份，文本内容仅提供定位提示；超过 8 KiB 时统一返回本地结果文件引用。
 
 ### 5.3 WordPress 资源（5 个）
 
@@ -246,11 +252,13 @@ posts | pages | products | categories | product-categories | product-tags
 - `categories`：文章分类正整数 ID 数组，`[]` 表示清空
 - `productCategories`：Jelly Catalog 产品分类正整数 ID 数组，映射为 REST `product_cat`
 - `productTags`：Jelly Catalog 产品标签正整数 ID 数组，映射为 REST `product_tag`
-- `meta`：目标资源已注册的 REST meta 对象；写入插件业务字段前先调用 `wp_api_schema`
+- `meta`：目标资源已注册的 REST meta 对象；写入插件业务字段前先调用 `wp_rest_api`
+- `metaFile`：包含完整 REST meta 对象的本地 JSON 文件，适合大型 meta；不能和 `meta` 同时使用
 
 taxonomy 写入字段：
 
 - `name`, `slug`, `description`
+- `meta` 或 `metaFile`：已注册的 REST term meta；大型对象优先使用本地 JSON 文件
 - `parent`：层级 taxonomy 的非负父级 ID，`0` 表示移除父级；产品标签不支持
 - `meta`：目标 taxonomy 已注册的 REST meta 对象
 
@@ -337,9 +345,9 @@ Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工�
 
 | 工具 | 额外输入 | 说明 |
 | --- | --- | --- |
-| `wp_elementor_get` | `view?`, `searchText?` | 返回当前页面 `revision`；默认附带 `elementId` 和可修改正文 settings，`searchText` 可定位旧文案；仅 `view: "data"` 返回完整树 |
-| `wp_elementor_update` | `expectedRevision`, `changes` | 校验最新读取版本后按 `elementId` 合并已有正文字段；最多 100 个元素、一次保存，并自动刷新 Elementor 全站缓存 |
-| `wp_elementor_import` | `data` | 整体覆盖完整元素树，空数组会清空 Elementor 页面内容；保存后自动刷新 Elementor 全站缓存 |
+| `wp_elementor_get` | `view?`, `searchText?` | 返回当前页面 `revision`；默认附带 `elementId` 和可修改正文 settings，`searchText` 可定位旧文案；`view: "data"` 把完整树保存为本地结果文件 |
+| `wp_elementor_update` | `expectedRevision`，以及 `changes` 或 `changesFile` | 校验最新读取版本后按 `elementId` 合并已有正文字段；大型修改数组可从本地 JSON 文件读取，最多 100 个元素、一次保存 |
+| `wp_elementor_import` | `dataFile` | 从本地 JSON 文件整体覆盖完整元素树，空数组会清空 Elementor 页面内容；回读校验后自动刷新 Elementor 全站缓存 |
 
 修改标题时先读取旧内容：
 
@@ -359,7 +367,9 @@ Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工�
 }
 ```
 
-局部修改要求值类型与读取结果一致。对象字段会深合并，数组字段整体替换；这样修改链接 URL 时不会意外删除同一链接对象中的其它值。页面在读取后已被其他编辑器修改时，过期的 `expectedRevision` 会被拒绝。完整覆盖前可先读取 `{ "postId": 20, "view": "data" }` 作为备份。
+局部修改要求值类型与读取结果一致。对象字段会深合并，数组字段整体替换；这样修改链接 URL 时不会意外删除同一链接对象中的其它值。页面在读取后已被其他编辑器修改时，过期的 `expectedRevision` 会被拒绝。完整覆盖前可先读取 `{ "postId": 20, "view": "data" }` 作为备份；结果超过 8 KiB 时直接把返回的 `file_path` 作为 `wp_elementor_import.dataFile` 使用。局部修改和完整导入都会返回回读 revision 与 `match: true`。
+
+读取结果带有 `data_bytes`（完整元素树的 UTF-8 JSON 字节数）。Elementor 元素树有 10 MiB JSON、10,000 个元素和 100 层深度的固定上限，接近或超过上限的页面会整棵读取/写入失败并明确报错，Agent 应把错误提示中的 "Split or simplify" 当作可行改法（拆分或精简页面内容）；例行修改请使用默认 content 视图，`view: "data"` 只留给备份，避免把接近上限的完整树塞进 Agent 上下文。
 
 ### 5.7 插件、主题与本地打包（8 个）
 
@@ -423,7 +433,7 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 - 每次调用的 `siteUrl` 覆盖必须与已保存 URL 同源，仅可改变路径。
 - 携带 Application Password 的 WordPress 请求不跟随 301/302/303/307/308 重定向；应保存规范 URL。
 
-服务使用 HTTP Basic Authentication 发送 WordPress Application Password。使用 HTTP 时凭据没有传输层加密，可能被同一网络中的攻击者截获；请仅在可信内网使用 HTTP。请为 MCP 使用专门的低权限 WordPress 账号，定期轮换密码，并在不再使用时从 WordPress 撤销。
+除完全不读取 client 的 `wp_rest_api` 公开 HTTPS 查询外，服务使用 HTTP Basic Authentication 发送 WordPress Application Password。使用 HTTP 时凭据没有传输层加密，可能被同一网络中的攻击者截获；请仅在可信内网使用 HTTP。请为 MCP 使用专门的低权限 WordPress 账号，定期轮换密码，并在不再使用时从 WordPress 撤销。
 
 ## 8. 默认资源上限
 
@@ -432,6 +442,7 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 | 单次请求 | 30 秒超时 |
 | 单个 WordPress REST 响应体 | 25 MiB |
 | `contentFile` | 25 MiB UTF-8 内容 |
+| `metaFile`、`changesFile` | 10 MiB JSON |
 | 本地媒体文件 | 50 MiB |
 | 本地插件/主题 ZIP | 100 MiB |
 | Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层父子深度 |
@@ -447,9 +458,9 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 
 这是正常行为。STDIO 服务正在等待 MCP host 的初始化消息。让 host 启动进程，不要在终端中手工输入业务命令。
 
-### `No client selected`
+### `Client must be a non-empty string`
 
-先运行 `wp-api-config` 新增连接并选择默认项；也可以调用 `wp_client_use` 选择现有连接，或在远端工具中显式传入已保存的 `client`。
+先运行 `wp-api-config` 新增连接，再在远端工具中显式传入已保存的 `client` 名称。
 
 ### 认证后收到重定向错误
 

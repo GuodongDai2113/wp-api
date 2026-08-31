@@ -94,15 +94,15 @@ Do not send usernames or Application Passwords through an agent. On every host t
 wp-api-config
 ```
 
-This starts a temporary page on a random `127.0.0.1` port and opens it in the default browser. The page can add, edit, delete, test, and activate connections. Saved passwords are never displayed again. The service exits explicitly or after 15 minutes of inactivity.
+This starts a temporary page on a random `127.0.0.1` port and opens it in the default browser. The page can add, edit, delete, and test connections. Saved passwords are never displayed again. The service exits explicitly or after 15 minutes of inactivity.
 
 Credentials default to `~/.wp-api/`. `vault.json` contains AES-256-GCM ciphertext for usernames and passwords; `vault.key` contains a random per-host key. Set the same `WP_API_CONFIG_DIR` for `wp-api-config` and the MCP host to override that directory. Builds and npm packages contain no credentials.
 
 The configuration page never reads legacy plaintext configuration. Re-enter connections in the page, then securely remove old `config/config.json`, `build/config/config.json`, or `*.plaintext-backup` files manually.
 
-Vault writes use atomic replacement and a cross-process file lock. `wp_client_list` returns only connection names, site URLs, and the active connection name; it never returns usernames, passwords, or password status.
+Vault writes use atomic replacement and a cross-process file lock. `wp_client_list` returns all saved connection names and site URLs; `wp_client_get` returns one matching connection or an error. Neither tool returns usernames, passwords, or password status.
 
-All remote tools accept optional `client` and `siteUrl` fields. `client` selects a saved connection without changing the active one. `siteUrl` may change only the path on the saved URL's origin; it cannot redirect saved credentials to another host.
+Except for the standalone public `wp_rest_api` query, all remote tools require `client` and accept an optional `siteUrl`. For authenticated requests, `siteUrl` may change only the path on the saved URL's origin. `wp_rest_api` accepts neither field: it requires a bare `domain`, always builds an HTTPS URL, and never sends saved credentials.
 
 ## Tools
 
@@ -110,13 +110,13 @@ The server exposes exactly 29 tools.
 
 ### Client configuration (2)
 
-- `wp_client_use` — set the active saved connection.
 - `wp_client_list` — list saved connection names and URLs without usernames or passwords.
+- `wp_client_get` — return one saved connection's name and URL, or fail if it does not exist.
 
 ### Structure and REST schema discovery (2)
 
 - `wp_structure_get` — query stable usage guidance for WordPress, Jelly Catalog, media, SEO, and Elementor. Request `section: "write"`, `"response"`, or `"example"` directly to receive only that fragment; the default is an overview and `"full"` is the compatibility escape hatch. The local catalog includes `product-tag` and requires no saved client.
-- `wp_api_schema` — omit `apiPath` for a compact, searchable, paginated `/wp-json/` route index, or pass a path such as `wp/v2/product` for a compact live summary of methods, argument constraints, and fields. Use `detail: "full"` only when the summary omits a required constraint.
+- `wp_rest_api` — provide a bare `domain` such as `example.com`; the tool always requests `https://{domain}/...` without reading a client or sending credentials. `apiPath` defaults to `wp-json` for a compact, searchable, paginated route index. After discovering a route, pass a full REST path such as `wp-json/wp/v2/product` for its methods, argument constraints, and fields. Use `detail: "full"` only when required.
 
 ### WordPress resources (5)
 
@@ -126,7 +126,7 @@ The server exposes exactly 29 tools.
 - `wp_resource_update` — update content or a taxonomy term.
 - `wp_resource_delete` — trash content or permanently delete a taxonomy term.
 
-Supported `resource` values are `posts`, `pages`, `products`, `categories`, `product-categories`, and `product-tags`; product resources specifically refer to Jelly Catalog and do not represent WooCommerce products. Product writes accept `productCategories`, `productTags`, and registered `meta` fields. Use `wp_api_schema` first to inspect the target site's current field definitions. Category, product-category, and product-tag deletion requires explicit `force: true`, because taxonomy terms have no trash. `perPage: -1` aggregates all pages within the documented limits.
+Supported `resource` values are `posts`, `pages`, `products`, `categories`, `product-categories`, and `product-tags`; product resources specifically refer to Jelly Catalog and do not represent WooCommerce products. Product writes accept `productCategories`, `productTags`, and registered `meta` fields. Use `wp_rest_api` first to inspect the target site's current field definitions. Category, product-category, and product-tag deletion requires explicit `force: true`, because taxonomy terms have no trash. `perPage: -1` aggregates all pages within the documented limits.
 
 Common Jelly Catalog product `meta` structures are:
 
@@ -149,13 +149,13 @@ Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML mar
 - `wp_post_content_replace` — replace every exact text occurrence in a post.
 - `wp_media_upload` — compress a local JPEG/PNG to WebP before upload, or upload GIF/AVIF/WebP unchanged, and optionally set attachment metadata.
 
-Resource create/update accepts inline `content` or a local `contentFile`. With `gutenberg: true`, the server parses the resolved body with an HTML5 parser, filters it through explicit tag and attribute allowlists plus the [WordPress allowed protocol](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/) list, and then generates Gutenberg block markup. Event attributes, inline styles, `javascript:`, `data:`, and active embedded content are removed; ordinary unknown containers are unwrapped while their safe text is preserved. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`. JPEG and PNG inputs are converted in memory to quality-85 WebP before upload; GIF, AVIF, and existing WebP files are left unchanged.
+Resource create/update accepts inline `content` or a local `contentFile`. Large REST meta objects can be submitted through `metaFile`; `meta` and `metaFile` cannot be combined. With `gutenberg: true`, the server parses the resolved body with an HTML5 parser, filters it through explicit tag and attribute allowlists plus the [WordPress allowed protocol](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/) list, and then generates Gutenberg block markup. Event attributes, inline styles, `javascript:`, `data:`, and active embedded content are removed; ordinary unknown containers are unwrapped while their safe text is preserved. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`. JPEG and PNG inputs are converted in memory to quality-85 WebP before upload; GIF, AVIF, and existing WebP files are left unchanged.
 
 ### Elementor page content (3)
 
-- `wp_elementor_get` — pages only; returns a revision, element IDs, and editable content settings by default, accepts `searchText` to locate existing copy, and returns the full backup tree only with `view: "data"`.
-- `wp_elementor_update` — partially merge existing content settings using the latest read `revision` as `expectedRevision`; multiple text/title changes are saved once, stale or non-content changes are rejected, and the Elementor cache is refreshed automatically.
-- `wp_elementor_import` — replace the complete page Elementor tree and refresh the Elementor cache automatically; use the read data view first when a backup is required.
+- `wp_elementor_get` — pages only; returns a revision, element IDs, and editable content settings by default, accepts `searchText` to locate existing copy, and stores the complete backup tree in a local result file with `view: "data"`.
+- `wp_elementor_update` — partially merge existing content settings using the latest read `revision` as `expectedRevision`; accepts inline `changes` or a local JSON `changesFile`, rejects stale or non-content changes, and refreshes the Elementor cache automatically.
+- `wp_elementor_import` — read a complete Elementor tree from local `dataFile`, replace the page tree, verify persistence, and refresh the Elementor cache. The file may contain a raw element array or a stored `wp_elementor_get` data result.
 
 The target site must expose Elementor's private `_elementor_data` page meta through the WordPress REST API (`show_in_rest`) and return it after writes. That site-side bridge should save through Elementor's document layer or invalidate Elementor's generated data and element caches. The tools fail explicitly when REST meta access is unavailable instead of treating hidden data as an empty page.
 
@@ -185,15 +185,15 @@ See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 
 - Site URLs may use HTTP or HTTPS. HTTP Basic Authentication does not encrypt credentials in transit, so use HTTPS on untrusted networks.
 - A site URL cannot contain embedded credentials, a query string, or a fragment.
-- Per-call `siteUrl` overrides must have the same origin as the saved URL.
+- Authenticated `siteUrl` overrides must have the same origin as the saved URL; `wp_rest_api` instead uses a standalone bare domain and public HTTPS requests.
 - Authenticated WordPress requests do not follow redirects. Configure the canonical site URL instead.
-- Authentication uses the saved WordPress Application Password; grant that WordPress account only the capabilities it needs.
+- Except for public `wp_rest_api` requests that never read a client, authentication uses the saved WordPress Application Password; grant that account only the capabilities it needs.
 - Credentials default to `~/.wp-api/` and use AES-256-GCM; protect both the key and ciphertext files as current-user-only data.
 - File encryption prevents plaintext browsing, packaging, and accidental logging, but it cannot defeat malicious code with arbitrary access as the same operating-system user.
 
 ### Local file boundary
 
-The following fields can read or write local files: `contentFile`, media `filePath`, package `file`, pack `folderPath`, and pack `outputPath`.
+The following fields can read or write local files: `contentFile`, `metaFile`, Elementor `changesFile` and `dataFile`, media `filePath`, package `file`, pack `folderPath`, and pack `outputPath`.
 
 By default, every such path must remain inside the MCP server process's `cwd`. Add trusted roots with `WP_API_ALLOWED_LOCAL_ROOTS`. Separate roots with the platform path delimiter:
 
@@ -201,6 +201,8 @@ By default, every such path must remain inside the MCP server process's `cwd`. A
 - Linux/macOS: colon, for example `/srv/content:/srv/packages`
 
 Both lexical and resolved real paths are checked. Existing symlinks cannot be used to escape an allowed root. Configured roots must already exist and be directories. Keep the allowlist narrow: every permitted root becomes available to whichever agent can invoke these file tools.
+
+When a tool's compact JSON result exceeds 8 KiB, the complete result is omitted from `structuredContent` and stored under `.wp-api-results` in the current working directory. The MCP response returns only the absolute file path, byte count, and SHA-256. Set `WP_API_RESULT_DIR` to change this directory; if a stored file will later be used as tool input, its directory must also be inside `cwd` or `WP_API_ALLOWED_LOCAL_ROOTS`. Result files may contain site content, so clean them up when no longer needed and do not commit them. The 8 KiB value is this project's conversation-inline policy, not an MCP or WordPress hard limit.
 
 This allowlist is an application boundary, not an operating-system sandbox. Use roots that untrusted local users and processes cannot mutate while a tool is running; otherwise path replacement between validation and file access remains an operating-system race.
 
@@ -211,6 +213,7 @@ This allowlist is an application boundary, not an operating-system sandbox. Use 
 | Network request timeout | 30 seconds |
 | One WordPress REST response | 25 MiB |
 | One `contentFile` | 25 MiB |
+| One `metaFile` or `changesFile` | 10 MiB JSON |
 | One media file | 50 MiB |
 | One plugin/theme ZIP | 100 MiB |
 | One Elementor tree | 10 MiB JSON, 10,000 elements, 100 levels |
@@ -233,7 +236,7 @@ Package listing/details and plugin activation/deactivation use native WordPress 
 
 ## Credential-storage migration
 
-The current release removes `wp_client_add`, the build-time plaintext credential copy, and UI plaintext imports. Run `wp-api-config` to re-enter connections, then let the MCP host use `wp_client_use` or the default selected in the page. Configure a separate vault on every host.
+The current release removes `wp_client_add`, `wp_client_use`, active-client state, the build-time plaintext credential copy, and UI plaintext imports. Run `wp-api-config` to re-enter connections, then pass the saved `client` name explicitly to remote tools. Configure a separate vault on every host.
 
 ## Development
 

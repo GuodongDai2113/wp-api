@@ -1,6 +1,7 @@
 import { resolveContentInput } from "../../lib/content-input.js";
 import { replaceContentText, type ReplaceContentTextResult } from "../../lib/content-replace.js";
 import { convertHtmlToGutenberg } from "../../lib/html-to-gutenberg.js";
+import { readBoundedJsonFile } from "../../lib/json-file.js";
 import {
   addLinkToContent,
   extractPostContent,
@@ -95,6 +96,8 @@ export interface ResourceBodyInput {
   productTags?: number[];
   /** 目标 REST 资源已经注册并允许写入的 meta 字段。 */
   meta?: Record<string, unknown>;
+  /** 保存完整 WordPress REST meta 对象的本地 JSON 文件路径。 */
+  metaFile?: string;
   /** taxonomy 资源名称。 */
   name?: string;
   /** taxonomy 资源描述。 */
@@ -282,6 +285,32 @@ function assertTaxonomyIds(ids: number[] | undefined, label: string): void {
   }
 }
 
+/** 判断未知值是否为可作为 WordPress REST meta 的普通对象。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 解析内联或文件形式的 WordPress REST meta，并拒绝同时提供两种来源。 */
+async function resolveResourceMeta(input: ResourceBodyInput): Promise<Record<string, unknown> | undefined> {
+  if (input.meta !== undefined && input.metaFile !== undefined) {
+    throw new Error("Provide either meta or metaFile, not both.");
+  }
+  if (input.meta !== undefined) {
+    if (!isRecord(input.meta)) {
+      throw new Error("meta must be a JSON object.");
+    }
+    return input.meta;
+  }
+  if (input.metaFile === undefined) {
+    return undefined;
+  }
+  const parsed = await readBoundedJsonFile(input.metaFile, { label: "Meta file" });
+  if (!isRecord(parsed)) {
+    throw new Error("Meta file must contain a JSON object.");
+  }
+  return parsed;
+}
+
 /** 返回输入中所有已经显式提供的字段名称。 */
 function findProvidedFields(input: ResourceBodyInput, fields: readonly (keyof ResourceBodyInput)[]): string[] {
   return fields.filter((field) => input[field] !== undefined);
@@ -336,6 +365,7 @@ function assertResourceBodyFields(resource: ContentResourceName, input: Resource
 async function buildResourceBody(resource: ContentResourceName, input: ResourceBodyInput): Promise<Record<string, unknown>> {
   assertResourceBodyFields(resource, input);
   const config = getResourceConfig(resource);
+  const meta = await resolveResourceMeta(input);
   if (config.kind === "taxonomy") {
     assertOptionalNonNegativeId(input.parent, "Parent");
     return compactObject({
@@ -343,7 +373,7 @@ async function buildResourceBody(resource: ContentResourceName, input: ResourceB
       slug: input.slug,
       description: input.description,
       parent: input.parent,
-      meta: input.meta
+      meta
     });
   }
 
@@ -371,7 +401,7 @@ async function buildResourceBody(resource: ContentResourceName, input: ResourceB
     categories: input.categories,
     product_cat: input.productCategories,
     product_tag: input.productTags,
-    meta: input.meta
+    meta
   });
 }
 

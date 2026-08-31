@@ -78,6 +78,8 @@ function createRemoteClientStub(overrides = {}) {
 test("MCP server 只注册当前纯 MCP 工具集合", () => {
   const registrations = collectRegistrations();
   assert.deepEqual([...registrations.keys()].sort(), [...WP_API_TOOL_NAMES].sort());
+  assert.equal(registrations.get("wp_client_get").inputSchema.name.safeParse(undefined).success, false);
+  assert.equal(registrations.get("wp_resource_get").inputSchema.client.safeParse(undefined).success, false);
 
   for (const registration of registrations.values()) {
     assert.deepEqual(Object.keys(registration.annotations).sort(), [
@@ -104,6 +106,7 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
 
   for (const removedName of [
     "wp_client_add",
+    "wp_api_schema",
     "wp_plugin_list",
     "wp_theme_push",
     "wp_elementor_get_tokens",
@@ -166,36 +169,32 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
     },
     _links: { self: [{ href: "https://example.com/wp-json/wp/v2/product" }] }
   };
-  const client = createRemoteClientStub({
-    /** 记录接口结构查询使用的 API 路径和 HTTP 方法。 */
-    async requestApiPath(apiPath, options = {}) {
-      calls.push({ apiPath, options });
-      return {
-        data: apiPath === "" ? rootSchema : routeSchema,
-        pagination: { total: 0, totalPages: 0 }
-      };
-    }
-  });
   const context = {
-    /** 返回不会发出真实网络请求的 WordPress client 替身。 */
-    async resolveClientImpl() {
-      return client;
+    /** 返回固定 REST 元数据并记录工具拼接的公开 HTTPS 请求。 */
+    async fetchImpl(url, init) {
+      calls.push({ url, method: init.method, authorization: init.headers.Authorization });
+      return new Response(JSON.stringify(init.method === "GET" ? rootSchema : routeSchema), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
     }
   };
 
-  const index = await executeWpApiTool("wp_api_schema", { search: "wp/v2", limit: 1 }, context);
-  const fullIndex = await executeWpApiTool("wp_api_schema", { detail: "full" }, context);
-  const route = await executeWpApiTool("wp_api_schema", { apiPath: "/wp/v2/product/" }, context);
-  const fullRoute = await executeWpApiTool("wp_api_schema", { apiPath: "wp/v2/product", detail: "full" }, context);
+  const index = await executeWpApiTool("wp_rest_api", { domain: "EXAMPLE.com", search: "wp/v2", limit: 1 }, context);
+  const fullIndex = await executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "wp-json", detail: "full" }, context);
+  const route = await executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "/wp-json/wp/v2/product/" }, context);
+  const fullRoute = await executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "wp/v2/product", detail: "full" }, context);
 
   assert.deepEqual(calls, [
-    { apiPath: "", options: { method: "GET" } },
-    { apiPath: "", options: { method: "GET" } },
-    { apiPath: "wp/v2/product", options: { method: "OPTIONS" } },
-    { apiPath: "wp/v2/product", options: { method: "OPTIONS" } }
+    { url: "https://example.com/wp-json/", method: "GET", authorization: undefined },
+    { url: "https://example.com/wp-json/", method: "GET", authorization: undefined },
+    { url: "https://example.com/wp-json/wp/v2/product", method: "OPTIONS", authorization: undefined },
+    { url: "https://example.com/wp-json/wp/v2/product", method: "OPTIONS", authorization: undefined }
   ]);
   assert.deepEqual(index, {
-    apiPath: "",
+    domain: "example.com",
+    apiPath: "wp-json",
+    url: "https://example.com/wp-json/",
     method: "GET",
     detail: "summary",
     schema: {
@@ -208,13 +207,17 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
     }
   });
   assert.deepEqual(fullIndex, {
-    apiPath: "",
+    domain: "example.com",
+    apiPath: "wp-json",
+    url: "https://example.com/wp-json/",
     method: "GET",
     detail: "full",
     schema: rootSchema
   });
   assert.deepEqual(route, {
-    apiPath: "wp/v2/product",
+    domain: "example.com",
+    apiPath: "wp-json/wp/v2/product",
+    url: "https://example.com/wp-json/wp/v2/product",
     method: "OPTIONS",
     detail: "summary",
     schema: {
@@ -247,16 +250,61 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
   assert.equal(JSON.stringify(route).length < JSON.stringify(fullRoute).length, true);
 
   await assert.rejects(
-    () => executeWpApiTool("wp_api_schema", { apiPath: "wp/v2/../users" }, context),
-    /safe unencoded wp-json relative path/
+    () => executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "wp/v2/../users" }, context),
+    /safe unencoded REST path/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_api_schema", { apiPath: "%2e%2e/admin" }, context),
-    /safe unencoded wp-json relative path/
+    () => executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "%2e%2e/admin" }, context),
+    /safe unencoded REST path/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_api_schema", { limit: 101 }, context),
+    () => executeWpApiTool("wp_rest_api", { domain: "example.com", limit: 101 }, context),
     /between 1 and 100/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_rest_api", { domain: "https://example.com" }, context),
+    /bare hostname/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_rest_api", { domain: "example.com", client: "prod" }, context),
+    /does not accept client or siteUrl/
+  );
+});
+
+test("wp_rest_api 仅凭 domain 拼接公开 HTTPS REST 请求", async () => {
+  const calls = [];
+  const context = {
+    /** 返回公开 WordPress REST 根索引，并记录请求不读取 client 或携带凭据。 */
+    async fetchImpl(url, init) {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({
+        namespaces: ["wp/v2"],
+        routes: {
+          "/wp/v2/posts": {
+            namespace: "wp/v2",
+            endpoints: [{ methods: ["GET"] }]
+          }
+        }
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  };
+
+  const result = await executeWpApiTool("wp_rest_api", {
+    domain: "example.com",
+    search: "posts"
+  }, context);
+  assert.equal(result.schema.routes[0].path, "/wp/v2/posts");
+  assert.equal(result.apiPath, "wp-json");
+  assert.equal(result.url, "https://example.com/wp-json/");
+  assert.equal(calls[0].url, "https://example.com/wp-json/");
+  assert.equal(calls[0].init.method, "GET");
+  assert.equal(calls[0].init.headers.Authorization, undefined);
+  await assert.rejects(
+    () => executeWpApiTool("wp_rest_api", {}, context),
+    /domain is required/
   );
 });
 
@@ -281,7 +329,7 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   const pageOverview = await executeWpApiTool("wp_structure_get", { structure: "page" }, context);
   const pageWrite = await executeWpApiTool("wp_structure_get", { structure: "page", section: "write" }, context);
   const pageFull = await executeWpApiTool("wp_structure_get", { structure: "page", section: "full" }, context);
-  assert.equal(pageOverview.remoteSchemaPath, "wp/v2/pages");
+  assert.equal(pageOverview.remoteSchemaPath, "wp-json/wp/v2/pages");
   assert.equal("writeShape" in pageOverview, false);
   assert.equal(pageWrite.section, "write");
   assert.equal(pageWrite.value.resource, "required literal pages");
@@ -290,7 +338,7 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   const elementor = await executeWpApiTool("wp_structure_get", { structure: "elementor-page", section: "write" }, context);
   assert.match(elementor.value.update, /elementId/);
   const productTag = await executeWpApiTool("wp_structure_get", { structure: "product-tag" }, context);
-  assert.equal(productTag.remoteSchemaPath, "wp/v2/product_tag");
+  assert.equal(productTag.remoteSchemaPath, "wp-json/wp/v2/product_tag");
   assert.equal(resolverCalls, 0);
 
   await assert.rejects(
@@ -335,7 +383,11 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(updateSchema.productCategories.safeParse([]).success, true);
   assert.equal(updateSchema.productTags.safeParse([3, 4]).success, true);
   assert.equal(updateSchema.meta.safeParse({ _product_sku: "JC-100" }).success, true);
+  assert.equal(updateSchema.metaFile.safeParse("product-meta.json").success, true);
   assert.equal(updateSchema.resource.safeParse("product-tags").success, true);
+  const elementorUpdateSchema = registrations.get("wp_elementor_update").inputSchema;
+  assert.equal(elementorUpdateSchema.changes.safeParse(undefined).success, true);
+  assert.equal(elementorUpdateSchema.changesFile.safeParse("changes.json").success, true);
 });
 
 test("MCP package schema 要求统一软件包类型并禁止停用主题", () => {
@@ -447,7 +499,7 @@ test("Jelly Form MCP 工具映射设置与只读询价 REST 请求", async () =>
   ]);
 });
 
-test("executeWpApiTool 仅执行 client 选择和脱敏列表", async (t) => {
+test("executeWpApiTool 仅执行 client 查找和脱敏列表", async (t) => {
   const configDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-dispatch-client-"));
   t.after(() => rm(configDir, { recursive: true, force: true }));
 
@@ -463,11 +515,12 @@ test("executeWpApiTool 仅执行 client 选择和脱敏列表", async (t) => {
     siteUrl: "http://localhost:8080/wordpress"
   });
 
-  await executeWpApiTool("wp_client_use", { name: "local" }, { configDir });
-  assert.deepEqual(await executeWpApiTool("wp_client_list", {}, { configDir }), {
-    activeClient: "local",
-    clients: [added]
-  });
+  assert.deepEqual(await executeWpApiTool("wp_client_get", { name: "local" }, { configDir }), added);
+  assert.deepEqual(await executeWpApiTool("wp_client_list", {}, { configDir }), [added]);
+  await assert.rejects(
+    () => executeWpApiTool("wp_client_get", { name: "missing" }, { configDir }),
+    /Client "missing" not found/
+  );
 });
 
 test("executeWpApiTool 对未知名称立即返回 MCP 工具错误", async () => {
@@ -481,7 +534,9 @@ test("MCP 本地路径边界允许工作区内的正文文件并传递真实路�
   const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-mcp-local-"));
   t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
   const contentFile = path.join(workspaceDirectory, "article.html");
+  const metaFile = path.join(workspaceDirectory, "meta.json");
   await writeFile(contentFile, "<p>Workspace content</p>");
+  await writeFile(metaFile, JSON.stringify({ source: "local" }));
   const calls = [];
   const client = createRemoteClientStub({
     /** 记录使用安全文件内容创建资源的调用。 */
@@ -493,7 +548,8 @@ test("MCP 本地路径边界允许工作区内的正文文件并传递真实路�
 
   await executeWpApiTool("wp_resource_create", {
     resource: "posts",
-    contentFile
+    contentFile,
+    metaFile
   }, {
     /** 返回不会发出网络请求的资源 client 替身。 */
     async resolveClientImpl() {
@@ -504,6 +560,7 @@ test("MCP 本地路径边界允许工作区内的正文文件并传递真实路�
   assert.equal(calls.length, 1);
   assert.equal(calls[0].route, "posts");
   assert.equal(calls[0].body.content, "<p>Workspace content</p>");
+  assert.deepEqual(calls[0].body.meta, { source: "local" });
 });
 
 test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async (t) => {
@@ -511,8 +568,12 @@ test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async
   t.after(() => rm(outsideDirectory, { recursive: true, force: true }));
   const mediaFile = path.join(outsideDirectory, "hero.png");
   const packageFile = path.join(outsideDirectory, "plugin.zip");
+  const metaFile = path.join(outsideDirectory, "meta.json");
+  const changesFile = path.join(outsideDirectory, "changes.json");
   await writeFile(mediaFile, "image fixture");
   await writeFile(packageFile, "zip fixture");
+  await writeFile(metaFile, "{}");
+  await writeFile(changesFile, "[]");
   let resolveCalls = 0;
   const context = {
     /** 记录任何意外发生的 client 解析。 */
@@ -529,6 +590,18 @@ test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async
   await assert.rejects(
     () => executeWpApiTool("wp_package_update", { packageType: "plugin", file: packageFile }, context),
     /file.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_resource_update", { resource: "posts", id: 1, metaFile }, context),
+    /metaFile.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_elementor_update", {
+      postId: 1,
+      expectedRevision: "revision",
+      changesFile
+    }, context),
+    /changesFile.*outside the allowed local roots/
   );
   assert.equal(resolveCalls, 0);
 });

@@ -148,7 +148,7 @@ function renderPage(nonce: string): string {
 </style></head><body><main class="shell">
 <header class="hero"><div class="brand"><div class="brand-mark" aria-hidden="true">WP</div><div><h1>安全连接管理</h1><p class="subtitle">凭据仅加密保存在本机，不会通过 MCP 返回。</p></div></div><button id="close" class="button ghost" type="button">关闭服务</button></header>
 <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
-<section class="summary" aria-label="连接概览"><div class="panel summary-card"><span class="summary-label">已保存连接</span><strong id="client-count" class="summary-value">0</strong></div><div class="panel summary-card"><span class="summary-label">当前默认连接</span><strong id="active-name" class="summary-value">未设置</strong></div></section>
+<section class="summary" aria-label="连接概览"><div class="panel summary-card"><span class="summary-label">已保存连接</span><strong id="client-count" class="summary-value">0</strong></div></section>
 <div class="layout">
 <section id="form-panel" class="panel form-panel"><div class="panel-head"><p class="eyebrow">Connection</p><h2 id="form-title">添加新连接</h2><p class="panel-copy">填写 WordPress 站点和应用密码。</p></div><form id="form" class="form-body"><input id="original" type="hidden"><div class="fields">
 <label class="field"><span class="field-label">连接名称</span><span class="input-wrap"><input id="name" autocomplete="off" required maxlength="100" placeholder="例如：生产站点"></span><span class="field-help">用于在 MCP 工具中识别该站点。</span></label>
@@ -159,7 +159,7 @@ function renderPage(nonce: string): string {
 <section class="panel list-panel"><div class="list-head"><div><p class="eyebrow">Saved sites</p><h2>已保存连接</h2></div><span id="count-badge" class="count">0</span></div><div id="clients" class="client-list"></div></section>
 </div>
 </main><script nonce="${nonce}">
-const token=location.hash.startsWith('#token=')?decodeURIComponent(location.hash.slice(7)):'';history.replaceState(null,'',location.pathname);let state={activeClient:null,clients:[]};
+const token=location.hash.startsWith('#token=')?decodeURIComponent(location.hash.slice(7)):'';history.replaceState(null,'',location.pathname);let state={clients:[]};
 /* 按元素 ID 返回页面节点。 */
 const el=id=>document.getElementById(id);
 /* 在页面顶部显示成功或错误通知。 */
@@ -173,7 +173,7 @@ function editClient(client){el('original').value=client.name;el('name').value=cl
 /* 创建统一样式的连接操作按钮。 */
 function actionButton(label,kind,handler,disabled=false){const button=document.createElement('button');button.type='button';button.className='button compact '+kind;button.textContent=label;button.disabled=disabled;button.onclick=()=>Promise.resolve(handler()).catch(error=>notice(error.message,true));return button}
 /* 加载连接列表并创建对应的管理按钮。 */
-async function load(){const data=await api('/api/clients');state=data;el('client-count').textContent=String(data.clients.length);el('count-badge').textContent=String(data.clients.length);el('active-name').textContent=data.activeClient||'未设置';const root=el('clients');root.replaceChildren();if(!data.clients.length){const empty=document.createElement('div');empty.className='empty';const icon=document.createElement('div');icon.className='empty-icon';icon.textContent='+';const title=document.createElement('strong');title.textContent='还没有连接';const copy=document.createElement('p');copy.textContent='在左侧填写站点信息，保存后即可供 MCP 使用。';empty.append(icon,title,copy);root.append(empty);return}for(const client of data.clients){const card=document.createElement('article');card.className='client-card';const main=document.createElement('div');main.className='client-main';const avatar=document.createElement('div');avatar.className='client-avatar';avatar.textContent=client.name.slice(0,2)||'WP';const info=document.createElement('div');info.className='client-info';const title=document.createElement('div');title.className='client-title';const name=document.createElement('span');name.className='client-name';name.textContent=client.name;title.append(name);if(data.activeClient===client.name){const badge=document.createElement('span');badge.className='badge';badge.textContent='默认';title.append(badge)}const url=document.createElement('div');url.className='client-url';url.textContent=client.siteUrl;const user=document.createElement('div');user.className='client-user';user.textContent=client.username+' · '+(client.passwordSet?'密码已设置':'未设置密码');info.append(title,url,user);main.append(avatar,info);const actions=document.createElement('div');actions.className='client-actions';actions.append(actionButton('编辑','secondary',()=>editClient(client)),actionButton('设为默认','secondary',async()=>{await api('/api/clients/'+encodeURIComponent(client.name)+'/activate',{method:'POST'});notice('默认连接已更新。');await load()},data.activeClient===client.name),actionButton('测试','secondary',async()=>{await api('/api/clients/'+encodeURIComponent(client.name)+'/test',{method:'POST'});notice('连接测试成功。')}),actionButton('删除','danger',async()=>{if(confirm('确定删除连接 “'+client.name+'” 吗？')){await api('/api/clients/'+encodeURIComponent(client.name),{method:'DELETE'});notice('连接已删除。');resetForm();await load()}}));card.append(main,actions);root.append(card)}}
+async function load(){const data=await api('/api/clients');state=data;el('client-count').textContent=String(data.clients.length);el('count-badge').textContent=String(data.clients.length);const root=el('clients');root.replaceChildren();if(!data.clients.length){const empty=document.createElement('div');empty.className='empty';const icon=document.createElement('div');icon.className='empty-icon';icon.textContent='+';const title=document.createElement('strong');title.textContent='还没有连接';const copy=document.createElement('p');copy.textContent='在左侧填写站点信息，保存后即可供 MCP 使用。';empty.append(icon,title,copy);root.append(empty);return}for(const client of data.clients){const card=document.createElement('article');card.className='client-card';const main=document.createElement('div');main.className='client-main';const avatar=document.createElement('div');avatar.className='client-avatar';avatar.textContent=client.name.slice(0,2)||'WP';const info=document.createElement('div');info.className='client-info';const title=document.createElement('div');title.className='client-title';const name=document.createElement('span');name.className='client-name';name.textContent=client.name;title.append(name);const url=document.createElement('div');url.className='client-url';url.textContent=client.siteUrl;const user=document.createElement('div');user.className='client-user';user.textContent=client.username+' · '+(client.passwordSet?'密码已设置':'未设置密码');info.append(title,url,user);main.append(avatar,info);const actions=document.createElement('div');actions.className='client-actions';actions.append(actionButton('编辑','secondary',()=>editClient(client)),actionButton('测试','secondary',async()=>{await api('/api/clients/'+encodeURIComponent(client.name)+'/test',{method:'POST'});notice('连接测试成功。')}),actionButton('删除','danger',async()=>{if(confirm('确定删除连接 “'+client.name+'” 吗？')){await api('/api/clients/'+encodeURIComponent(client.name),{method:'DELETE'});notice('连接已删除。');resetForm();await load()}}));card.append(main,actions);root.append(card)}}
 el('form').onsubmit=async event=>{event.preventDefault();try{const originalName=el('original').value;const body={name:el('name').value,siteUrl:el('siteUrl').value,username:el('username').value,appPassword:el('password').value};if(originalName)body.originalName=originalName;await api('/api/clients',{method:originalName?'PUT':'POST',body:JSON.stringify(body)});notice('连接已安全保存。');resetForm();await load()}catch(error){notice(error.message,true)}};
 el('test').onclick=async()=>{try{await api('/api/test',{method:'POST',body:JSON.stringify({name:el('name').value,siteUrl:el('siteUrl').value,username:el('username').value,appPassword:el('password').value,originalName:el('original').value})});notice('连接测试成功。')}catch(error){notice(error.message,true)}};el('cancel').onclick=resetForm;el('close').onclick=async()=>{await api('/api/shutdown',{method:'POST'});document.body.innerHTML='<main class="panel closed"><div class="brand-mark">WP</div><h1>配置服务已关闭</h1><p class="subtitle">凭据已安全保存，可以关闭此页面。</p></main>'};
 if(!token)notice('配置令牌缺失，请从 wp-api-config 命令重新打开页面。',true);else load().catch(error=>notice(error.message,true));
@@ -243,8 +243,7 @@ export async function startConfigServer(options: ConfigServerOptions = {}): Prom
 
     try {
       if (request.method === "GET" && requestUrl.pathname === "/api/clients") {
-        const summary = await store.listClients();
-        sendJson(response, 200, { activeClient: summary.activeClient, clients: await store.listClientsForConfiguration() }, nonce);
+        sendJson(response, 200, { clients: await store.listClientsForConfiguration() }, nonce);
         return;
       }
       if ((request.method === "POST" || request.method === "PUT") && requestUrl.pathname === "/api/clients") {
@@ -260,13 +259,9 @@ export async function startConfigServer(options: ConfigServerOptions = {}): Prom
         sendJson(response, 200, saved, nonce);
         return;
       }
-      const clientRoute = requestUrl.pathname.match(/^\/api\/clients\/([^/]+)\/(activate|test)$/);
+      const clientRoute = requestUrl.pathname.match(/^\/api\/clients\/([^/]+)\/test$/);
       const deleteRoute = requestUrl.pathname.match(/^\/api\/clients\/([^/]+)$/);
-      if (request.method === "POST" && clientRoute?.[2] === "activate") {
-        sendJson(response, 200, await store.setActiveClient(decodeURIComponent(clientRoute[1])), nonce);
-        return;
-      }
-      if (request.method === "POST" && clientRoute?.[2] === "test") {
+      if (request.method === "POST" && clientRoute) {
         const client = await store.getClient(decodeURIComponent(clientRoute[1]));
         if (!client) throw new Error("Client not found.");
         try {

@@ -36,7 +36,7 @@ export interface StructureDefinition {
   title: string;
   /** 结构用途和适用边界。 */
   description: string;
-  /** 可传给 `wp_api_schema` 的实时 REST 路径；纯本地结构可以为空。 */
+  /** 可传给 `wp_rest_api` 的实时 REST 路径；纯本地结构可以为空。 */
   remoteSchemaPath: string | null;
   /** 可操作该结构的 MCP 工具名称。 */
   mcpTools: string[];
@@ -109,7 +109,8 @@ function createContentWriteShape(): Record<string, unknown> {
     contentFile: "string; local readable file path",
     gutenberg: "boolean; convert resolved HTML to Gutenberg block markup",
     featuredMedia: "non-negative integer; 0 clears the featured image",
-    meta: "object; only fields registered with show_in_rest are writable"
+    meta: "object; only fields registered with show_in_rest are writable; do not combine with metaFile",
+    metaFile: "string; local JSON file containing the complete meta object; use instead of large inline meta"
   };
 }
 
@@ -137,7 +138,8 @@ function createTaxonomyWriteShape(resource: "categories" | "product-categories")
     slug: "string",
     description: "string",
     parent: "non-negative integer; 0 removes the parent",
-    meta: "object; only registered REST term meta fields are writable",
+    meta: "object; only registered REST term meta fields are writable; do not combine with metaFile",
+    metaFile: "string; local JSON file containing the complete term meta object",
     force: "delete only; must be true because taxonomy terms have no trash"
   };
 }
@@ -153,7 +155,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "post",
       title: "WordPress post",
       description: "Standard WordPress post resource, including body content, post categories, featured media, and registered meta.",
-      remoteSchemaPath: "wp/v2/posts",
+      remoteSchemaPath: "wp-json/wp/v2/posts",
       mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_post_link", "wp_post_content_replace", "wp_seo_get", "wp_seo_update"],
       writeShape: {
         ...contentWrite,
@@ -176,14 +178,14 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       },
       notes: [
         "Use context=edit permissions to receive raw title/content/excerpt fields from WordPress.",
-        "Use wp_api_schema with wp/v2/posts to inspect fields added by active plugins."
+        "Use wp_rest_api with a domain and apiPath wp-json/wp/v2/posts to inspect fields added by active plugins."
       ]
     },
     page: {
       name: "page",
       title: "WordPress page",
       description: "Standard hierarchical WordPress page. Elementor tools also operate on this resource through page meta.",
-      remoteSchemaPath: "wp/v2/pages",
+      remoteSchemaPath: "wp-json/wp/v2/pages",
       mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
       writeShape: {
         ...contentWrite,
@@ -214,7 +216,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "product",
       title: "Jelly Catalog product",
       description: "Jelly Catalog product content with product categories, product tags, gallery, attributes, FAQ, video, and download attachment meta.",
-      remoteSchemaPath: "wp/v2/product",
+      remoteSchemaPath: "wp-json/wp/v2/product",
       mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update"],
       writeShape: {
         ...contentWrite,
@@ -259,7 +261,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "category",
       title: "WordPress post category",
       description: "Native hierarchical category assigned to WordPress posts.",
-      remoteSchemaPath: "wp/v2/categories",
+      remoteSchemaPath: "wp-json/wp/v2/categories",
       mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update"],
       writeShape: createTaxonomyWriteShape("categories"),
       responseShape: taxonomyResponse,
@@ -270,7 +272,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "product-category",
       title: "Jelly Catalog product category (product_cat)",
       description: "Hierarchical Jelly Catalog product_cat taxonomy with category marketing content and media meta.",
-      remoteSchemaPath: "wp/v2/product_cat",
+      remoteSchemaPath: "wp-json/wp/v2/product_cat",
       mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update"],
       writeShape: {
         ...createTaxonomyWriteShape("product-categories"),
@@ -310,7 +312,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "product-tag",
       title: "Jelly Catalog product tag (product_tag)",
       description: "Non-hierarchical Jelly Catalog product_tag taxonomy assigned to catalog products.",
-      remoteSchemaPath: "wp/v2/product_tag",
+      remoteSchemaPath: "wp-json/wp/v2/product_tag",
       mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete"],
       writeShape: {
         resource: "required literal product-tags",
@@ -338,8 +340,8 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "media",
       title: "WordPress media attachment",
       description: "WordPress media attachment uploaded from a local bitmap; JPEG and PNG sources are converted to WebP before upload.",
-      remoteSchemaPath: "wp/v2/media",
-      mcpTools: ["wp_media_upload", "wp_api_schema"],
+      remoteSchemaPath: "wp-json/wp/v2/media",
+      mcpTools: ["wp_media_upload", "wp_rest_api"],
       writeShape: {
         filePath: "required string; local .avif, .gif, .jpeg, .jpg, .png, or .webp path; JPEG/PNG upload as WebP",
         title: "string",
@@ -392,25 +394,25 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       name: "elementor-page",
       title: "Elementor page content",
       description: "Content-only reading and partial editing plus explicit full replacement for existing WordPress pages; writes refresh Elementor caches automatically.",
-      remoteSchemaPath: "wp/v2/pages",
+      remoteSchemaPath: "wp-json/wp/v2/pages",
       mcpTools: ["wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
       writeShape: {
         postId: "required positive WordPress page ID",
-        read: "view content by default; optional searchText filters editable values; view data returns a full backup",
-        update: "expectedRevision:string plus changes:{elementId:string,settings:object}[]; copy the revision, element IDs and setting keys from the latest content read result",
-        import: "data:ElementorElement[]; replaces the complete page element tree"
+        read: "view content by default; optional searchText filters editable values; view data stores a full backup in a local result file",
+        update: "expectedRevision:string plus either changes:{elementId:string,settings:object}[] or changesFile:string; copy the revision, element IDs and setting keys from the latest content read result",
+        import: "dataFile:string; reads a raw element array or stored wp_elementor_get data result and replaces the complete page element tree"
       },
       responseShape: {
-        read: "revision plus content elements with elementId and editable settings, or the complete data tree when view=data",
-        update: "updated=true, cache_refreshed=true, plus changed element IDs and field names",
-        import: "imported=true, cache_refreshed=true, plus recursive element count"
+        read: "revision plus content elements with elementId and editable settings, or a local result file reference when view=data",
+        update: "updated=true, match=true, revisions, cache_refreshed=true, plus changed element IDs and field names",
+        import: "imported=true, match=true, revision, cache_refreshed=true, plus recursive element count"
       },
       example: {
         postId: 20,
         expectedRevision: "<revision from wp_elementor_get>",
         changes: [{ elementId: "a1b2c3d4", settings: { title: "New heading" } }]
       },
-      notes: ["Call wp_elementor_get before update and copy its revision, the returned elementId, and only changed setting keys.", "A stale expectedRevision is rejected to avoid overwriting a newer Elementor edit.", "Import replaces the full page tree; use get with view=data first when a backup is required.", "Update and import automatically clear the site-wide Elementor cache after the page data is verified.", "All three tools only write content through the WordPress pages route; cache refresh uses Elementor's DELETE elementor/v1/cache endpoint.", "The target site must expose _elementor_data through REST."]
+      notes: ["Call wp_elementor_get before update and copy its revision, the returned elementId, and only changed setting keys.", "Use changesFile instead of inline changes when a batch would add excessive data to the Agent conversation.", "A stale expectedRevision is rejected to avoid overwriting a newer Elementor edit.", "Import replaces the full page tree; use get with view=data first when a backup is required.", "Update and import automatically clear the site-wide Elementor cache after the page data is verified.", "All three tools only write content through the WordPress pages route; cache refresh uses Elementor's DELETE elementor/v1/cache endpoint.", "The target site must expose _elementor_data through REST."]
     }
   };
 }

@@ -11,6 +11,7 @@ import {
   type ElementorElement,
   type ElementorSettings
 } from "../../lib/elementor.js";
+import { readBoundedJsonFile } from "../../lib/json-file.js";
 import type { WordPressClient } from "../../lib/wp-client.js";
 
 /** Elementor MCP handler 支持的三个页面内容工具名称。 */
@@ -41,6 +42,8 @@ export interface ElementorContentReadPayload extends ElementorBasePayload {
   elements: ElementorEditableContent[];
   /** 当前筛选后返回的内容元素数量。 */
   count: number;
+  /** 完整元素树的 UTF-8 JSON 字节数，供 Agent 判断页面是否接近 10 MiB 上限。 */
+  data_bytes: number;
   /** 局部修改时必须回传的页面数据版本，避免覆盖并发编辑。 */
   revision: string;
   /** Agent 将读取结果转换为局部修改输入的简短说明。 */
@@ -55,6 +58,8 @@ export interface ElementorDataReadPayload extends ElementorBasePayload {
   data: ElementorElement[];
   /** 完整元素树中的递归元素数量。 */
   elements_count: number;
+  /** 完整元素树的 UTF-8 JSON 字节数，供 Agent 判断页面是否接近 10 MiB 上限。 */
+  data_bytes: number;
   /** 当前完整页面数据的版本校验值。 */
   revision: string;
 }
@@ -65,6 +70,12 @@ export interface ElementorUpdatePayload extends ElementorBasePayload {
   updated: true;
   /** 已修改的元素及字段摘要。 */
   changes: ElementorAppliedChange[];
+  /** 页面修改前的完整 Elementor 数据 SHA-256。 */
+  revision_before: string;
+  /** 页面落盘后回读得到的完整 Elementor 数据 SHA-256。 */
+  revision_after: string;
+  /** 表示回读数据与请求写入数据完全一致。 */
+  match: true;
   /** 表示页面保存后已自动刷新 Elementor 全站缓存。 */
   cache_refreshed: true;
 }
@@ -75,6 +86,10 @@ export interface ElementorImportPayload extends ElementorBasePayload {
   imported: true;
   /** 写入元素树中的递归元素数量。 */
   elements_count: number;
+  /** 页面落盘后回读得到的完整 Elementor 数据 SHA-256。 */
+  revision_after: string;
+  /** 表示回读数据与输入文件中的数据完全一致。 */
+  match: true;
   /** 表示页面保存后已自动刷新 Elementor 全站缓存。 */
   cache_refreshed: true;
 }
@@ -207,7 +222,10 @@ function assertBoundedJsonValue(value: unknown, label: string): void {
     }
   }
   if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_ELEMENTOR_JSON_BYTES) {
-    throw new Error(`${label} exceeds the maximum size of ${MAX_ELEMENTOR_JSON_BYTES} bytes.`);
+    throw new Error(
+      `${label} exceeds the maximum size of ${MAX_ELEMENTOR_JSON_BYTES} bytes.`
+      + " Split or simplify the page, or update fewer elements; the Elementor limits are fixed and require code changes to raise."
+    );
   }
 }
 
@@ -246,12 +264,18 @@ function validateElementorTree(data: unknown[]): ElementorElement[] {
   while (pending.length > 0) {
     const current = pending.pop() as PendingElementValidation;
     if (current.depth > MAX_ELEMENTOR_TREE_DEPTH) {
-      throw new Error(`Elementor data exceeds the maximum tree depth of ${MAX_ELEMENTOR_TREE_DEPTH}.`);
+      throw new Error(
+        `Elementor data exceeds the maximum tree depth of ${MAX_ELEMENTOR_TREE_DEPTH}.`
+        + " Flatten the nested container structure to continue."
+      );
     }
     assertElementShape(current.element);
     elementCount += 1;
     if (elementCount > MAX_ELEMENTOR_ELEMENT_COUNT) {
-      throw new Error(`Elementor data exceeds the maximum element count of ${MAX_ELEMENTOR_ELEMENT_COUNT}.`);
+      throw new Error(
+        `Elementor data exceeds the maximum element count of ${MAX_ELEMENTOR_ELEMENT_COUNT}.`
+        + " Simplify the page structure or split it into smaller pages."
+      );
     }
     for (const child of current.element.elements) {
       pending.push({ element: child, depth: current.depth + 1 });
@@ -261,24 +285,60 @@ function validateElementorTree(data: unknown[]): ElementorElement[] {
   return data as ElementorElement[];
 }
 
-/** 读取覆盖导入所需的完整 Elementor 元素树。 */
-function readRequiredData(input: ElementorToolInput): ElementorElement[] {
-  if (!Array.isArray(input.data)) {
-    throw new Error("data must be an Elementor element array.");
+/** 从原始数组或 wp_elementor_get 数据结果中提取完整 Elementor 元素树。 */
+function extractImportedData(value: unknown): ElementorElement[] {
+  if (Array.isArray(value)) {
+    return validateElementorTree(value);
   }
-  return validateElementorTree(input.data);
+  if (isRecord(value) && value.view === "data" && Array.isArray(value.data)) {
+    return validateElementorTree(value.data);
+  }
+  throw new Error("dataFile must contain an Elementor element array or a wp_elementor_get data result.");
+}
+
+/** 从已经通过 MCP 本地路径边界校验的 JSON 文件读取覆盖导入数据。 */
+async function readRequiredData(input: ElementorToolInput): Promise<ElementorElement[]> {
+  const dataFile = input.dataFile;
+  if (typeof dataFile !== "string" || dataFile.trim() === "") {
+    throw new Error("dataFile must be a non-blank local JSON file path.");
+  }
+  try {
+    const parsed = await readBoundedJsonFile(dataFile, {
+      maxBytes: MAX_ELEMENTOR_JSON_BYTES + 64 * 1024,
+      label: "Elementor data file"
+    });
+    return extractImportedData(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("maximum allowed size")) {
+      throw new Error(
+        `Elementor data exceeds the maximum size of ${MAX_ELEMENTOR_JSON_BYTES} bytes.`
+        + " Split or simplify the page before importing it."
+      );
+    }
+    throw error;
+  }
 }
 
 /** 读取并校验一批非空、数量有界的局部内容修改。 */
-function readRequiredChanges(input: ElementorToolInput): ElementorContentChange[] {
-  if (!Array.isArray(input.changes) || input.changes.length === 0) {
+async function readRequiredChanges(input: ElementorToolInput): Promise<ElementorContentChange[]> {
+  if (input.changes !== undefined && input.changesFile !== undefined) {
+    throw new Error("Provide either changes or changesFile, not both.");
+  }
+  const changes = input.changesFile === undefined
+    ? input.changes
+    : await readBoundedJsonFile(
+      readOptionalNonBlankString(input, "changesFile") as string,
+      { maxBytes: MAX_ELEMENTOR_JSON_BYTES, label: "Elementor changes file" }
+    );
+  if (!Array.isArray(changes) || changes.length === 0) {
     throw new Error("changes must be a non-empty array.");
   }
-  if (input.changes.length > MAX_ELEMENTOR_CHANGE_COUNT) {
+  if (changes.length > MAX_ELEMENTOR_CHANGE_COUNT) {
     throw new Error(`changes cannot contain more than ${MAX_ELEMENTOR_CHANGE_COUNT} elements.`);
   }
-  assertBoundedJsonValue(input.changes, "Elementor changes");
-  return input.changes.map((value, index) => {
+  assertBoundedJsonValue(changes, "Elementor changes");
+  return changes.map((value, index) => {
     if (!isRecord(value)) {
       throw new Error(`changes[${index}] must be an object.`);
     }
@@ -305,16 +365,19 @@ async function saveElementorTree(
   client: WordPressClient,
   postId: number,
   data: ElementorElement[]
-): Promise<void> {
+): Promise<string> {
+  const requestedRevision = createElementorRevision(data);
   const savedEntity = await client.update<unknown>(
     ELEMENTOR_PAGE_ROUTE,
     postId,
     buildElementorMeta(data, { templateType: "wp-page" })
   );
   const savedData = validateElementorTree(readElementorDataFromEntity(savedEntity));
-  if (createElementorRevision(savedData) !== createElementorRevision(data)) {
+  const persistedRevision = createElementorRevision(savedData);
+  if (persistedRevision !== requestedRevision) {
     throw new Error("WordPress did not persist the requested Elementor page data.");
   }
+  return persistedRevision;
 }
 
 /** 在页面数据成功落盘后清理 Elementor 全站缓存，并为部分成功提供明确错误。 */
@@ -340,6 +403,7 @@ export async function readElementorPage(
   }
   const tree = await readElementorTree(client, postId);
   const revision = createElementorRevision(tree);
+  const dataBytes = Buffer.byteLength(JSON.stringify(tree), "utf8");
   if (view === "data") {
     return {
       post_id: postId,
@@ -347,6 +411,7 @@ export async function readElementorPage(
       view,
       data: tree,
       elements_count: countElements(tree),
+      data_bytes: dataBytes,
       revision
     };
   }
@@ -358,8 +423,9 @@ export async function readElementorPage(
     view,
     elements,
     count: elements.length,
+    data_bytes: dataBytes,
     revision,
-    how_to_update: "Call wp_elementor_update with this revision as expectedRevision and changes:[{elementId,settings:{onlyChangedKeys}}]. Copy elementId and setting names from this result; for example settings:{title:'New title'}."
+    how_to_update: "Call wp_elementor_update with this revision as expectedRevision and changes:[{elementId,settings:{onlyChangedKeys}}]. Copy elementId and setting names from this result; for example settings:{title:'New title'}. data_bytes is the full tree size in bytes; pages over 10 MiB are rejected, and view:\"data\" returns the whole tree, so prefer this view for routine edits."
   };
 }
 
@@ -370,7 +436,7 @@ export async function updateElementorPageContent(
 ): Promise<ElementorUpdatePayload> {
   const postId = readPostId(input);
   const expectedRevision = readExpectedRevision(input);
-  const changes = readRequiredChanges(input);
+  const changes = await readRequiredChanges(input);
   const tree = await readElementorTree(client, postId);
   const currentRevision = createElementorRevision(tree);
   if (currentRevision !== expectedRevision) {
@@ -378,13 +444,16 @@ export async function updateElementorPageContent(
   }
   const appliedChanges = applyElementorContentChanges(tree, changes);
   validateElementorTree(tree);
-  await saveElementorTree(client, postId, tree);
+  const persistedRevision = await saveElementorTree(client, postId, tree);
   await refreshElementorCacheAfterSave(client);
   return {
     post_id: postId,
     resource: ELEMENTOR_PAGE_ROUTE,
     updated: true,
     changes: appliedChanges,
+    revision_before: currentRevision,
+    revision_after: persistedRevision,
+    match: true,
     cache_refreshed: true
   };
 }
@@ -395,14 +464,16 @@ export async function importElementorPage(
   input: ElementorToolInput
 ): Promise<ElementorImportPayload> {
   const postId = readPostId(input);
-  const data = readRequiredData(input);
-  await saveElementorTree(client, postId, data);
+  const data = await readRequiredData(input);
+  const persistedRevision = await saveElementorTree(client, postId, data);
   await refreshElementorCacheAfterSave(client);
   return {
     post_id: postId,
     resource: ELEMENTOR_PAGE_ROUTE,
     imported: true,
     elements_count: countElements(data),
+    revision_after: persistedRevision,
+    match: true,
     cache_refreshed: true
   };
 }

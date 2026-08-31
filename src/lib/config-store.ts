@@ -34,8 +34,6 @@ export interface PublicClient {
 
 /** 解密后的本地 wp-api 配置结构。 */
 export interface ConfigData {
-  /** 当前激活的 client 名称。 */
-  activeClient: string | null;
   /** 已保存的 client 列表。 */
   clients: StoredClient[];
 }
@@ -90,7 +88,6 @@ function parseConfigData(value: unknown): ConfigData {
     throw new Error("Credential vault contains an invalid client.");
   }
   return {
-    activeClient: typeof value.activeClient === "string" ? value.activeClient : null,
     clients
   };
 }
@@ -219,7 +216,7 @@ export class ConfigStore {
         key.fill(0);
       }
     } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") return { activeClient: null, clients: [] };
+      if (isNodeError(error) && error.code === "ENOENT") return { clients: [] };
       throw new Error("Credential vault could not be decrypted or is invalid.", { cause: error });
     }
   }
@@ -293,13 +290,10 @@ export class ConfigStore {
     }
   }
 
-  /** 返回全部已保存连接的安全摘要和当前默认连接名称。 */
-  async listClients(): Promise<{ activeClient: string | null; clients: PublicClient[] }> {
+  /** 返回全部已保存连接的安全摘要，并按名称稳定排序。 */
+  async listClients(): Promise<PublicClient[]> {
     const config = await this.readConfig();
-    return {
-      activeClient: config.activeClient,
-      clients: config.clients.slice().sort((left, right) => left.name.localeCompare(right.name)).map(sanitizeClient)
-    };
+    return config.clients.slice().sort((left, right) => left.name.localeCompare(right.name)).map(sanitizeClient);
   }
 
   /** 返回仅供受令牌保护的本地配置 UI 使用的连接资料，密码始终省略。 */
@@ -313,7 +307,7 @@ export class ConfigStore {
     }));
   }
 
-  /** 新增或更新连接；originalName 不同时执行重命名并同步默认连接。 */
+  /** 新增或更新连接；originalName 不同时执行重命名。 */
   async saveClient(client: StoredClient, originalName: string = client.name): Promise<PublicClient> {
     return this.withWriteLock(async () => {
       const config = await this.readConfig();
@@ -323,7 +317,6 @@ export class ConfigStore {
       const existingIndex = config.clients.findIndex((entry) => entry.name === originalName);
       if (existingIndex >= 0) config.clients[existingIndex] = { ...client };
       else config.clients.push({ ...client });
-      if (config.activeClient === originalName) config.activeClient = client.name;
       await this.writeConfig(config);
       return sanitizeClient(client);
     });
@@ -335,32 +328,12 @@ export class ConfigStore {
     return config.clients.find((entry) => entry.name === name) ?? null;
   }
 
-  /** 根据显式名称或当前默认名称解析内部连接凭据。 */
-  async getResolvedClient(name?: string): Promise<StoredClient | null> {
-    const config = await this.readConfig();
-    const resolvedName = name || config.activeClient;
-    return resolvedName ? config.clients.find((entry) => entry.name === resolvedName) ?? null : null;
-  }
-
-  /** 将指定连接设为当前默认连接并返回安全摘要。 */
-  async setActiveClient(name: string): Promise<PublicClient> {
-    return this.withWriteLock(async () => {
-      const config = await this.readConfig();
-      const client = config.clients.find((entry) => entry.name === name);
-      if (!client) throw new Error(`Client "${name}" not found.`);
-      config.activeClient = name;
-      await this.writeConfig(config);
-      return sanitizeClient(client);
-    });
-  }
-
-  /** 删除指定连接，并在删除默认连接时同步清空选择。 */
+  /** 删除指定连接。 */
   async removeClient(name: string): Promise<void> {
     await this.withWriteLock(async () => {
       const config = await this.readConfig();
       if (!config.clients.some((entry) => entry.name === name)) throw new Error(`Client "${name}" not found.`);
       config.clients = config.clients.filter((entry) => entry.name !== name);
-      if (config.activeClient === name) config.activeClient = null;
       await this.writeConfig(config);
     });
   }
