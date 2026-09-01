@@ -1,6 +1,6 @@
 {
   "name": "wp-api",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "JellyDai",
   "license": "MIT",
   "description": "MCP server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs",

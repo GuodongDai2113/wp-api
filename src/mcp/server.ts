@@ -937,7 +937,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
 export function createWpApiMcpServer(context: WpApiToolContext = {}): McpServer {
   const server = new McpServer({
     name: "wp-api",
-    version: "2.1.0"
+    version: "2.2.0"
   });
   registerWpApiTools(server, context);
   return server;
