@@ -25,9 +25,9 @@ function isSafeSiteUrl(value: string): boolean {
   }
 }
 
-/** 判断 MCP 分页大小是否符合 WordPress 上限或全量聚合约定。 */
+/** 判断 MCP 分页大小是否符合 WordPress REST 的单页上限。 */
 function isValidPerPage(value: number): boolean {
-  return value === -1 || (value >= 1 && value <= 100);
+  return value >= 1 && value <= 100;
 }
 
 /** WordPress 站点根地址的 MCP 校验 schema。 */
@@ -50,7 +50,25 @@ const restApiDomainSchema = z.string().refine(
 );
 
 /** WordPress 原生 REST 资源名称的 MCP 校验 schema。 */
-const resourceSchema = z.enum(["posts", "pages", "products", "categories", "product-categories", "product-tags"]);
+const resourceSchema = z.enum(["posts", "pages", "products", "categories", "product-categories"]);
+
+/** WordPress post 类型资源名称 schema。 */
+const postResourceSchema = z.enum(["posts", "pages", "products"]);
+
+/** WordPress taxonomy 类型资源名称 schema。 */
+const taxonomyResourceSchema = z.enum(["categories", "product-categories"]);
+
+/** 使用 type 判别 post 与 taxonomy 的资源目标 schema。 */
+const resourceTargetSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("post"),
+    resource: postResourceSchema
+  }).strict(),
+  z.object({
+    type: z.literal("taxonomy"),
+    resource: taxonomyResourceSchema
+  }).strict()
+]);
 
 /** MCP 工具统一返回结构的 schema。 */
 const outputSchema = {
@@ -63,13 +81,18 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_client_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_structure_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_rest_api: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_resource_count: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_resource_batch_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   wp_resource_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_resource_batch_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_resource_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_seo_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_seo_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_seo_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_seo_batch_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_post_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_post_content_replace: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_media_upload: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -102,8 +125,8 @@ const globalInputShape = {
   siteUrl: siteUrlSchema.optional().describe("Temporary same-origin site URL override for this call.")
 };
 
-/** 内容资源和分类资源 create/update 共用的输入字段。 */
-const resourceBodyShape = {
+/** Post 类型资源 create/update 使用的输入字段。 */
+const postResourceBodyShape = {
   title: z.string().optional().describe("Post, page, or product title."),
   slug: z.string().optional().describe("Resource slug."),
   status: z.string().optional().describe("Post, page, or product status."),
@@ -113,15 +136,38 @@ const resourceBodyShape = {
   // 是否在上传前把解析出的 HTML 正文转换为 Gutenberg 区块标记。
   gutenberg: z.boolean().optional().describe("Convert resolved HTML content to WordPress Gutenberg block markup before upload."),
   featuredMedia: z.number().int().nonnegative().optional().describe("Featured media attachment ID; use 0 to clear the current featured image."),
-  categories: z.array(z.number().int().positive()).optional().describe("Post category IDs; use an empty array to clear all categories."),
-  productCategories: z.array(z.number().int().positive()).optional().describe("Jelly Catalog product category IDs; use an empty array to clear all product categories."),
-  productTags: z.array(z.number().int().positive()).optional().describe("Jelly Catalog product tag IDs; use an empty array to clear all product tags."),
+  categories: z.array(z.number().int().positive()).optional().describe("Category IDs. Maps to categories for posts and product_cat for products; use an empty array to clear assignments. Not supported by pages."),
   meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. Inspect the resource route with wp_rest_api before writing plugin-specific fields."),
-  metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST meta object. Do not provide together with meta."),
-  name: z.string().optional().describe("Taxonomy term name."),
-  description: z.string().optional().describe("Taxonomy term description."),
-  parent: z.number().int().nonnegative().optional().describe("Parent ID for hierarchical categories and product categories; use 0 to remove the parent. Not supported by product tags.")
+  metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST meta object. Do not provide together with meta.")
 };
+
+/** Taxonomy 类型资源 create/update 使用的输入字段。 */
+const taxonomyResourceBodyShape = {
+  name: z.string().optional().describe("Taxonomy term name."),
+  slug: z.string().optional().describe("Taxonomy term slug."),
+  description: z.string().optional().describe("Taxonomy term description."),
+  parent: z.number().int().nonnegative().optional().describe("Parent ID for hierarchical categories and product categories; use 0 to remove the parent. Not supported by product tags."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST term meta fields."),
+  metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST term meta object. Do not provide together with meta.")
+};
+
+/** Post 类型资源直接写入数据 schema。 */
+const postResourceDataSchema = z.object(postResourceBodyShape).strict();
+
+/** Taxonomy 类型资源直接写入数据 schema。 */
+const taxonomyResourceDataSchema = z.object(taxonomyResourceBodyShape).strict();
+
+/** 两类资源直接写入数据联合 schema。 */
+const resourceDataSchema = z.union([postResourceDataSchema, taxonomyResourceDataSchema]);
+
+/** Post 批量条目数据 schema，不包含逐项本地文件。 */
+const postResourceBatchDataSchema = postResourceDataSchema.omit({ contentFile: true, metaFile: true });
+
+/** Taxonomy 批量条目数据 schema，不包含逐项本地文件。 */
+const taxonomyResourceBatchDataSchema = taxonomyResourceDataSchema.omit({ metaFile: true });
+
+/** 两类资源批量条目数据联合 schema。 */
+const resourceBatchDataSchema = z.union([postResourceBatchDataSchema, taxonomyResourceBatchDataSchema]);
 
 /** Elementor MCP 工具共用的输入字段。 */
 const elementorBaseShape = {
@@ -335,21 +381,39 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
+    "wp_resource_count",
+    {
+      title: "Count WordPress resources",
+      description: "Read X-WP-Total and X-WP-TotalPages for a filtered WordPress resource collection without loading every matching entity.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_count,
+      inputSchema: {
+        ...globalInputShape,
+        target: resourceTargetSchema,
+        search: z.string().optional().describe("Search text."),
+        status: z.string().optional().describe("Resource status filter."),
+        include: z.array(z.number().int().positive()).optional().describe("Optional resource ID whitelist."),
+        perPage: z.number().int().refine(isValidPerPage, "Items per page must be between 1 and 100.").optional().describe("Page size used to calculate totalPages; defaults to 100.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_resource_count", context)
+  );
+
+  server.registerTool(
     "wp_resource_list",
     {
       title: "List WordPress resources",
-      description: "List posts, pages, categories, or Jelly Catalog products, product categories, and product tags through native WordPress REST endpoints.",
+      description: "List one page of WordPress resources and optionally export every matching editable resource to a type-specific CSV file.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_list,
       inputSchema: {
         ...globalInputShape,
-        resource: resourceSchema,
+        target: resourceTargetSchema,
         search: z.string().optional().describe("Search text."),
         page: z.number().int().positive().optional().describe("Page number."),
-        perPage: z.number().int().refine(
-          isValidPerPage,
-          "Items per page must be -1 or between 1 and 100."
-        ).optional().describe("Items per page. Use -1 to fetch all pages."),
-        status: z.string().optional().describe("Resource status filter.")
+        perPage: z.number().int().refine(isValidPerPage, "Items per page must be between 1 and 100.").optional().describe("Inline items per page, between 1 and 100."),
+        status: z.string().optional().describe("Resource status filter."),
+        include: z.array(z.number().int().positive()).optional().describe("Optional resource ID whitelist."),
+        outputFile: nonBlankStringSchema.optional().describe("Optional post or taxonomy CSV output path. Exports every match independently of page and perPage.")
       },
       outputSchema
     },
@@ -364,7 +428,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_get,
       inputSchema: {
         ...globalInputShape,
-        resource: resourceSchema,
+        target: resourceTargetSchema,
         id: z.number().int().positive().describe("Resource ID.")
       },
       outputSchema
@@ -376,33 +440,79 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_create",
     {
       title: "Create WordPress resource",
-      description: "Create a post, page, category, or Jelly Catalog product, product category, or product tag.",
+      description: "Create a post, page, category, or Jelly Catalog product or product category.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_create,
       inputSchema: {
         ...globalInputShape,
-        resource: resourceSchema,
-        ...resourceBodyShape
+        target: resourceTargetSchema,
+        data: resourceDataSchema.describe("Resource fields matching target.type.")
       },
       outputSchema
     },
     createToolCallback("wp_resource_create", context)
   );
 
+  /** 批量创建条目的严格 MCP schema。 */
+  const resourceBatchCreateItemSchema = z.object({
+    id: z.number().int().positive().optional().describe("Optional source ID used only to correlate a CSV export with the created result."),
+    data: resourceBatchDataSchema.describe("Direct resource fields matching target.type.")
+  }).strict();
+
+  server.registerTool(
+    "wp_resource_batch_create",
+    {
+      title: "Batch create WordPress resources",
+      description: "Create resources through WordPress batch/v1 using inline items or a type-specific resource CSV file. Requests are split at 25 items or 8 MiB of serialized JSON, with a 25 MiB total call limit.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_batch_create,
+      inputSchema: {
+        ...globalInputShape,
+        target: resourceTargetSchema,
+        items: z.array(resourceBatchCreateItemSchema).min(1).optional().describe("Inline resource creates. Provide exactly one of items or csvFile."),
+        csvFile: nonBlankStringSchema.optional().describe("Post or taxonomy CSV path matching target.type. Provide exactly one of csvFile or items.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_resource_batch_create", context)
+  );
+
   server.registerTool(
     "wp_resource_update",
     {
       title: "Update WordPress resource",
-      description: "Update a post, page, category, or Jelly Catalog product, product category, or product tag.",
+      description: "Update a post, page, category, or Jelly Catalog product or product category.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_update,
       inputSchema: {
         ...globalInputShape,
-        resource: resourceSchema,
+        target: resourceTargetSchema,
         id: z.number().int().positive().describe("Resource ID."),
-        ...resourceBodyShape
+        data: resourceDataSchema.describe("Resource fields matching target.type.")
       },
       outputSchema
     },
     createToolCallback("wp_resource_update", context)
+  );
+
+  /** 批量更新条目的严格 MCP schema。 */
+  const resourceBatchUpdateItemSchema = z.object({
+    id: z.number().int().positive().describe("Resource ID used to select the update target."),
+    data: resourceBatchDataSchema.describe("Direct resource fields matching target.type.")
+  }).strict();
+
+  server.registerTool(
+    "wp_resource_batch_update",
+    {
+      title: "Batch update WordPress resources",
+      description: "Update resources by ID through WordPress batch/v1 using inline items or a type-specific resource CSV file. Requests are split at 25 items or 8 MiB of serialized JSON, with a 25 MiB total call limit.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_batch_update,
+      inputSchema: {
+        ...globalInputShape,
+        target: resourceTargetSchema,
+        items: z.array(resourceBatchUpdateItemSchema).min(1).optional().describe("Inline resource updates. Provide exactly one of items or csvFile."),
+        csvFile: nonBlankStringSchema.optional().describe("Post or taxonomy CSV path matching target.type. Provide exactly one of csvFile or items.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_resource_batch_update", context)
   );
 
   server.registerTool(
@@ -413,9 +523,9 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_delete,
       inputSchema: {
         ...globalInputShape,
-        resource: resourceSchema,
+        target: resourceTargetSchema,
         id: z.number().int().positive().describe("Resource ID."),
-        force: z.boolean().optional().describe("Force permanent deletion. Required for categories and product categories, which do not support trash.")
+        force: z.boolean().optional().describe("Force permanent deletion. Required for every taxonomy target because taxonomy terms do not support trash.")
       },
       outputSchema
     },
@@ -455,6 +565,51 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       outputSchema
     },
     createToolCallback("wp_seo_update", context)
+  );
+
+  server.registerTool(
+    "wp_seo_list",
+    {
+      title: "List and export Rank Math SEO fields",
+      description: "List one page of Rank Math REST meta and optionally export every matching resource to CSV.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_seo_list,
+      inputSchema: {
+        ...globalInputShape,
+        resource: resourceSchema,
+        search: z.string().optional().describe("Optional WordPress full-text search."),
+        status: z.string().optional().describe("Optional WordPress resource status filter."),
+        page: z.number().int().positive().optional().describe("Inline result page number."),
+        perPage: z.number().int().refine(isValidPerPage, "SEO items per page must be between 1 and 100.").optional().describe("Inline results per page, between 1 and 100."),
+        include: z.array(z.number().int().positive()).optional().describe("Optional resource ID whitelist."),
+        outputFile: nonBlankStringSchema.optional().describe("Optional local CSV output path. Exports every match, independently of page and perPage.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_seo_list", context)
+  );
+
+  const seoBatchItemSchema = z.object({
+    id: z.number().int().positive().describe("Resource ID."),
+    title: z.string().optional().describe("Rank Math SEO title; empty string clears it."),
+    description: z.string().optional().describe("Rank Math SEO description; empty string clears it."),
+    focusKeyword: z.string().optional().describe("Rank Math focus keyword; empty string clears it.")
+  }).strict();
+
+  server.registerTool(
+    "wp_seo_batch_update",
+    {
+      title: "Batch update Rank Math SEO fields",
+      description: "Update multiple Rank Math REST meta records through WordPress batch/v1 using inline items or a local CSV file.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_seo_batch_update,
+      inputSchema: {
+        ...globalInputShape,
+        resource: resourceSchema,
+        items: z.array(seoBatchItemSchema).min(1).optional().describe("Inline SEO updates. Provide exactly one of items or csvFile."),
+        csvFile: nonBlankStringSchema.optional().describe("Local SEO CSV import path. Provide exactly one of csvFile or items.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_seo_batch_update", context)
   );
 
   server.registerTool(

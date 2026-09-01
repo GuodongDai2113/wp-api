@@ -5,7 +5,6 @@ export const WP_STRUCTURE_NAMES = [
   "product",
   "category",
   "product-category",
-  "product-tag",
   "media",
   "seo-meta",
   "elementor-page"
@@ -96,11 +95,9 @@ function createContentResponseShape(): Record<string, unknown> {
   };
 }
 
-/** 构造文章、页面和产品共用的 MCP 写入字段定义。 */
-function createContentWriteShape(): Record<string, unknown> {
+/** 构造文章、页面和产品共用的 MCP data 字段定义。 */
+function createContentDataShape(): Record<string, unknown> {
   return {
-    resource: "required enum selected for the requested content type",
-    id: "required positive integer for update/get/delete; omit for create",
     title: "string",
     slug: "string",
     status: "string",
@@ -129,17 +126,19 @@ function createTaxonomyResponseShape(): Record<string, unknown> {
   };
 }
 
-/** 构造标准层级 taxonomy 的 MCP 写入字段定义。 */
+/** 构造标准层级 taxonomy 的 MCP 写入结构定义。 */
 function createTaxonomyWriteShape(resource: "categories" | "product-categories"): Record<string, unknown> {
   return {
-    resource: `required literal ${resource}`,
+    target: `{type:"taxonomy",resource:"${resource}"}`,
     id: "required positive integer for update/get/delete; omit for create",
-    name: "string; required when creating a term",
-    slug: "string",
-    description: "string",
-    parent: "non-negative integer; 0 removes the parent",
-    meta: "object; only registered REST term meta fields are writable; do not combine with metaFile",
-    metaFile: "string; local JSON file containing the complete term meta object",
+    data: {
+      name: "string; required when creating a term",
+      slug: "string",
+      description: "string",
+      parent: "non-negative integer; 0 removes the parent",
+      meta: "object; only registered REST term meta fields are writable; do not combine with metaFile",
+      metaFile: "string; local JSON file containing the complete term meta object"
+    },
     force: "delete only; must be true because taxonomy terms have no trash"
   };
 }
@@ -147,7 +146,7 @@ function createTaxonomyWriteShape(resource: "categories" | "product-categories")
 /** 返回完整的本地结构定义表。 */
 function createStructureCatalog(): Record<WpStructureName, StructureDefinition> {
   const contentResponse = createContentResponseShape();
-  const contentWrite = createContentWriteShape();
+  const contentData = createContentDataShape();
   const taxonomyResponse = createTaxonomyResponseShape();
 
   return {
@@ -156,11 +155,14 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "WordPress post",
       description: "Standard WordPress post resource, including body content, post categories, featured media, and registered meta.",
       remoteSchemaPath: "wp-json/wp/v2/posts",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_post_link", "wp_post_content_replace", "wp_seo_get", "wp_seo_update"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_post_link", "wp_post_content_replace", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
-        ...contentWrite,
-        resource: "required literal posts",
-        categories: "positive integer[]; [] clears all post categories"
+        target: "{type:\"post\",resource:\"posts\"}",
+        id: "required positive integer for update/get/delete; omit for create",
+        data: {
+          ...contentData,
+          categories: "positive integer[]; [] clears all post categories"
+        }
       },
       responseShape: {
         ...contentResponse,
@@ -168,13 +170,15 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
         tags: "integer[]; native post tag IDs"
       },
       example: {
-        resource: "posts",
-        title: "Article title",
-        status: "draft",
-        content: "<p>Article body</p>",
-        gutenberg: true,
-        featuredMedia: 42,
-        categories: [3]
+        target: { type: "post", resource: "posts" },
+        data: {
+          title: "Article title",
+          status: "draft",
+          content: "<p>Article body</p>",
+          gutenberg: true,
+          featuredMedia: 42,
+          categories: [3]
+        }
       },
       notes: [
         "Use context=edit permissions to receive raw title/content/excerpt fields from WordPress.",
@@ -186,13 +190,11 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "WordPress page",
       description: "Standard hierarchical WordPress page. Elementor tools also operate on this resource through page meta.",
       remoteSchemaPath: "wp-json/wp/v2/pages",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update", "wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
       writeShape: {
-        ...contentWrite,
-        resource: "required literal pages",
-        parent: "WordPress REST field; inspect the live route before direct REST use; not exposed by wp_resource_create/update",
-        menu_order: "WordPress REST field; inspect the live route before direct REST use; not exposed by wp_resource_create/update",
-        template: "WordPress REST field; inspect the live route before direct REST use; not exposed by wp_resource_create/update"
+        target: "{type:\"post\",resource:\"pages\"}",
+        id: "required positive integer for update/get/delete; omit for create",
+        data: contentData
       },
       responseShape: {
         ...contentResponse,
@@ -201,55 +203,59 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
         template: "string; page template filename"
       },
       example: {
-        resource: "pages",
-        title: "Landing page",
-        status: "draft",
-        content: "<h1>Landing page</h1>",
-        featuredMedia: 42
+        target: { type: "post", resource: "pages" },
+        data: {
+          title: "Landing page",
+          status: "draft",
+          content: "<h1>Landing page</h1>",
+          featuredMedia: 42
+        }
       },
       notes: [
         "Use the Elementor-specific structures before writing _elementor_data.",
-        "The current resource tool intentionally exposes a safe common subset; query the live route for parent, template, author, and plugin fields."
+        "The current resource tool intentionally exposes a safe common subset; query the live route for parent, template, menu_order, author, and plugin fields."
       ]
     },
     product: {
       name: "product",
       title: "Jelly Catalog product",
-      description: "Jelly Catalog product content with product categories, product tags, gallery, attributes, FAQ, video, and download attachment meta.",
+      description: "Jelly Catalog product content with product categories, gallery, attributes, FAQ, video, and download attachment meta.",
       remoteSchemaPath: "wp-json/wp/v2/product",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
-        ...contentWrite,
-        resource: "required literal products",
-        productCategories: "positive integer[]; mapped to REST product_cat; [] clears assignments",
-        productTags: "positive integer[]; mapped to REST product_tag; [] clears assignments",
-        meta: {
-          _product_sku: "string; canonical product model/SKU",
-          product_sku: "string; legacy import field; prefer _product_sku",
-          _product_videourl: "string; absolute video URL",
-          product_file: "non-negative integer; download attachment ID; 0 clears it",
-          _product_image_gallery: "comma-separated positive attachment IDs; empty string clears it",
-          _product_attributes: "{name:string,value:string}[]",
-          _product_faqs: "{name:string,value:string}[]; name is question and value is answer"
+        target: "{type:\"post\",resource:\"products\"}",
+        id: "required positive integer for update/get/delete; omit for create",
+        data: {
+          ...contentData,
+          categories: "positive integer[]; mapped to REST product_cat; [] clears assignments",
+          meta: {
+            _product_sku: "string; canonical product model/SKU",
+            product_sku: "string; legacy import field; prefer _product_sku",
+            _product_videourl: "string; absolute video URL",
+            product_file: "non-negative integer; download attachment ID; 0 clears it",
+            _product_image_gallery: "comma-separated positive attachment IDs; empty string clears it",
+            _product_attributes: "{name:string,value:string}[]",
+            _product_faqs: "{name:string,value:string}[]; name is question and value is answer"
+          }
         }
       },
       responseShape: {
         ...contentResponse,
         product_cat: "integer[]; product category IDs",
-        product_tag: "integer[]; product tag IDs",
         meta: "object matching the Jelly Catalog product meta write shape plus fields registered by other plugins"
       },
       example: {
-        resource: "products",
-        title: "Catalog product",
-        status: "draft",
-        productCategories: [8],
-        productTags: [15],
-        meta: {
-          _product_sku: "JC-100",
-          _product_image_gallery: "42,43",
-          _product_attributes: [{ name: "Material", value: "Steel" }],
-          _product_faqs: [{ name: "What is included?", value: "One complete unit." }]
+        target: { type: "post", resource: "products" },
+        data: {
+          title: "Catalog product",
+          status: "draft",
+          categories: [8],
+          meta: {
+            _product_sku: "JC-100",
+            _product_image_gallery: "42,43",
+            _product_attributes: [{ name: "Material", value: "Steel" }],
+            _product_faqs: [{ name: "What is included?", value: "One complete unit." }]
+          }
         }
       },
       notes: [
@@ -262,10 +268,10 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "WordPress post category",
       description: "Native hierarchical category assigned to WordPress posts.",
       remoteSchemaPath: "wp-json/wp/v2/categories",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: createTaxonomyWriteShape("categories"),
       responseShape: taxonomyResponse,
-      example: { resource: "categories", name: "Guides", slug: "guides", parent: 0 },
+      example: { target: { type: "taxonomy", resource: "categories" }, data: { name: "Guides", slug: "guides", parent: 0 } },
       notes: ["Deletion requires force=true.", "Only meta registered for the category taxonomy can be sent in meta."]
     },
     "product-category": {
@@ -273,68 +279,49 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "Jelly Catalog product category (product_cat)",
       description: "Hierarchical Jelly Catalog product_cat taxonomy with category marketing content and media meta.",
       remoteSchemaPath: "wp-json/wp/v2/product_cat",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         ...createTaxonomyWriteShape("product-categories"),
-        meta: {
-          thumbnail_id: "non-negative integer; category thumbnail attachment ID",
-          banner_id: "non-negative integer; category banner attachment ID",
-          category_h1_title: "string",
-          category_subtitle: "string",
-          category_why_choose_title: "string",
-          category_why_choose: "string; safe HTML",
-          category_advantages: "string; safe HTML",
-          category_applications_title: "string",
-          category_applications: "{title:string,description:string,image_id:integer,link_url:string}[]",
-          category_cta_title: "string",
-          category_buying_guide_title: "string",
-          category_buying_guide: "string; safe HTML",
-          category_faq_title: "string",
-          product_cat_faqs: "{name:string,value:string}[]",
-          category_inherit_parent_content: "string enum 0 or 1"
+        data: {
+          name: "string; required when creating a term",
+          slug: "string",
+          description: "string",
+          parent: "non-negative integer; 0 removes the parent",
+          metaFile: "string; local JSON file containing the complete term meta object",
+          meta: {
+            thumbnail_id: "non-negative integer; category thumbnail attachment ID",
+            banner_id: "non-negative integer; category banner attachment ID",
+            category_h1_title: "string",
+            category_subtitle: "string",
+            category_why_choose_title: "string",
+            category_why_choose: "string; safe HTML",
+            category_advantages: "string; safe HTML",
+            category_applications_title: "string",
+            category_applications: "{title:string,description:string,image_id:integer,link_url:string}[]",
+            category_cta_title: "string",
+            category_buying_guide_title: "string",
+            category_buying_guide: "string; safe HTML",
+            category_faq_title: "string",
+            product_cat_faqs: "{name:string,value:string}[]",
+            category_inherit_parent_content: "string enum 0 or 1"
+          }
         }
       },
       responseShape: taxonomyResponse,
       example: {
-        resource: "product-categories",
-        name: "Industrial Pumps",
-        parent: 0,
-        meta: {
-          thumbnail_id: 42,
-          category_h1_title: "Industrial Pumps",
-          category_applications: [{ title: "Chemical plants", description: "Transfer applications", image_id: 43, link_url: "/contact/" }],
-          category_inherit_parent_content: "0"
+        target: { type: "taxonomy", resource: "product-categories" },
+        data: {
+          name: "Industrial Pumps",
+          parent: 0,
+          meta: {
+            thumbnail_id: 42,
+            category_h1_title: "Industrial Pumps",
+            category_applications: [{ title: "Chemical plants", description: "Transfer applications", image_id: 43, link_url: "/contact/" }],
+            category_inherit_parent_content: "0"
+          }
         }
       },
       notes: ["Deletion requires force=true.", "Use empty strings, empty arrays, 0, or string 0 according to each field's declared clearing value."]
-    },
-    "product-tag": {
-      name: "product-tag",
-      title: "Jelly Catalog product tag (product_tag)",
-      description: "Non-hierarchical Jelly Catalog product_tag taxonomy assigned to catalog products.",
-      remoteSchemaPath: "wp-json/wp/v2/product_tag",
-      mcpTools: ["wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_update", "wp_resource_delete"],
-      writeShape: {
-        resource: "required literal product-tags",
-        id: "required positive integer for update/get/delete; omit for create",
-        name: "string; required when creating a term",
-        slug: "string",
-        description: "string",
-        meta: "object; only registered REST term meta fields are writable",
-        force: "delete only; must be true because taxonomy terms have no trash"
-      },
-      responseShape: {
-        id: "integer; term ID",
-        count: "integer; assigned product count",
-        description: "string",
-        link: "string; public archive URL",
-        name: "string",
-        slug: "string",
-        taxonomy: "literal product_tag",
-        meta: "object; registered term meta fields"
-      },
-      example: { resource: "product-tags", name: "Stainless Steel", slug: "stainless-steel" },
-      notes: ["Deletion requires force=true.", "Product tags do not accept a parent field."]
     },
     media: {
       name: "media",
@@ -370,9 +357,9 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     "seo-meta": {
       name: "seo-meta",
       title: "Rank Math SEO meta",
-      description: "Stable Rank Math SEO subset supported by wp_seo_get and wp_seo_update.",
+      description: "Stable Rank Math SEO subset supported by single, list, CSV, and batch tools.",
       remoteSchemaPath: null,
-      mcpTools: ["wp_seo_get", "wp_seo_update"],
+      mcpTools: ["wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         resource: "posts, pages, products, categories, or product-categories",
         id: "required positive resource ID",
@@ -388,7 +375,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
         rank_math_focus_keyword: "string"
       },
       example: { resource: "pages", id: 20, title: "SEO title", description: "SEO description", focusKeyword: "primary keyword" },
-      notes: ["Rank Math must register these meta keys with show_in_rest for the selected resource.", "At least one update field must be supplied."]
+      notes: ["Jelly SEO or an equivalent plugin must register these string meta keys with show_in_rest and authenticated write access for the selected resource.", "wp_seo_list can export every match to CSV while keeping its inline result paginated.", "wp_seo_batch_update sends at most 25 updates per batch/v1 request.", "At least one inline update field must be supplied; imported CSV empty cells explicitly clear values."]
     },
     "elementor-page": {
       name: "elementor-page",

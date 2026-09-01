@@ -106,7 +106,7 @@ Except for the standalone public `wp_rest_api` query, all remote tools require `
 
 ## Tools
 
-The server exposes exactly 29 tools.
+The server exposes exactly 34 tools.
 
 ### Client configuration (2)
 
@@ -118,15 +118,18 @@ The server exposes exactly 29 tools.
 - `wp_structure_get` — query stable usage guidance for WordPress, Jelly Catalog, media, SEO, and Elementor. Request `section: "write"`, `"response"`, or `"example"` directly to receive only that fragment; the default is an overview and `"full"` is the compatibility escape hatch. The local catalog includes `product-tag` and requires no saved client.
 - `wp_rest_api` — provide a bare `domain` such as `example.com`; the tool always requests `https://{domain}/...` without reading a client or sending credentials. `apiPath` defaults to `wp-json` for a compact, searchable, paginated route index. After discovering a route, pass a full REST path such as `wp-json/wp/v2/product` for its methods, argument constraints, and fields. Use `detail: "full"` only when required.
 
-### WordPress resources (5)
+### WordPress resources (8)
 
-- `wp_resource_list` — list posts, pages, categories, or Jelly Catalog products, product categories, and product tags.
+- `wp_resource_count` — read filtered totals from WordPress pagination headers.
+- `wp_resource_list` — return one filtered page and optionally export every match to a type-specific CSV in 100-row pages.
 - `wp_resource_get` — read one resource by ID.
 - `wp_resource_create` — create content or a taxonomy term.
+- `wp_resource_batch_create` — create inline or CSV-imported resources through `batch/v1` in groups of 25; source IDs are not sent to WordPress.
 - `wp_resource_update` — update content or a taxonomy term.
+- `wp_resource_batch_update` — update inline or CSV-imported resources by ID through `batch/v1` in groups of 25.
 - `wp_resource_delete` — trash content or permanently delete a taxonomy term.
 
-Supported `resource` values are `posts`, `pages`, `products`, `categories`, `product-categories`, and `product-tags`; product resources specifically refer to Jelly Catalog and do not represent WooCommerce products. Product writes accept `productCategories`, `productTags`, and registered `meta` fields. Use `wp_rest_api` first to inspect the target site's current field definitions. Category, product-category, and product-tag deletion requires explicit `force: true`, because taxonomy terms have no trash. `perPage: -1` aggregates all pages within the documented limits.
+Every resource tool identifies its resource with `target: { type, resource }`. `type: "post"` accepts `posts`, `pages`, and `products`; `type: "taxonomy"` accepts `categories` and `product-categories`. Mismatched combinations are rejected. Single create/update calls place writable fields under `data`; inline batch records use `{ id?, data }`, clearly separating resource selection, operation arguments, and writable data. `categories` maps automatically: posts use REST `categories`, Jelly Catalog products use REST `product_cat`, and pages reject the field. MCP does not expose the `product_tag` resource or product-tag assignments. Use `wp_rest_api` first to inspect the target site's current field definitions before writing plugin meta. Category and product-category deletion requires explicit `force: true`, because taxonomy terms have no trash. Resource list pagination is always bounded to `perPage: 1..100`.
 
 Common Jelly Catalog product `meta` structures are:
 
@@ -141,15 +144,21 @@ Common Jelly Catalog product `meta` structures are:
 
 Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML marketing sections, `category_applications`, `product_cat_faqs`, and the `"0" | "1"` field `category_inherit_parent_content`. The live OPTIONS result remains authoritative because other active plugins may add fields.
 
-### SEO, post content, and media (5)
+### SEO, post content, and media (7)
 
 - `wp_seo_get` — read Rank Math title, description, and focus keyword fields.
 - `wp_seo_update` — update or explicitly clear Rank Math REST meta fields.
+- `wp_seo_list` — return one filtered SEO page and optionally stream every matching record to a UTF-8 CSV file; with `resource: "posts"` and no filters, the CSV covers the whole site.
+- `wp_seo_batch_update` — update inline SEO records or import the fixed four-column CSV format through `batch/v1` in groups of 25.
 - `wp_post_link` — list, add, update, or remove links in editable raw post content.
 - `wp_post_content_replace` — replace every exact text occurrence in a post.
 - `wp_media_upload` — compress a local JPEG/PNG to WebP before upload, or upload GIF/AVIF/WebP unchanged, and optionally set attachment metadata.
 
-Resource create/update accepts inline `content` or a local `contentFile`. Large REST meta objects can be submitted through `metaFile`; `meta` and `metaFile` cannot be combined. With `gutenberg: true`, the server parses the resolved body with an HTML5 parser, filters it through explicit tag and attribute allowlists plus the [WordPress allowed protocol](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/) list, and then generates Gutenberg block markup. Event attributes, inline styles, `javascript:`, `data:`, and active embedded content are removed; ordinary unknown containers are unwrapped while their safe text is preserved. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`. JPEG and PNG inputs are converted in memory to quality-85 WebP before upload; GIF, AVIF, and existing WebP files are left unchanged.
+Post resource `data` accepts inline `content` or a local `contentFile`. Large REST meta objects can be submitted through `metaFile`; `meta` and `metaFile` cannot be combined. With `gutenberg: true`, the server parses the resolved body with an HTML5 parser, filters it through explicit tag and attribute allowlists plus the [WordPress allowed protocol](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/) list, and then generates Gutenberg block markup. Event attributes, inline styles, `javascript:`, `data:`, and active embedded content are removed; ordinary unknown containers are unwrapped while their safe text is preserved. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`. JPEG and PNG inputs are converted in memory to quality-85 WebP before upload; GIF, AVIF, and existing WebP files are left unchanged.
+
+Post CSV columns are exactly `id,title,slug,status,excerpt,content,gutenberg,featuredMedia,categories,meta`; taxonomy CSV columns are exactly `id,name,slug,description,parent,meta`. The post CSV `categories` column maps to post categories or product categories according to `target.resource`. The tool selects and strictly validates the header from `target.type`. Arrays and `meta` use JSON cells. Blank cells are omitted during import, while `__EMPTY__` explicitly clears a string. `[]`, `{}`, and `0` preserve their normal clearing semantics. Batch items do not accept per-item `contentFile` or `metaFile`. Resource batches are split by both the 25-request limit and actual serialized UTF-8 JSON size: each request is at most 8 MiB and one tool call is capped at 25 MiB in total, validated before network access.
+
+SEO requires Jelly SEO or an equivalent site plugin to register `rank_math_title`, `rank_math_description`, and `rank_math_focus_keyword` as writable string meta with `show_in_rest`. `wp_seo_list` keeps its inline response paginated (`perPage` is `1..100`), while `outputFile` exports all matches in 100-row pages. Resource and SEO exports update their stopping point from each page's latest pagination headers and use exclusive publication so a target created concurrently is never overwritten; page-number pagination still cannot provide snapshot consistency during concurrent writes. CSV columns are exactly `id,rank_math_title,rank_math_description,rank_math_focus_keyword`; empty imported SEO cells explicitly clear values. Local CSV paths remain restricted to the configured MCP local roots.
 
 ### Elementor page content (3)
 
@@ -193,7 +202,7 @@ See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 
 ### Local file boundary
 
-The following fields can read or write local files: `contentFile`, `metaFile`, Elementor `changesFile` and `dataFile`, media `filePath`, package `file`, pack `folderPath`, and pack `outputPath`.
+The following fields can read or write local files: `contentFile`, `metaFile`, resource and SEO `csvFile`/`outputFile`, Elementor `changesFile` and `dataFile`, media `filePath`, package `file`, pack `folderPath`, and pack `outputPath`.
 
 By default, every such path must remain inside the MCP server process's `cwd`. Add trusted roots with `WP_API_ALLOWED_LOCAL_ROOTS`. Separate roots with the platform path delimiter:
 
@@ -217,7 +226,9 @@ This allowlist is an application boundary, not an operating-system sandbox. Use 
 | One media file | 50 MiB |
 | One plugin/theme ZIP | 100 MiB |
 | One Elementor tree | 10 MiB JSON, 10,000 elements, 100 levels |
-| `perPage: -1` aggregation | 100 pages and approximately 50 MiB JSON |
+| Resource CSV import | 25 MiB |
+| One resource batch request | 8 MiB JSON |
+| One resource batch tool call | 25 MiB cumulative JSON |
 | Local package source | 20,000 entries and 512 MiB uncompressed files |
 
 Local package uploads require a `.zip` extension and a recognized ZIP header. Local packing rejects symlinks and special files, keeps the source folder as the ZIP's top-level directory, and requires the output file to be outside the source folder.

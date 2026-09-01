@@ -6,6 +6,11 @@
 
 ### Changed
 
+- 资源 batch 新增 8 MiB 单请求和 25 MiB 整次调用 JSON 上限，并按条目数与实际字节数共同分块；资源和 SEO CSV 导出改为动态跟踪分页并通过排他硬链接发布，消除最终落盘覆盖竞态。
+- MCP 移除 `product_tag` 资源和产品标签关联；post 与产品统一使用 `categories` 输入，并分别自动映射到 REST `categories` 与 `product_cat`。
+- 资源 CRUD 改用 `target: { type, resource }` 判别 post 与 taxonomy，创建/更新字段收拢到 `data`，批量条目改为 `{ id?, data }`；资源 CSV 同步拆分为 post 与 taxonomy 两套严格表头。
+- 新增 `wp_resource_count`、`wp_resource_batch_create` 和 `wp_resource_batch_update`；资源列表改为有界分页，并支持按每页 100 条原子导出可回导的类型专用 CSV。
+- 移除 `WordPressClient.list()` 的 `per_page=-1` 内存聚合；Jelly Core 激活检查改为逐页查询，资源和 SEO CSV 共用有界解析与标准编码能力。
 - 用只读的 `wp_client_get` 替换 `wp_client_use`，`wp_client_list` 改为直接返回全部连接名称与站点 URL；移除当前连接状态、配置页面默认连接操作，并要求远端工具显式传入 `client`。
 - 所有 MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果改为保存到本地 `.wp-api-results` JSON 文件，MCP 响应只返回绝对路径、字节数和 SHA-256，避免大型 `structuredContent` 被会话折叠。
 - `wp_elementor_import` 改为通过本地 `dataFile` 导入完整元素树；文件既可包含原始元素数组，也可直接使用 `wp_elementor_get` 的完整 data 结果。

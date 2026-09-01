@@ -203,20 +203,28 @@ export function hasActiveJellyCore(items: readonly unknown[]): boolean {
 
 /**
  * 在调用 Jelly Core 自定义接口前确认核心插件已经激活。
- * 使用 `per_page=-1` 聚合全部激活插件，避免 Jelly Core 不在首个分页时产生误判。
+ * 逐页查询激活插件并在找到 Jelly Core 后立即停止，避免把全部插件聚合进内存。
  */
 export async function assertJellyCoreIsActive(client: WordPressClient): Promise<void> {
-  const result = await client.list<JellyCorePluginCandidate>("plugins", {
-    status: "active",
-    per_page: -1
-  });
-
-  if (!hasActiveJellyCore(result.items)) {
-    throw new Error(
-      "Jelly Core is not installed and active on the target site. "
-      + "This operation requires Jelly Core, so no install, update, or theme activation was attempted."
-    );
+  let page = 1;
+  while (true) {
+    const result = await client.list<JellyCorePluginCandidate>("plugins", {
+      status: "active",
+      page,
+      per_page: 100
+    });
+    if (hasActiveJellyCore(result.items)) {
+      return;
+    }
+    if (page >= result.pagination.totalPages) {
+      break;
+    }
+    page += 1;
   }
+  throw new Error(
+    "Jelly Core is not installed and active on the target site. "
+    + "This operation requires Jelly Core, so no install, update, or theme activation was attempted."
+  );
 }
 
 /** 直接列出 WordPress 插件或主题。 */

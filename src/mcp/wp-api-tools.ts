@@ -11,27 +11,41 @@ import {
   type WordPressConnectionInput
 } from "./client-tools.js";
 import {
-  createResource,
-  deleteResource,
-  getResource,
-  getResourceSeo,
-  listResource,
   managePostLink,
   replacePostContent,
-  updateResource,
-  updateResourceSeo,
   uploadMedia,
   type MediaUploadInput,
   type PostContentReplaceInput,
-  type PostLinkInput,
+  type PostLinkInput
+} from "./handlers/content-tools.js";
+import {
+  batchCreateResources,
+  batchUpdateResources,
+  countResource,
+  createResource,
+  deleteResource,
+  getResource,
+  listResource,
+  updateResource,
+  type ResourceBatchCreateInput,
+  type ResourceBatchUpdateInput,
+  type ResourceCountInput,
   type ResourceCreateInput,
   type ResourceDeleteInput,
   type ResourceGetInput,
   type ResourceListInput,
-  type ResourceSeoGetInput,
-  type ResourceSeoUpdateInput,
   type ResourceUpdateInput
-} from "./handlers/content-tools.js";
+} from "./handlers/resource-tools.js";
+import {
+  batchUpdateResourceSeo,
+  getResourceSeo,
+  listResourceSeo,
+  updateResourceSeo,
+  type ResourceSeoBatchUpdateInput,
+  type ResourceSeoGetInput,
+  type ResourceSeoListInput,
+  type ResourceSeoUpdateInput
+} from "./handlers/seo-tools.js";
 import {
   executeElementorTool,
   type ElementorToolName
@@ -70,13 +84,18 @@ export const WP_API_TOOL_NAMES = [
   "wp_client_get",
   "wp_structure_get",
   "wp_rest_api",
+  "wp_resource_count",
   "wp_resource_list",
   "wp_resource_get",
   "wp_resource_create",
+  "wp_resource_batch_create",
   "wp_resource_update",
+  "wp_resource_batch_update",
   "wp_resource_delete",
   "wp_seo_get",
   "wp_seo_update",
+  "wp_seo_list",
+  "wp_seo_batch_update",
   "wp_post_link",
   "wp_post_content_replace",
   "wp_media_upload",
@@ -285,15 +304,22 @@ async function validateToolLocalPaths(
   context: WpApiToolContext
 ): Promise<WpApiToolInput> {
   const validatedInput = { ...input };
-  const pathFields: Array<"contentFile" | "metaFile" | "filePath" | "file" | "dataFile" | "changesFile"> = [];
+  const pathFields: Array<"contentFile" | "metaFile" | "filePath" | "file" | "dataFile" | "changesFile" | "csvFile"> = [];
 
   if (toolName === "wp_resource_create" || toolName === "wp_resource_update") {
-    if (input.contentFile !== undefined) {
-      pathFields.push("contentFile");
+    if (typeof input.data !== "object" || input.data === null || Array.isArray(input.data)) {
+      return validatedInput;
     }
-    if (input.metaFile !== undefined) {
-      pathFields.push("metaFile");
+    const resourceData = { ...input.data as Record<string, unknown> };
+    const allowedRoots = await resolveAllowedLocalRoots(context);
+    for (const pathField of ["contentFile", "metaFile"] as const) {
+      if (resourceData[pathField] !== undefined) {
+        const inputPath = readRequiredString(resourceData, pathField);
+        resourceData[pathField] = (await validateExistingLocalPath(`data.${pathField}`, inputPath, allowedRoots)).realPath;
+      }
     }
+    validatedInput.data = resourceData;
+    return validatedInput;
   } else if (toolName === "wp_media_upload") {
     pathFields.push("filePath");
   } else if (toolName === "wp_package_install" || toolName === "wp_package_update") {
@@ -302,6 +328,10 @@ async function validateToolLocalPaths(
     pathFields.push("dataFile");
   } else if (toolName === "wp_elementor_update" && input.changesFile !== undefined) {
     pathFields.push("changesFile");
+  } else if (toolName === "wp_seo_batch_update" && input.csvFile !== undefined) {
+    pathFields.push("csvFile");
+  } else if ((toolName === "wp_resource_batch_create" || toolName === "wp_resource_batch_update") && input.csvFile !== undefined) {
+    pathFields.push("csvFile");
   }
 
   if (pathFields.length > 0) {
@@ -322,6 +352,11 @@ async function validateToolLocalPaths(
     const validatedOutput = await validateLocalOutputPath("outputPath", requestedOutputPath, allowedRoots);
     validatedInput.folderPath = validatedFolder.realPath;
     validatedInput.outputPath = validatedOutput.realPath;
+  } else if ((toolName === "wp_seo_list" || toolName === "wp_resource_list") && input.outputFile !== undefined) {
+    const allowedRoots = await resolveAllowedLocalRoots(context);
+    const outputFile = readRequiredString(input, "outputFile");
+    const validatedOutput = await validateLocalOutputPath("outputFile", outputFile, allowedRoots);
+    validatedInput.outputFile = validatedOutput.realPath;
   }
 
   return validatedInput;
@@ -356,20 +391,30 @@ async function executeRemoteTool(
   }
 
   switch (toolName) {
+    case "wp_resource_count":
+      return countResource(client, input as unknown as ResourceCountInput);
     case "wp_resource_list":
       return listResource(client, input as unknown as ResourceListInput);
     case "wp_resource_get":
       return getResource(client, input as unknown as ResourceGetInput);
     case "wp_resource_create":
       return createResource(client, input as unknown as ResourceCreateInput);
+    case "wp_resource_batch_create":
+      return batchCreateResources(client, input as unknown as ResourceBatchCreateInput);
     case "wp_resource_update":
       return updateResource(client, input as unknown as ResourceUpdateInput);
+    case "wp_resource_batch_update":
+      return batchUpdateResources(client, input as unknown as ResourceBatchUpdateInput);
     case "wp_resource_delete":
       return deleteResource(client, input as unknown as ResourceDeleteInput);
     case "wp_seo_get":
       return getResourceSeo(client, input as unknown as ResourceSeoGetInput);
     case "wp_seo_update":
       return updateResourceSeo(client, input as unknown as ResourceSeoUpdateInput);
+    case "wp_seo_list":
+      return listResourceSeo(client, input as unknown as ResourceSeoListInput);
+    case "wp_seo_batch_update":
+      return batchUpdateResourceSeo(client, input as unknown as ResourceSeoBatchUpdateInput);
     case "wp_post_link":
       return managePostLink(client, input as unknown as PostLinkInput);
     case "wp_post_content_replace":

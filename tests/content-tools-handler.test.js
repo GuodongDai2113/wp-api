@@ -5,15 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  managePostLink,
+  replacePostContent,
+  uploadMedia
+} from "../build/mcp/handlers/content-tools.js";
+import {
   createResource,
   deleteResource,
   listResource,
-  managePostLink,
-  replacePostContent,
-  updateResource,
-  updateResourceSeo,
-  uploadMedia
-} from "../build/mcp/handlers/content-tools.js";
+  updateResource
+} from "../build/mcp/handlers/resource-tools.js";
+import { updateResourceSeo } from "../build/mcp/handlers/seo-tools.js";
 
 /** 验证资源列表会把 MCP camelCase 查询字段直接映射到 WordPress REST 字段。 */
 test("content handler maps resource list input without CLI arguments", async () => {
@@ -27,7 +29,7 @@ test("content handler maps resource list input without CLI arguments", async () 
   };
 
   const result = await listResource(client, {
-    resource: "products",
+    target: { type: "post", resource: "products" },
     search: "shoe",
     page: 2,
     perPage: 25,
@@ -57,10 +59,8 @@ test("content handler resolves contentFile and converts Gutenberg content", asyn
 
   try {
     await createResource(client, {
-      resource: "posts",
-      title: "From file",
-      contentFile,
-      gutenberg: true
+      target: { type: "post", resource: "posts" },
+      data: { title: "From file", contentFile, gutenberg: true }
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -87,14 +87,14 @@ test("content handler resolves metaFile without putting large meta in the tool i
     }
   };
 
-  await updateResource(client, { resource: "products", id: 9, metaFile });
+  await updateResource(client, { target: { type: "post", resource: "products" }, id: 9, data: { metaFile } });
   assert.deepEqual(calls, [{
     route: "product",
     id: 9,
     body: { meta: { product_sku: "SKU-100", flags: ["new"] } }
   }]);
   await assert.rejects(
-    () => updateResource(client, { resource: "products", id: 9, meta: {}, metaFile }),
+    () => updateResource(client, { target: { type: "post", resource: "products" }, id: 9, data: { meta: {}, metaFile } }),
     /either meta or metaFile/
   );
 });
@@ -111,9 +111,11 @@ test("content handler sanitizes active HTML before Gutenberg writes", async () =
   };
 
   await createResource(client, {
-    resource: "posts",
-    content: '<p onclick="alert(1)"><a href="javascript:alert(2)">Unsafe</a><a href="/safe">Safe</a></p>',
-    gutenberg: true
+    target: { type: "post", resource: "posts" },
+    data: {
+      content: '<p onclick="alert(1)"><a href="javascript:alert(2)">Unsafe</a><a href="/safe">Safe</a></p>',
+      gutenberg: true
+    }
   });
 
   assert.equal(calls[0].route, "posts");
@@ -133,12 +135,9 @@ test("content handler preserves explicit clearing values", async () => {
   };
 
   await updateResource(client, {
-    resource: "posts",
+    target: { type: "post", resource: "posts" },
     id: 42,
-    title: "",
-    content: "",
-    featuredMedia: 0,
-    categories: []
+    data: { title: "", content: "", featuredMedia: 0, categories: [] }
   });
 
   assert.deepEqual(calls, [{
@@ -159,13 +158,14 @@ test("content handler maps Jelly Catalog taxonomy and REST meta fields", async (
   };
 
   await createResource(client, {
-    resource: "products",
-    title: "Catalog product",
-    productCategories: [2, 5],
-    productTags: [],
-    meta: {
-      _product_sku: "JC-100",
-      _product_attributes: [{ name: "Material", value: "Steel" }]
+    target: { type: "post", resource: "products" },
+    data: {
+      title: "Catalog product",
+      categories: [2, 5],
+      meta: {
+        _product_sku: "JC-100",
+        _product_attributes: [{ name: "Material", value: "Steel" }]
+      }
     }
   });
 
@@ -174,7 +174,6 @@ test("content handler maps Jelly Catalog taxonomy and REST meta fields", async (
     body: {
       title: "Catalog product",
       product_cat: [2, 5],
-      product_tag: [],
       meta: {
         _product_sku: "JC-100",
         _product_attributes: [{ name: "Material", value: "Steel" }]
@@ -183,27 +182,21 @@ test("content handler maps Jelly Catalog taxonomy and REST meta fields", async (
   }]);
 });
 
-test("content handler maps Jelly Catalog product tag resources", async () => {
-  const calls = [];
+test("content handler rejects removed Jelly Catalog product tag resources", async () => {
+  let calls = 0;
   const client = {
-    /** 记录产品标签创建请求。 */
-    async create(route, body) {
-      calls.push({ route, body });
-      return { id: 12 };
+    /** 记录已移除资源不应触发的创建请求。 */
+    async create() {
+      calls += 1;
+      return {};
     }
   };
 
-  await createResource(client, {
-    resource: "product-tags",
-    name: "Industrial"
-  });
-
-  assert.deepEqual(calls, [{ route: "product_tag", body: { name: "Industrial" } }]);
-
   await assert.rejects(
-    () => createResource(client, { resource: "product-tags", name: "Child", parent: 4 }),
-    /not supported for product-tags: parent/
+    () => createResource(client, { target: { type: "taxonomy", resource: "product-tags" }, data: { name: "Industrial" } }),
+    /Unknown resource: product-tags/
   );
+  assert.equal(calls, 0);
 });
 
 /** 验证 taxonomy 删除必须显式确认永久删除，确认后固定向 client 传递 force。 */
@@ -218,10 +211,10 @@ test("content handler requires force for taxonomy deletion", async () => {
   };
 
   await assert.rejects(
-    deleteResource(client, { resource: "categories", id: 9 }),
+    deleteResource(client, { target: { type: "taxonomy", resource: "categories" }, id: 9 }),
     /set force to true/
   );
-  const result = await deleteResource(client, { resource: "categories", id: 9, force: true });
+  const result = await deleteResource(client, { target: { type: "taxonomy", resource: "categories" }, id: 9, force: true });
 
   assert.equal(result.id, 9);
   assert.deepEqual(calls, [{ route: "categories", id: 9, options: { force: true } }]);
@@ -323,7 +316,7 @@ test("content handler maps media upload input directly", async () => {
 });
 
 /** 资源创建必须提供适用于所选资源类型的字段，不能静默丢弃错误域字段。 */
-test("content handler rejects empty creates and fields from another resource kind", async () => {
+test("content handler rejects empty creates and fields from another resource type", async () => {
   let creates = 0;
   const client = {
     /** 记录所有不应发生的远端创建调用。 */
@@ -334,15 +327,15 @@ test("content handler rejects empty creates and fields from another resource kin
   };
 
   await assert.rejects(
-    () => createResource(client, { resource: "posts" }),
+    () => createResource(client, { target: { type: "post", resource: "posts" }, data: {} }),
     /At least one applicable resource field/
   );
   await assert.rejects(
-    () => createResource(client, { resource: "posts", name: "Wrong field" }),
+    () => createResource(client, { target: { type: "post", resource: "posts" }, data: { name: "Wrong field" } }),
     /not supported for posts: name/
   );
   await assert.rejects(
-    () => createResource(client, { resource: "categories", title: "Wrong field" }),
+    () => createResource(client, { target: { type: "taxonomy", resource: "categories" }, data: { title: "Wrong field" } }),
     /not supported for categories: title/
   );
   assert.equal(creates, 0);
@@ -360,11 +353,11 @@ test("content handler rejects empty or mismatched resource updates", async () =>
   };
 
   await assert.rejects(
-    () => updateResource(client, { resource: "pages", id: 7 }),
+    () => updateResource(client, { target: { type: "post", resource: "pages" }, id: 7, data: {} }),
     /No update fields were provided/
   );
   await assert.rejects(
-    () => updateResource(client, { resource: "product-categories", id: 8, content: "wrong" }),
+    () => updateResource(client, { target: { type: "taxonomy", resource: "product-categories" }, id: 8, data: { content: "wrong" } }),
     /not supported for product-categories: content/
   );
   assert.equal(updates, 0);

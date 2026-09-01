@@ -1,6 +1,6 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 29 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
+`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 34 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
 
 ## 1. 安装和启动入口
 
@@ -92,6 +92,7 @@ tool_timeout_sec = 120
 
 - 资源正文文件 `contentFile`
 - 资源 meta 文件 `metaFile`
+- 资源和 SEO CSV 的导入文件 `csvFile` 与导出文件 `outputFile`
 - Elementor 局部修改文件 `changesFile` 和完整数据文件 `dataFile`
 - 媒体文件 `filePath`
 - 安装/更新软件包的 `file`
@@ -171,7 +172,7 @@ wp-api-config
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 29 个 MCP 工具
+## 5. 34 个 MCP 工具
 
 ### 5.1 Client（2 个）
 
@@ -214,48 +215,50 @@ Agent 已能从工具输入 schema 看到稳定的本地结构，因此不必先
 
 根路由摘要包含 `namespaces`、轻量 `routes`、`total`、`offset`、`limit` 和 `hasMore`；具体路径摘要只保留 `methods`、各 endpoint 的必要参数约束和响应 `fields`。结构查询和 Elementor 读取的小型结果只在 `structuredContent.result` 中保留一份，文本内容仅提供定位提示；超过 8 KiB 时统一返回本地结果文件引用。
 
-### 5.3 WordPress 资源（5 个）
+### 5.3 WordPress 资源（8 个）
 
 `products` 与 `product-categories` 是 Jelly Catalog 资源，要求目标站点启用 Jelly Catalog；它们不是 WooCommerce 产品接口。
 
 `resource` 允许：
 
 ```text
-posts | pages | products | categories | product-categories | product-tags
+posts | pages | products | categories | product-categories
 ```
 
 路由映射：
 
 | resource | REST 路由 | 类型 |
 | --- | --- | --- |
-| `posts` | `/wp-json/wp/v2/posts` | 内容 |
-| `pages` | `/wp-json/wp/v2/pages` | 内容 |
-| `products` | `/wp-json/wp/v2/product` | Jelly Catalog 产品内容 |
+| `posts` | `/wp-json/wp/v2/posts` | `post` |
+| `pages` | `/wp-json/wp/v2/pages` | `post` |
+| `products` | `/wp-json/wp/v2/product` | `post`（Jelly Catalog 产品） |
 | `categories` | `/wp-json/wp/v2/categories` | taxonomy |
 | `product-categories` | `/wp-json/wp/v2/product_cat` | Jelly Catalog 产品分类 taxonomy |
-| `product-tags` | `/wp-json/wp/v2/product_tag` | Jelly Catalog 产品标签 taxonomy |
 
 | 工具 | 必填输入 | 可选输入 |
 | --- | --- | --- |
-| `wp_resource_list` | `resource` | `search`, `page`, `perPage`, `status`, 通用连接字段 |
-| `wp_resource_get` | `resource`, `id` | 通用连接字段 |
-| `wp_resource_create` | `resource`，并至少提供一个适用写入字段 | 下列资源写入字段、通用连接字段 |
-| `wp_resource_update` | `resource`, `id` | 下列资源写入字段、通用连接字段；至少提供一个有效更新字段 |
-| `wp_resource_delete` | `resource`, `id` | `force`, 通用连接字段 |
+| `wp_resource_count` | `target` | `search`, `status`（仅 post）、`include`, `perPage`（默认 100）、通用连接字段 |
+| `wp_resource_list` | `target` | `search`, `page`, `perPage`, `status`（仅 post）、`include`, `outputFile`, 通用连接字段 |
+| `wp_resource_get` | `target`, `id` | 通用连接字段 |
+| `wp_resource_create` | `target`, `data` | `data` 中至少一个适用写入字段、通用连接字段 |
+| `wp_resource_batch_create` | `target`，以及 `items`/`csvFile` 二选一 | 每项为 `{id?, data}`；来源 `id` 不发送给 WordPress |
+| `wp_resource_update` | `target`, `id`, `data` | `data` 中至少一个有效更新字段、通用连接字段 |
+| `wp_resource_batch_update` | `target`，以及 `items`/`csvFile` 二选一 | 每项为 `{id, data}`，且 `data` 至少包含一个更新字段 |
+| `wp_resource_delete` | `target`, `id` | `force`, 通用连接字段 |
 
-内容资源写入字段：
+`target` 是判别联合：post 资源使用 `{ "type": "post", "resource": "posts" | "pages" | "products" }`；taxonomy 资源使用 `{ "type": "taxonomy", "resource": "categories" | "product-categories" }`。`type` 与 `resource` 不匹配时在请求发出前报错。创建和更新字段统一放入 `data`，避免与 `id`、`force`、连接信息等操作参数混合。MCP 不支持 `product_tag` 资源或产品标签关联。
+
+post 资源 `data` 写入字段：
 
 - `title`, `slug`, `status`, `excerpt`
 - `content` 或 `contentFile`；两者同时存在时 `content` 优先
 - `gutenberg`：先按标签、属性和 WordPress URL 协议允许列表清理解析后的 HTML，再转换为 Gutenberg 区块标记；事件属性、内联样式、活动协议和嵌入内容不会保留
 - `featuredMedia`：非负附件 ID，`0` 表示清空
-- `categories`：文章分类正整数 ID 数组，`[]` 表示清空
-- `productCategories`：Jelly Catalog 产品分类正整数 ID 数组，映射为 REST `product_cat`
-- `productTags`：Jelly Catalog 产品标签正整数 ID 数组，映射为 REST `product_tag`
+- `categories`：分类正整数 ID 数组，`[]` 表示清空；文章自动映射为 REST `categories`，产品自动映射为 REST `product_cat`，页面不支持
 - `meta`：目标资源已注册的 REST meta 对象；写入插件业务字段前先调用 `wp_rest_api`
 - `metaFile`：包含完整 REST meta 对象的本地 JSON 文件，适合大型 meta；不能和 `meta` 同时使用
 
-taxonomy 写入字段：
+taxonomy 资源 `data` 写入字段：
 
 - `name`, `slug`, `description`
 - `meta` 或 `metaFile`：已注册的 REST term meta；大型对象优先使用本地 JSON 文件
@@ -295,16 +298,20 @@ Jelly Catalog 产品分类 `meta`：
 | `product_cat_faqs` | `{name:string,value:string}[]` | `[]` | 分类 FAQ，`name` 为问题，`value` 为答案 |
 | `category_inherit_parent_content` | `"0"` 或 `"1"` | `"0"` | 是否允许模板回退到父分类内容 |
 
-产品基础字段仍使用 WordPress REST 原生结构：`title`、`slug`、`status`、`excerpt`、`content`、`featured_media`、`product_cat` 和 `product_tag`。MCP 对应字段分别为 `title`、`slug`、`status`、`excerpt`、`content`、`featuredMedia`、`productCategories` 和 `productTags`。
+产品基础字段仍使用 WordPress REST 原生结构：`title`、`slug`、`status`、`excerpt`、`content`、`featured_media` 和 `product_cat`。MCP 对应字段分别为 `title`、`slug`、`status`、`excerpt`、`content`、`featuredMedia` 和统一的 `categories`。
 
-`perPage` 可为 `1..100`，或使用 `-1` 聚合全部分页。分类和产品分类没有回收站，`wp_resource_delete` 对这两类资源强制要求 `force: true`；文章、页面和产品只有显式传入 `force: true` 才会永久删除，否则进入回收站。
+`perPage` 仅允许 `1..100`。`wp_resource_list.outputFile` 使用编辑上下文按每页 100 条把全部匹配项追加到临时 CSV，完成后通过同目录排他硬链接原子发布，目标即使在导出期间由其他进程创建也不会被覆盖。导出会读取每页最新的 `X-WP-TotalPages`，在页数增长时继续、缩减导致页码越界时正常结束；WordPress 页码分页仍不能提供并发写入下的快照一致性。post 表头为 `id,title,slug,status,excerpt,content,gutenberg,featuredMedia,categories,meta`；taxonomy 表头为 `id,name,slug,description,parent,meta`。post CSV 的 `categories` 同样按目标映射到文章分类或产品分类。工具根据 `target.type` 选择并严格校验表头。数组和 `meta` 使用 JSON，空单元格表示省略，`__EMPTY__` 表示显式清空字符串。批量工具通过 `/wp-json/batch/v1` 提交且不接受逐项 `contentFile` 或 `metaFile`；每批最多 25 条且序列化 JSON 不超过 8 MiB，整次调用的累计子请求 JSON 不超过 25 MiB，所有大小校验均在联网前完成。
 
-### 5.4 SEO 与文章编辑（4 个）
+分类、产品分类和产品标签没有回收站，`wp_resource_delete` 对所有 taxonomy 资源强制要求 `force: true`；文章、页面和产品只有显式传入 `force: true` 才会永久删除，否则进入回收站。
+
+### 5.4 SEO 与文章编辑（6 个）
 
 | 工具 | 必填输入 | 可选/动作相关输入 |
 | --- | --- | --- |
 | `wp_seo_get` | `resource`, `id` | 通用连接字段 |
 | `wp_seo_update` | `resource`, `id` | `title`, `description`, `focusKeyword` 中至少一个；通用连接字段 |
+| `wp_seo_list` | `resource` | `search`、`status`、`page`、`perPage`、`include`、`outputFile`；通用连接字段 |
+| `wp_seo_batch_update` | `resource`，以及 `items`/`csvFile` 二选一 | `items` 每项包含 `id` 和至少一个 SEO 字段；通用连接字段 |
 | `wp_post_link` | `action`, `postId` | `text`, `href`, `newHref`, `newText`，按动作决定 |
 | `wp_post_content_replace` | `postId`, `text`, `replacement` | 通用连接字段 |
 
@@ -314,7 +321,11 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 - `rank_math_description`
 - `rank_math_focus_keyword`
 
-目标 WordPress 必须注册并允许当前用户通过 REST 访问这些 meta。`wp_seo_update` 中的空字符串表示显式清空，不能省略全部三个更新字段。
+目标 WordPress 必须由 Jelly SEO 或等效插件把这些字段注册为允许当前用户 REST 读写的 string meta，并启用 `show_in_rest`。`wp_seo_update` 中的空字符串表示显式清空，不能省略全部三个更新字段。
+
+`wp_seo_list` 的内联结果使用 `page` 和 `perPage` 分页，`perPage` 仅允许 `1..100`。提供 `outputFile` 后，会忽略分页窗口并以每页 100 条把全部匹配结果增量写入 CSV；它与资源导出共用动态分页终止和排他发布语义。`search`、`status`、`include` 仍会作用于导出，因此 `resource: "posts"` 且不设置过滤条件即可导出整个站点文章。CSV 固定使用 `id,rank_math_title,rank_math_description,rank_math_focus_keyword` 四列表头。
+
+`wp_seo_batch_update` 将更新按 25 条提交到 `/wp-json/batch/v1`。内联 `items` 允许省略不修改的 SEO 字段；CSV 四列必须完整存在，空 SEO 单元格表示显式清空。单条子请求错误会记录在逐项结果中并继续后续更新，batch 传输或响应协议错误会终止调用。本地导入和导出路径都必须位于 MCP 允许的根目录内。
 
 `wp_post_link` 的动作规则：
 
@@ -419,7 +430,7 @@ Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工�
 | 激活主题 | Jelly Core | 是 |
 | 停用主题 | 不支持 | — |
 
-需要 Jelly Core 的操作会先以 `per_page=-1` 聚合全部活动插件，并识别 `jelly-core`、`jelly-core/jelly-core` 或 `jelly-core/jelly-core.php`。检查失败时不会上传文件或发出后续变更请求。
+需要 Jelly Core 的操作会按每页 100 条逐页检查活动插件，并识别 `jelly-core`、`jelly-core/jelly-core` 或 `jelly-core/jelly-core.php`。检查失败时不会上传文件或发出后续变更请求。
 
 Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 capability 校验。服务发出的 `X-Jelly-Timestamp`、`X-Jelly-Signature` 等字段只用于兼容旧协议，不含共享秘密，不能作为独立认证依据。
 
@@ -446,7 +457,9 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 | 本地媒体文件 | 50 MiB |
 | 本地插件/主题 ZIP | 100 MiB |
 | Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层父子深度 |
-| `perPage: -1` | 最多 100 页，聚合结果约 50 MiB JSON |
+| 资源 CSV 导入 | 25 MiB |
+| 单个资源 batch 请求 | 8 MiB JSON |
+| 单次资源 batch 调用 | 25 MiB 累计 JSON |
 | 本地打包源树 | 20,000 个文件/目录条目 |
 | 本地打包源文件总量 | 512 MiB 未压缩文件 |
 

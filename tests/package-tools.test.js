@@ -111,7 +111,7 @@ test("installPackage checks Jelly Core before installing a plugin", async () => 
 
   assert.equal(result, expected);
   assert.deepEqual(calls, [
-    ["list", "plugins", { status: "active", per_page: -1 }],
+    ["list", "plugins", { status: "active", page: 1, per_page: 100 }],
     ["plugin", "C:/packages/example.zip"]
   ]);
 });
@@ -138,7 +138,7 @@ test("updatePackage checks Jelly Core before updating a theme", async () => {
 
   assert.equal(result, expected);
   assert.deepEqual(calls, [
-    ["list", "plugins", { status: "active", per_page: -1 }],
+    ["list", "plugins", { status: "active", page: 1, per_page: 100 }],
     ["theme", "C:/packages/example-theme.zip"]
   ]);
 });
@@ -227,7 +227,7 @@ test("theme activation checks Jelly Core before switching themes", async () => {
 
   assert.equal(result, expected);
   assert.deepEqual(calls, [
-    ["list", "plugins", { status: "active", per_page: -1 }],
+    ["list", "plugins", { status: "active", page: 1, per_page: 100 }],
     ["theme-status", "example-theme", "active"]
   ]);
 });

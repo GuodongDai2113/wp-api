@@ -128,7 +128,7 @@ test("WordPressClient surfaces fetch errors with request context and cause detai
   );
 });
 
-test("WordPressClient list fetches all pages when per_page is -1", async () => {
+test("WordPressClient list performs exactly one paginated request", async () => {
   const calls = [];
   const client = new WordPressClient({
     baseUrl: "https://example.com",
@@ -148,28 +148,14 @@ test("WordPressClient list fetches all pages when per_page is -1", async () => {
         });
       }
 
-      if (url === "https://example.com/wp-json/wp/v2/posts?per_page=100&page=2") {
-        return new Response(JSON.stringify([{ id: 3 }]), {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "x-wp-total": "3",
-            "x-wp-totalpages": "2"
-          }
-        });
-      }
-
       throw new Error(`Unexpected URL: ${url}`);
     }
   });
 
-  const result = await client.list("posts", { per_page: -1 });
+  const result = await client.list("posts", { per_page: 100, page: 1 });
 
-  assert.deepEqual(calls, [
-    "https://example.com/wp-json/wp/v2/posts?per_page=100&page=1",
-    "https://example.com/wp-json/wp/v2/posts?per_page=100&page=2"
-  ]);
-  assert.deepEqual(result.items, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+  assert.deepEqual(calls, ["https://example.com/wp-json/wp/v2/posts?per_page=100&page=1"]);
+  assert.deepEqual(result.items, [{ id: 1 }, { id: 2 }]);
   assert.deepEqual(result.pagination, { total: 3, totalPages: 2 });
 });
 
@@ -498,29 +484,7 @@ test("WordPressClient applies a request timeout signal and limits response bodie
   await assert.rejects(() => client.request("posts"), /maximum allowed size of 4 bytes/);
 });
 
-test("WordPressClient rejects invalid and excessive pagination headers before fetching more pages", async () => {
-  let calls = 0;
-  const excessiveClient = new WordPressClient({
-    baseUrl: "https://example.com",
-    username: "admin",
-    appPassword: "secret",
-    maxPaginationPages: 2,
-    fetchImpl: async () => {
-      calls += 1;
-      return new Response("[]", {
-        status: 200,
-        headers: {
-          "content-type": "application/json",
-          "x-wp-total": "300",
-          "x-wp-totalpages": "3"
-        }
-      });
-    }
-  });
-
-  await assert.rejects(() => excessiveClient.list("posts", { per_page: -1 }), /exceeding the configured limit of 2/);
-  assert.equal(calls, 1);
-
+test("WordPressClient rejects invalid pagination headers", async () => {
   const invalidClient = new WordPressClient({
     baseUrl: "https://example.com",
     username: "admin",
@@ -533,25 +497,7 @@ test("WordPressClient rejects invalid and excessive pagination headers before fe
       }
     })
   });
-  await assert.rejects(() => invalidClient.list("posts", { per_page: -1 }), /invalid X-WP-TotalPages/);
-
-  const aggregateClient = new WordPressClient({
-    baseUrl: "https://example.com",
-    username: "admin",
-    appPassword: "secret",
-    maxAggregatedListBytes: 8,
-    fetchImpl: async () => new Response(JSON.stringify([{ title: "too large" }]), {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-        "x-wp-totalpages": "1"
-      }
-    })
-  });
-  await assert.rejects(
-    () => aggregateClient.list("posts", { per_page: -1 }),
-    /aggregated list exceeds the configured limit of 8 bytes/
-  );
+  await assert.rejects(() => invalidClient.list("posts", { per_page: 100 }), /invalid X-WP-TotalPages/);
 });
 
 test("WordPressClient rejects non-bitmap media extensions even with an explicit content type", async () => {

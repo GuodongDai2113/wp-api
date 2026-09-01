@@ -20,12 +20,6 @@ const DEFAULT_MAX_PACKAGE_FILE_BYTES = 100 * 1024 * 1024;
 /** 远程插件下载默认允许跟随的最大重定向次数。 */
 const DEFAULT_MAX_REMOTE_REDIRECTS = 3;
 
-/** `per_page=-1` 聚合模式默认允许请求的最大分页数。 */
-const DEFAULT_MAX_PAGINATION_PAGES = 100;
-
-/** `per_page=-1` 聚合模式默认允许保留的近似 JSON 字节数。 */
-const DEFAULT_MAX_AGGREGATED_LIST_BYTES = 50 * 1024 * 1024;
-
 /** 媒体上传允许使用的常见位图扩展名及对应 MIME 类型。 */
 const ALLOWED_MEDIA_CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
   ".avif": "image/avif",
@@ -131,7 +125,7 @@ export interface RequestResult<T = unknown> {
 
 /** WordPress 列表请求返回结构。 */
 export interface ListResult<T = unknown> {
-  /** 当前请求返回或聚合后的条目。 */
+  /** 当前分页请求返回的条目。 */
   items: T[];
   /** WordPress 分页响应头解析结果。 */
   pagination: Pagination;
@@ -163,10 +157,6 @@ export interface WordPressClientOptions {
   maxPackageFileBytes?: number;
   /** 远程插件下载允许跟随的最大重定向次数，默认 3 次。 */
   maxRemoteRedirects?: number;
-  /** `per_page=-1` 聚合模式允许请求的最大分页数，默认 100 页。 */
-  maxPaginationPages?: number;
-  /** `per_page=-1` 聚合结果允许保留的近似 JSON 字节数，默认 50 MiB。 */
-  maxAggregatedListBytes?: number;
   /** 远程插件下载使用的可注入 DNS 解析器，主要用于受控网络策略和测试。 */
   remoteHostnameResolver?: RemoteHostnameResolver;
 }
@@ -698,10 +688,6 @@ export class WordPressClient {
   maxPackageFileBytes: number;
   /** 远程插件下载允许跟随的最大重定向次数。 */
   maxRemoteRedirects: number;
-  /** `per_page=-1` 聚合模式允许请求的最大分页数。 */
-  maxPaginationPages: number;
-  /** `per_page=-1` 聚合结果允许保留的近似 JSON 字节数。 */
-  maxAggregatedListBytes: number;
   /** 远程插件下载使用的主机名解析函数。 */
   remoteHostnameResolver: RemoteHostnameResolver;
 
@@ -719,8 +705,6 @@ export class WordPressClient {
     maxMediaFileBytes,
     maxPackageFileBytes,
     maxRemoteRedirects,
-    maxPaginationPages,
-    maxAggregatedListBytes,
     remoteHostnameResolver
   }: WordPressClientOptions) {
     this.baseUrl = normalizeWordPressBaseUrl(baseUrl);
@@ -735,12 +719,6 @@ export class WordPressClient {
     this.maxMediaFileBytes = normalizePositiveInteger(maxMediaFileBytes, DEFAULT_MAX_MEDIA_FILE_BYTES, "maxMediaFileBytes");
     this.maxPackageFileBytes = normalizePositiveInteger(maxPackageFileBytes, DEFAULT_MAX_PACKAGE_FILE_BYTES, "maxPackageFileBytes");
     this.maxRemoteRedirects = normalizeNonNegativeInteger(maxRemoteRedirects, DEFAULT_MAX_REMOTE_REDIRECTS, "maxRemoteRedirects");
-    this.maxPaginationPages = normalizePositiveInteger(maxPaginationPages, DEFAULT_MAX_PAGINATION_PAGES, "maxPaginationPages");
-    this.maxAggregatedListBytes = normalizePositiveInteger(
-      maxAggregatedListBytes,
-      DEFAULT_MAX_AGGREGATED_LIST_BYTES,
-      "maxAggregatedListBytes"
-    );
     this.remoteHostnameResolver = remoteHostnameResolver ?? defaultRemoteHostnameResolver;
   }
 
@@ -890,62 +868,8 @@ export class WordPressClient {
     return this.requestApiPath<T>(`wp/v2/${route}`, options);
   }
 
-  /** 列出某个 WordPress route 的资源，支持 `per_page=-1` 自动聚合全部分页。 */
+  /** 列出某个 WordPress route 的单个分页，不在内存中自动聚合全量结果。 */
   async list<T = unknown>(route: string, query?: QueryParams): Promise<ListResult<T>> {
-    if (query?.per_page === -1) {
-      const baseQuery = { ...query };
-      delete baseQuery.page;
-
-      const firstPage = await this.request<T[]>(route, {
-        method: "GET",
-        query: {
-          ...baseQuery,
-          page: 1,
-          per_page: 100
-        }
-      });
-
-      const items = Array.isArray(firstPage.data) ? [...firstPage.data] : [];
-      let aggregatedBytes = Buffer.byteLength(JSON.stringify(items), "utf8");
-      if (aggregatedBytes > this.maxAggregatedListBytes) {
-        throw new Error(
-          `WordPress aggregated list exceeds the configured limit of ${this.maxAggregatedListBytes} bytes.`
-        );
-      }
-
-      if (firstPage.pagination.totalPages > this.maxPaginationPages) {
-        throw new Error(
-          `WordPress pagination requires ${firstPage.pagination.totalPages} pages, exceeding the configured limit of ${this.maxPaginationPages}.`
-        );
-      }
-
-      for (let page = 2; page <= firstPage.pagination.totalPages; page += 1) {
-        const nextPage = await this.request<T[]>(route, {
-          method: "GET",
-          query: {
-            ...baseQuery,
-            page,
-            per_page: 100
-          }
-        });
-
-        if (Array.isArray(nextPage.data)) {
-          aggregatedBytes += Buffer.byteLength(JSON.stringify(nextPage.data), "utf8");
-          if (aggregatedBytes > this.maxAggregatedListBytes) {
-            throw new Error(
-              `WordPress aggregated list exceeds the configured limit of ${this.maxAggregatedListBytes} bytes.`
-            );
-          }
-          items.push(...nextPage.data);
-        }
-      }
-
-      return {
-        items,
-        pagination: firstPage.pagination
-      };
-    }
-
     const result = await this.request<T[]>(route, { method: "GET", query });
     return {
       items: Array.isArray(result.data) ? result.data : [],

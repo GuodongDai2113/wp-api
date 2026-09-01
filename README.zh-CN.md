@@ -1,6 +1,6 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 29 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor 页面正文、媒体、插件/主题及询价管理。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 34 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor 页面正文、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
@@ -106,7 +106,7 @@ wp-api-config
 
 ## 工具列表
 
-服务共暴露 29 个工具。
+服务共暴露 34 个工具。
 
 ### Client 配置（2 个）
 
@@ -118,15 +118,18 @@ wp-api-config
 - `wp_structure_get`：按需查询 `post`、`page`、`product`、`category`、`product-category`、`product-tag`、`media`、`seo-meta` 和 Elementor 结构。指定 `section: "write"`、`"response"` 或 `"example"` 只返回所需片段；默认返回概览，`"full"` 才返回完整定义。该工具纯本地且不要求 WordPress client。
 - `wp_rest_api`：必填裸域名 `domain`，例如 `example.com`；工具固定请求 `https://{domain}/...`，不读取 client 或发送凭据。`apiPath` 默认 `wp-json`，用于读取精简、可搜索、可分页的根路由摘要；查到目标路由后传入 `wp-json/wp/v2/product` 等完整 REST 路径，读取方法、参数约束和字段摘要。仅在摘要缺少必要约束时使用 `detail: "full"`。
 
-### WordPress 资源（5 个）
+### WordPress 资源（8 个）
 
-- `wp_resource_list`：列出文章、页面、分类或 Jelly Catalog 产品、产品分类与产品标签。
+- `wp_resource_count`：从分页响应头读取筛选后的资源总数和总页数。
+- `wp_resource_list`：返回一页筛选结果，并可按每页 100 条把全部匹配资源导出为对应类型的 CSV。
 - `wp_resource_get`：按 ID 读取单个资源。
 - `wp_resource_create`：创建内容或分类项。
+- `wp_resource_batch_create`：通过 `batch/v1` 每 25 条创建内联或 CSV 导入资源，来源 ID 不发送给 WordPress。
 - `wp_resource_update`：更新内容或分类项。
+- `wp_resource_batch_update`：通过 `batch/v1` 每 25 条按 ID 更新内联或 CSV 导入资源。
 - `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
 
-`resource` 支持 `posts`、`pages`、`products`、`categories`、`product-categories`、`product-tags`；其中产品相关资源专指 Jelly Catalog，不代表 WooCommerce 产品。产品写入支持 `productCategories`、`productTags` 和已注册的 `meta` 字段，写入前可先用 `wp_rest_api` 查看目标站点的实时字段定义。分类、产品分类和产品标签没有回收站，删除时必须显式传入 `force: true`。`perPage: -1` 会在下文资源上限内自动聚合全部分页。
+所有资源工具都使用 `target: { type, resource }` 定位资源。`type: "post"` 对应 `posts`、`pages`、`products`，`type: "taxonomy"` 对应 `categories`、`product-categories`；不匹配的组合会被拒绝。单条创建/更新把业务字段放在 `data` 中，批量内联条目使用 `{ id?, data }`，从而把资源定位、操作参数和写入数据明确分开。`categories` 根据目标自动映射：文章写入 REST `categories`，Jelly Catalog 产品写入 REST `product_cat`，页面不支持该字段。MCP 不提供 `product_tag` 资源或产品标签写入。写入插件 meta 前可先用 `wp_rest_api` 查看目标站点的实时字段定义。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。资源列表始终使用 `perPage: 1..100` 的有界分页。
 
 常用 Jelly Catalog 产品 `meta` 结构：
 
@@ -141,15 +144,21 @@ wp-api-config
 
 产品分类 `meta` 还包括 `thumbnail_id`、`banner_id`、标题字段、HTML 营销内容、`category_applications`、`product_cat_faqs`，以及取值为 `"0" | "1"` 的 `category_inherit_parent_content`。其他插件仍可能追加字段，因此应以目标站点实时返回的 OPTIONS 结果为准。
 
-### SEO、文章内容与媒体（5 个）
+### SEO、文章内容与媒体（7 个）
 
 - `wp_seo_get`：读取 Rank Math 标题、描述和焦点关键词。
 - `wp_seo_update`：更新或显式清空 Rank Math REST meta。
+- `wp_seo_list`：返回一页筛选后的 SEO 数据，并可把全部匹配项流式导出为 UTF-8 CSV；`resource: "posts"` 且无过滤条件时导出整个站点的文章。
+- `wp_seo_batch_update`：通过 `batch/v1` 每 25 条更新内联 SEO 数据，或导入固定四列 CSV。
 - `wp_post_link`：列出、新增、更新或删除可编辑文章正文中的链接。
 - `wp_post_content_replace`：替换文章中的所有精确文本匹配。
 - `wp_media_upload`：本地 JPEG/PNG 先压缩为 WebP 再上传，GIF/AVIF/WebP 原样上传，并可设置附件元数据。
 
-资源创建/更新支持直接传 `content` 或读取本地 `contentFile`；大型 REST meta 可通过包含完整 JSON 对象的 `metaFile` 提交，`meta` 和 `metaFile` 不能同时使用。设置 `gutenberg: true` 后，会先用 HTML5 parser 解析正文，再按明确的标签、属性和 [WordPress 允许协议](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/)列表清理，最后生成 Gutenberg 区块标记。事件属性、内联样式、`javascript:`、`data:` 和活动嵌入内容会被移除；普通未知容器会展开并保留其中的安全文本。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会在内存中以质量 85 转换为 WebP 后再上传；GIF、AVIF 和已有 WebP 保持原格式。
+post 类型资源的 `data` 支持直接传 `content` 或读取本地 `contentFile`；大型 REST meta 可通过包含完整 JSON 对象的 `metaFile` 提交，`meta` 和 `metaFile` 不能同时使用。设置 `gutenberg: true` 后，会先用 HTML5 parser 解析正文，再按明确的标签、属性和 [WordPress 允许协议](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/)列表清理，最后生成 Gutenberg 区块标记。事件属性、内联样式、`javascript:`、`data:` 和活动嵌入内容会被移除；普通未知容器会展开并保留其中的安全文本。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会在内存中以质量 85 转换为 WebP 后再上传；GIF、AVIF 和已有 WebP 保持原格式。
+
+post CSV 表头固定为 `id,title,slug,status,excerpt,content,gutenberg,featuredMedia,categories,meta`；taxonomy CSV 表头固定为 `id,name,slug,description,parent,meta`。post CSV 的 `categories` 列同样根据 `target.resource` 映射到文章分类或产品分类。工具根据 `target.type` 选择并严格校验表头。数组和 `meta` 使用 JSON 单元格；空单元格表示省略字段，`__EMPTY__` 表示显式清空字符串，`[]`、`{}`、`0` 保留原有清空语义。批量条目不支持逐项 `contentFile` 或 `metaFile`。资源 batch 在最多 25 条的基础上还会按实际 JSON UTF-8 大小分块：单次请求不超过 8 MiB，整次调用累计不超过 25 MiB，并在联网前完成校验。
+
+SEO 要求站点安装 Jelly SEO 或等效插件，把 `rank_math_title`、`rank_math_description`、`rank_math_focus_keyword` 注册为允许认证用户 REST 读写的 string meta，并启用 `show_in_rest`。`wp_seo_list` 的内联结果保持分页（`perPage` 为 `1..100`），传入 `outputFile` 后以每页 100 条导出全部匹配项。资源和 SEO 导出都会根据每页最新的分页头继续或提前结束，并通过排他发布保证不会覆盖执行期间被其他进程创建的目标文件；页码分页仍不提供并发写入下的快照一致性。CSV 表头严格为 `id,rank_math_title,rank_math_description,rank_math_focus_keyword`，导入时空 SEO 单元格表示显式清空；本地 CSV 路径仍受 MCP 允许根目录限制。
 
 ### Elementor 页面正文（3 个）
 
@@ -193,7 +202,7 @@ wp-api-config
 
 ### 本地路径边界
 
-以下字段会读写本地文件：`contentFile`、`metaFile`、Elementor `changesFile` 和 `dataFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
+以下字段会读写本地文件：`contentFile`、`metaFile`、资源和 SEO 的 `csvFile`/`outputFile`、Elementor `changesFile` 和 `dataFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
 
 默认情况下，这些路径必须位于 MCP 服务进程的 `cwd` 内。可以通过 `WP_API_ALLOWED_LOCAL_ROOTS` 增加可信根目录，并使用当前平台的路径分隔符：
 
@@ -217,7 +226,9 @@ MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入
 | 单个媒体文件 | 50 MiB |
 | 单个插件/主题 ZIP | 100 MiB |
 | 单个 Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层 |
-| `perPage: -1` 聚合 | 100 页且约 50 MiB JSON |
+| 资源 CSV 导入 | 25 MiB |
+| 单个资源 batch 请求 | 8 MiB JSON |
+| 单次资源 batch 调用 | 25 MiB 累计 JSON |
 | 本地打包源目录 | 20,000 个条目且未压缩文件共 512 MiB |
 
 上传的软件包必须使用 `.zip` 扩展名并具有可识别的 ZIP 文件头。本地打包会拒绝符号链接和特殊文件，把源文件夹保留为 ZIP 顶层目录，并要求输出文件位于源文件夹之外。
@@ -230,7 +241,7 @@ MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入
 - 安装和更新主题
 - 激活主题
 
-执行这些变更前，服务会聚合检查全部活动插件。找不到 Jelly Core 时会在上传或修改软件包之前终止。
+执行这些变更前，服务会逐页检查活动插件。找不到 Jelly Core 时会在上传或修改软件包之前终止。
 
 软件包列表/详情、插件激活/停用使用 WordPress 原生 REST 端点，不依赖 Jelly Core；主题不支持停用。Jelly Core 自定义 REST 路由必须自行校验登录用户能力：兼容用的 `X-Jelly-*` 请求头不含共享秘密，不能当作独立认证机制。
 

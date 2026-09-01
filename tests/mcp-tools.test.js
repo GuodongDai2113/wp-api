@@ -323,7 +323,7 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   assert.equal(names.includes("post"), true);
   assert.equal(names.includes("page"), true);
   assert.equal(names.includes("product-category"), true);
-  assert.equal(names.includes("product-tag"), true);
+  assert.equal(names.includes("product-tag"), false);
   assert.equal(names.includes("elementor-page"), true);
 
   const pageOverview = await executeWpApiTool("wp_structure_get", { structure: "page" }, context);
@@ -332,13 +332,12 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   assert.equal(pageOverview.remoteSchemaPath, "wp-json/wp/v2/pages");
   assert.equal("writeShape" in pageOverview, false);
   assert.equal(pageWrite.section, "write");
-  assert.equal(pageWrite.value.resource, "required literal pages");
+  assert.equal(pageWrite.value.target, "{type:\"post\",resource:\"pages\"}");
+  assert.equal(typeof pageWrite.value.data.title, "string");
   assert.equal(JSON.stringify(pageOverview).length < JSON.stringify(pageFull).length, true);
 
   const elementor = await executeWpApiTool("wp_structure_get", { structure: "elementor-page", section: "write" }, context);
   assert.match(elementor.value.update, /elementId/);
-  const productTag = await executeWpApiTool("wp_structure_get", { structure: "product-tag" }, context);
-  assert.equal(productTag.remoteSchemaPath, "wp-json/wp/v2/product_tag");
   assert.equal(resolverCalls, 0);
 
   await assert.rejects(
@@ -370,24 +369,48 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   const listSchema = registrations.get("wp_resource_list").inputSchema;
   assert.equal(listSchema.page.safeParse(1).success, true);
   assert.equal(listSchema.page.safeParse(0).success, false);
-  assert.equal(listSchema.perPage.safeParse(-1).success, true);
+  assert.equal(listSchema.perPage.safeParse(-1).success, false);
   assert.equal(listSchema.perPage.safeParse(100).success, true);
   assert.equal(listSchema.perPage.safeParse(0).success, false);
   assert.equal(listSchema.perPage.safeParse(101).success, false);
+  assert.equal(listSchema.include.safeParse([1, 2]).success, true);
+  assert.equal(listSchema.outputFile.safeParse("resources.csv").success, true);
+
+  const countSchema = registrations.get("wp_resource_count").inputSchema;
+  assert.equal(countSchema.perPage.safeParse(undefined).success, true);
+  assert.equal(countSchema.perPage.safeParse(100).success, true);
+  assert.equal(countSchema.perPage.safeParse(-1).success, false);
+  assert.equal(countSchema.target.safeParse({ type: "post", resource: "posts" }).success, true);
+  assert.equal(countSchema.target.safeParse({ type: "post", resource: "categories" }).success, false);
+  assert.equal(countSchema.target.safeParse({ type: "taxonomy", resource: "categories" }).success, true);
+  assert.equal(countSchema.target.safeParse({ type: "taxonomy", resource: "product-tags" }).success, false);
 
   const updateSchema = registrations.get("wp_resource_update").inputSchema;
-  assert.equal(updateSchema.featuredMedia.safeParse(0).success, true);
-  assert.equal(updateSchema.categories.safeParse([]).success, true);
-  assert.equal(updateSchema.categories.safeParse([1, 2]).success, true);
-  assert.equal(updateSchema.categories.safeParse([0]).success, false);
-  assert.equal(updateSchema.productCategories.safeParse([]).success, true);
-  assert.equal(updateSchema.productTags.safeParse([3, 4]).success, true);
-  assert.equal(updateSchema.meta.safeParse({ _product_sku: "JC-100" }).success, true);
-  assert.equal(updateSchema.metaFile.safeParse("product-meta.json").success, true);
-  assert.equal(updateSchema.resource.safeParse("product-tags").success, true);
+  assert.equal(updateSchema.data.safeParse({ featuredMedia: 0, categories: [] }).success, true);
+  assert.equal(updateSchema.data.safeParse({ categories: [0] }).success, false);
+  assert.equal(updateSchema.data.safeParse({ productCategories: [] }).success, false);
+  assert.equal(updateSchema.data.safeParse({ productTags: [3, 4] }).success, false);
+  assert.equal(updateSchema.data.safeParse({ meta: { _product_sku: "JC-100" }, metaFile: "product-meta.json" }).success, true);
+  assert.equal(updateSchema.data.safeParse({ name: "Term", parent: 0 }).success, true);
+  const batchCreateSchema = registrations.get("wp_resource_batch_create").inputSchema;
+  assert.equal(batchCreateSchema.items.safeParse([{ id: 9, data: { title: "Copy" } }]).success, true);
+  assert.equal(batchCreateSchema.items.safeParse([{ data: { title: "Copy", contentFile: "post.html" } }]).success, false);
+  assert.equal(batchCreateSchema.csvFile.safeParse("resources.csv").success, true);
+  const batchUpdateSchema = registrations.get("wp_resource_batch_update").inputSchema;
+  assert.equal(batchUpdateSchema.items.safeParse([{ id: 9, data: { title: "Updated" } }]).success, true);
+  assert.equal(batchUpdateSchema.items.safeParse([{ data: { title: "Missing ID" } }]).success, false);
   const elementorUpdateSchema = registrations.get("wp_elementor_update").inputSchema;
   assert.equal(elementorUpdateSchema.changes.safeParse(undefined).success, true);
   assert.equal(elementorUpdateSchema.changesFile.safeParse("changes.json").success, true);
+
+  const seoListSchema = registrations.get("wp_seo_list").inputSchema;
+  assert.equal(seoListSchema.perPage.safeParse(100).success, true);
+  assert.equal(seoListSchema.perPage.safeParse(-1).success, false);
+  assert.equal(seoListSchema.include.safeParse([1, 2]).success, true);
+  assert.equal(seoListSchema.outputFile.safeParse("seo.csv").success, true);
+  const seoBatchSchema = registrations.get("wp_seo_batch_update").inputSchema;
+  assert.equal(seoBatchSchema.items.safeParse([{ id: 1, title: "SEO" }]).success, true);
+  assert.equal(seoBatchSchema.csvFile.safeParse("seo.csv").success, true);
 });
 
 test("MCP package schema 要求统一软件包类型并禁止停用主题", () => {
@@ -413,7 +436,7 @@ test("executeWpApiTool 直接调用领域 handler 而不构造 CLI 参数", asyn
   const result = await executeWpApiTool("wp_resource_list", {
     client: "prod",
     siteUrl: "https://example.com/staging",
-    resource: "posts",
+    target: { type: "post", resource: "posts" },
     search: "hello",
     page: 2,
     perPage: 10,
@@ -435,6 +458,91 @@ test("executeWpApiTool 直接调用领域 handler 而不构造 CLI 参数", asyn
     query: { search: "hello", page: 2, per_page: 10, status: "publish" }
   }]);
   assert.equal(result.items[0].id, 7);
+});
+
+test("executeWpApiTool 分发资源计数和 batch 创建更新", async () => {
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 返回计数分页头并记录最小列表查询。 */
+    async list(route, query) {
+      calls.push({ kind: "list", route, query });
+      return { items: [{ id: 1 }], pagination: { total: 12, totalPages: 1 } };
+    },
+    /** 按子请求路径生成资源 batch 响应。 */
+    async requestApiPath(route, options) {
+      calls.push({ kind: "batch", route, options });
+      return {
+        data: { responses: options.body.requests.map((request, index) => ({
+          status: 200,
+          body: { id: request.path.endsWith("/4") ? 4 : 100 + index }
+        })) },
+        pagination: { total: 0, totalPages: 0 }
+      };
+    }
+  });
+  const context = {
+    /** 返回资源工具使用的远端 client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  };
+
+  const counted = await executeWpApiTool("wp_resource_count", { target: { type: "post", resource: "posts" } }, context);
+  const created = await executeWpApiTool("wp_resource_batch_create", {
+    target: { type: "post", resource: "posts" },
+    items: [{ id: 9, data: { title: "Copy" } }]
+  }, context);
+  const updated = await executeWpApiTool("wp_resource_batch_update", {
+    target: { type: "post", resource: "posts" },
+    items: [{ id: 4, data: { title: "Updated" } }]
+  }, context);
+
+  assert.deepEqual(counted, { target: { type: "post", resource: "posts" }, total: 12, totalPages: 1, perPage: 100 });
+  assert.equal(created.items[0].sourceId, 9);
+  assert.equal(updated.items[0].id, 4);
+  assert.deepEqual(calls[0], {
+    kind: "list",
+    route: "posts",
+    query: { page: 1, per_page: 100, _fields: "id" }
+  });
+  assert.equal(calls[1].options.body.requests[0].path, "/wp/v2/posts");
+  assert.equal(calls[2].options.body.requests[0].path, "/wp/v2/posts/4");
+});
+
+test("executeWpApiTool 分发 SEO 列表与 batch 更新", async () => {
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 返回 SEO 列表并记录集合查询。 */
+    async list(route, query) {
+      calls.push({ kind: "list", route, query });
+      return { items: [{ id: 4, meta: { rank_math_title: "SEO" } }], pagination: { total: 1, totalPages: 1 } };
+    },
+    /** 返回 SEO batch 子响应并记录批量请求。 */
+    async requestApiPath(route, options) {
+      calls.push({ kind: "batch", route, options });
+      return {
+        data: { responses: [{ status: 200, body: { id: 4, meta: options.body.requests[0].body.meta } }] },
+        pagination: { total: 0, totalPages: 0 }
+      };
+    }
+  });
+  const context = {
+    /** 返回 SEO 工具使用的远端 client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  };
+
+  const listed = await executeWpApiTool("wp_seo_list", { resource: "posts", page: 1, perPage: 10 }, context);
+  const updated = await executeWpApiTool("wp_seo_batch_update", {
+    resource: "posts",
+    items: [{ id: 4, description: "Description" }]
+  }, context);
+
+  assert.equal(listed.items[0].rank_math_title, "SEO");
+  assert.equal(updated.succeeded, 1);
+  assert.equal(calls[0].route, "posts");
+  assert.equal(calls[1].route, "batch/v1");
 });
 
 test("Jelly Form MCP 工具映射设置与只读询价 REST 请求", async () => {
@@ -547,9 +655,8 @@ test("MCP 本地路径边界允许工作区内的正文文件并传递真实路�
   });
 
   await executeWpApiTool("wp_resource_create", {
-    resource: "posts",
-    contentFile,
-    metaFile
+    target: { type: "post", resource: "posts" },
+    data: { contentFile, metaFile }
   }, {
     /** 返回不会发出网络请求的资源 client 替身。 */
     async resolveClientImpl() {
@@ -570,10 +677,12 @@ test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async
   const packageFile = path.join(outsideDirectory, "plugin.zip");
   const metaFile = path.join(outsideDirectory, "meta.json");
   const changesFile = path.join(outsideDirectory, "changes.json");
+  const csvFile = path.join(outsideDirectory, "seo.csv");
   await writeFile(mediaFile, "image fixture");
   await writeFile(packageFile, "zip fixture");
   await writeFile(metaFile, "{}");
   await writeFile(changesFile, "[]");
+  await writeFile(csvFile, "id,rank_math_title,rank_math_description,rank_math_focus_keyword\n1,a,b,c\n");
   let resolveCalls = 0;
   const context = {
     /** 记录任何意外发生的 client 解析。 */
@@ -592,7 +701,11 @@ test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async
     /file.*outside the allowed local roots/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_resource_update", { resource: "posts", id: 1, metaFile }, context),
+    () => executeWpApiTool("wp_resource_update", {
+      target: { type: "post", resource: "posts" },
+      id: 1,
+      data: { metaFile }
+    }, context),
     /metaFile.*outside the allowed local roots/
   );
   await assert.rejects(
@@ -602,6 +715,31 @@ test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async
       changesFile
     }, context),
     /changesFile.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_seo_batch_update", { resource: "posts", csvFile }, context),
+    /csvFile.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_resource_batch_update", {
+      target: { type: "post", resource: "posts" },
+      csvFile
+    }, context),
+    /csvFile.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_resource_list", {
+      target: { type: "post", resource: "posts" },
+      outputFile: path.join(outsideDirectory, "resources.csv")
+    }, context),
+    /outputFile.*outside the allowed local roots/
+  );
+  await assert.rejects(
+    () => executeWpApiTool("wp_seo_list", {
+      resource: "posts",
+      outputFile: path.join(outsideDirectory, "export.csv")
+    }, context),
+    /outputFile.*outside the allowed local roots/
   );
   assert.equal(resolveCalls, 0);
 });
@@ -652,9 +790,9 @@ test("MCP 本地路径边界拒绝逃逸工作区的输入符号链接", async (
   let resolverCalled = false;
   await assert.rejects(
     () => executeWpApiTool("wp_resource_update", {
-      resource: "posts",
+      target: { type: "post", resource: "posts" },
       id: 1,
-      contentFile: linkFile
+      data: { contentFile: linkFile }
     }, {
       /** 记录边界拒绝前不应发生的 client 解析。 */
       async resolveClientImpl() {

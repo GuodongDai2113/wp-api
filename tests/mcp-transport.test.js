@@ -24,7 +24,7 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   });
 
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 29);
+  assert.equal(tools.tools.length, 34);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_get"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_use"), false);
@@ -32,6 +32,8 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   assert.equal(tools.tools.some((tool) => tool.name === "wp_rest_api"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_api_schema"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_get"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_seo_list"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_seo_batch_update"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_cache_clear"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_read"), false);
   const restApiTool = tools.tools.find((tool) => tool.name === "wp_rest_api");
@@ -65,7 +67,7 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
 
   const failure = await client.callTool({
     name: "wp_resource_get",
-    arguments: { resource: "posts", id: 1 }
+    arguments: { target: { type: "post", resource: "posts" }, id: 1 }
   });
   assert.equal(failure.isError, true);
   assert.match(failure.content[0].text, /client/i);
@@ -126,7 +128,7 @@ test("MCP transport 把超过 8 KiB 的完整结果保存为本地 JSON 文件",
 
   const result = await client.callTool({
     name: "wp_resource_get",
-    arguments: { client: "test", resource: "pages", id: 1 }
+    arguments: { client: "test", target: { type: "post", resource: "pages" }, id: 1 }
   });
   assert.equal(result.structuredContent.result.stored, true);
   assert.equal(result.structuredContent.result.media_type, "application/json");
