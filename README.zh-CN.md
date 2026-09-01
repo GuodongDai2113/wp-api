@@ -1,6 +1,6 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 34 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor 页面正文、媒体、插件/主题及询价管理。
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 35 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor 页面、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
@@ -106,7 +106,7 @@ wp-api-config
 
 ## 工具列表
 
-服务共暴露 34 个工具。
+服务共暴露 35 个工具。
 
 ### Client 配置（2 个）
 
@@ -160,13 +160,14 @@ post CSV 表头固定为 `id,title,slug,status,excerpt,content,gutenberg,feature
 
 SEO 要求站点安装 Jelly SEO 或等效插件，把 `rank_math_title`、`rank_math_description`、`rank_math_focus_keyword` 注册为允许认证用户 REST 读写的 string meta，并启用 `show_in_rest`。`wp_seo_list` 的内联结果保持分页（`perPage` 为 `1..100`），传入 `outputFile` 后以每页 100 条导出全部匹配项。资源和 SEO 导出都会根据每页最新的分页头继续或提前结束，并通过排他发布保证不会覆盖执行期间被其他进程创建的目标文件；页码分页仍不提供并发写入下的快照一致性。CSV 表头严格为 `id,rank_math_title,rank_math_description,rank_math_focus_keyword`，导入时空 SEO 单元格表示显式清空；本地 CSV 路径仍受 MCP 允许根目录限制。
 
-### Elementor 页面正文（3 个）
+### Elementor 页面文件工作流（4 个）
 
-- `wp_elementor_get`：只对 `pages` 生效；默认返回页面 `revision`、包含正文的元素 ID 与可修改 settings，可用 `searchText` 定位旧标题或文本；`view: "data"` 会把完整树保存为本地结果文件用于备份或导入。
-- `wp_elementor_update`：把最新读取的 `revision` 作为 `expectedRevision`，按 `elementId` 局部合并现有正文字段，可使用内联 `changes` 或本地 JSON `changesFile`；拒绝过期或非正文修改，并在保存后自动刷新 Elementor 缓存。
-- `wp_elementor_import`：从本地 `dataFile` 读取完整元素树、覆盖页面并自动刷新 Elementor 缓存；文件可包含原始元素数组或落盘后的 `wp_elementor_get` data 结果。
+- `wp_elementor_pull`：按 `postId` 拉取完整 Elementor data，写入带站点、页面和基线 revision 的版本化本地 JSON；可指定 `outputFile` 和 `overwrite`，否则在结果目录生成唯一文件。
+- `wp_elementor_inspect`：纯本地检查文件摘要、JSON Pointer 或按元素 ID、widget 类型和文本筛选的有界结果，不要求 WordPress client。
+- `wp_elementor_edit`：通过最新文件 SHA-256 保护本地并发，按顺序原子执行 settings 更新、元素替换、插入、删除和移动；支持内联 `operations` 或 `operationsFile`。
+- `wp_elementor_push`：读取 pull 生成的 `dataFile`，校验来源和远端 revision 后上传完整 `data`，回读验证、刷新缓存并原子更新同一文件的基线。
 
-目标站点必须通过 WordPress REST API（`show_in_rest`）暴露 Elementor 私有页面 meta `_elementor_data`，并在写入响应中返回该值；站点侧桥接还应通过 Elementor document 层保存，或主动失效其生成数据与元素缓存。REST meta 集成缺失时工具会明确失败，不会把隐藏数据误判为空页面。
+推荐按 `pull → inspect → edit（可重复）→ push` 操作。inspect 和 edit 只访问本地文件；每次 edit 都必须使用 pull、inspect 或上一次 edit 返回的最新文件 SHA-256。工具保留完整布局、样式和插件扩展字段；远端页面已变化时拒绝覆盖。目标站点必须通过 WordPress REST API（`show_in_rest`）暴露 Elementor 私有页面 meta `_elementor_data`，并在写入响应中返回该值。
 
 ### 插件、主题与本地打包（8 个）
 
@@ -202,7 +203,7 @@ SEO 要求站点安装 Jelly SEO 或等效插件，把 `rank_math_title`、`rank
 
 ### 本地路径边界
 
-以下字段会读写本地文件：`contentFile`、`metaFile`、资源和 SEO 的 `csvFile`/`outputFile`、Elementor `changesFile` 和 `dataFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
+以下字段会读写本地文件：`contentFile`、`metaFile`、资源和 SEO 的 `csvFile`/`outputFile`、Elementor `outputFile`、`dataFile` 和 `operationsFile`、媒体 `filePath`、软件包 `file`、打包 `folderPath` 和 `outputPath`。
 
 默认情况下，这些路径必须位于 MCP 服务进程的 `cwd` 内。可以通过 `WP_API_ALLOWED_LOCAL_ROOTS` 增加可信根目录，并使用当前平台的路径分隔符：
 
@@ -211,7 +212,7 @@ SEO 要求站点安装 Jelly SEO 或等效插件，把 `rank_math_title`、`rank
 
 服务同时校验词法路径和解析符号链接后的真实路径，不能借助已有符号链接逃逸。配置的根目录必须已存在且确实是目录。允许列表应尽可能收窄：所有获准调用文件工具的 Agent 都能访问这些目录。
 
-MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入 `structuredContent`，而是自动保存到当前工作目录的 `.wp-api-results`，响应只返回文件绝对路径、字节数和 SHA-256。可用 `WP_API_RESULT_DIR` 更改保存目录；如果之后要把该目录中的文件作为工具输入，目录还必须位于 `cwd` 或 `WP_API_ALLOWED_LOCAL_ROOTS` 中。结果文件可能包含站点内容，应按需清理并避免提交到版本库。8 KiB 是本项目的会话内联策略，不是 MCP 或 WordPress 的硬限制。
+MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入 `structuredContent`，而是自动保存到当前工作目录的 `.wp-api-results`，响应只返回文件绝对路径、字节数和 SHA-256。可用 `WP_API_RESULT_DIR` 更改保存目录；该目录会自动作为可信结果文件根目录。结果文件可能包含站点内容，应按需清理并避免提交到版本库。8 KiB 是本项目的会话内联策略，不是 MCP 或 WordPress 的硬限制。
 
 允许列表是应用层边界，不是操作系统沙箱。应确保不受信任的本地用户或进程不能在工具执行期间修改获准目录；否则从路径校验到实际文件访问之间仍存在操作系统层面的路径替换竞态。
 
@@ -222,10 +223,10 @@ MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入
 | 单次网络请求超时 | 30 秒 |
 | 单个 WordPress REST 响应 | 25 MiB |
 | 单个 `contentFile` | 25 MiB |
-| 单个 `metaFile` 或 `changesFile` | 10 MiB JSON |
+| 单个 `metaFile` | 10 MiB JSON |
 | 单个媒体文件 | 50 MiB |
 | 单个插件/主题 ZIP | 100 MiB |
-| 单个 Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层 |
+| 单个 Elementor data | 100 MiB JSON、100,000 个元素、100 层；可由 `WP_API_MAX_ELEMENTOR_DATA_BYTES` 调整 |
 | 资源 CSV 导入 | 25 MiB |
 | 单个资源 batch 请求 | 8 MiB JSON |
 | 单次资源 batch 调用 | 25 MiB 累计 JSON |

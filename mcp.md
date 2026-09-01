@@ -1,6 +1,6 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 34 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
+`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 35 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
 
 ## 1. 安装和启动入口
 
@@ -77,7 +77,8 @@ tool_timeout_sec = 120
       "args": ["/absolute/path/to/wp-api/build/bin/wp-api-mcp.js"],
       "cwd": "/absolute/path/to/wp-api",
       "env": {
-        "WP_API_ALLOWED_LOCAL_ROOTS": "/srv/wordpress-content:/srv/wordpress-packages"
+        "WP_API_ALLOWED_LOCAL_ROOTS": "/srv/wordpress-content:/srv/wordpress-packages",
+        "WP_API_MAX_ELEMENTOR_DATA_BYTES": "104857600"
       }
     }
   }
@@ -93,7 +94,7 @@ tool_timeout_sec = 120
 - 资源正文文件 `contentFile`
 - 资源 meta 文件 `metaFile`
 - 资源和 SEO CSV 的导入文件 `csvFile` 与导出文件 `outputFile`
-- Elementor 局部修改文件 `changesFile` 和完整数据文件 `dataFile`
+- Elementor 拉取输出 `outputFile`、本地数据 `dataFile` 和编辑操作输入 `operationsFile`
 - 媒体文件 `filePath`
 - 安装/更新软件包的 `file`
 - 本地打包源目录 `folderPath`
@@ -168,11 +169,11 @@ wp-api-config
 }
 ```
 
-紧凑 JSON 超过 8 KiB 时，完整结果自动保存到 `WP_API_RESULT_DIR` 或默认的 `<cwd>/.wp-api-results/`，`structuredContent.result` 只返回 `stored`、`file_path`、`bytes`、`sha256` 和 `media_type`。该阈值是避免大型工具结果占用 Agent 会话的项目策略，不是 MCP 或 WordPress 的硬限制。结果文件可能包含站点内容，应按需清理；把文件再次作为工具输入时，其目录还必须满足本地路径边界。
+紧凑 JSON 超过 8 KiB 时，完整结果自动保存到 `WP_API_RESULT_DIR` 或默认的 `<cwd>/.wp-api-results/`，`structuredContent.result` 只返回 `stored`、`file_path`、`bytes`、`sha256` 和 `media_type`。配置的结果目录会自动作为可信本地根目录。该阈值是避免大型工具结果占用 Agent 会话的项目策略，不是 MCP 或 WordPress 的硬限制；结果文件可能包含站点内容，应按需清理。
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 34 个 MCP 工具
+## 5. 35 个 MCP 工具
 
 ### 5.1 Client（2 个）
 
@@ -350,37 +351,64 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 
 允许的位图扩展名为 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会先在内存中自动校正 EXIF 方向、按参考插件的尺寸阈值缩放，再以质量 85 编码为 WebP；正方形大图缩至 800×800，任一边达到 2000 或 4000 像素时分别缩至 80% 或 50%。GIF、AVIF 和已有 WebP 保持原样，避免动画丢失和重复有损压缩。转换完成后才会发出上传请求，且不会改写源文件或创建临时图片。上传成功后，如果提供了附件元数据，服务会再更新媒体实体。
 
-### 5.6 Elementor 页面正文（3 个）
+### 5.6 Elementor 本地文件工作流（4 个）
 
-Elementor 工具固定操作 `pages`，不接受 `resource` 字段。每个工具都要求正整数 `postId` 并支持通用连接字段；不提供部件创建、布局、样式或页面设置能力。目标站点必须把私有页面 meta `_elementor_data` 以 `show_in_rest` 注册并在写入响应中返回；站点侧桥接还应通过 Elementor document 层保存，或主动失效其生成数据与元素缓存。REST meta 集成缺失时工具会明确失败，避免隐藏 meta 被误判为空页面。
+Elementor 工具固定操作 `pages`，通过完整 data 的“拉取到本地、修改、再上传”流程工作。目标站点必须把私有页面 meta `_elementor_data` 以 `show_in_rest` 注册并在写入响应中返回；REST meta 集成缺失时工具会明确失败，避免隐藏 meta 被误判为空页面。
 
 | 工具 | 额外输入 | 说明 |
 | --- | --- | --- |
-| `wp_elementor_get` | `view?`, `searchText?` | 返回当前页面 `revision`；默认附带 `elementId` 和可修改正文 settings，`searchText` 可定位旧文案；`view: "data"` 把完整树保存为本地结果文件 |
-| `wp_elementor_update` | `expectedRevision`，以及 `changes` 或 `changesFile` | 校验最新读取版本后按 `elementId` 合并已有正文字段；大型修改数组可从本地 JSON 文件读取，最多 100 个元素、一次保存 |
-| `wp_elementor_import` | `dataFile` | 从本地 JSON 文件整体覆盖完整元素树，空数组会清空 Elementor 页面内容；回读校验后自动刷新 Elementor 全站缓存 |
+| `wp_elementor_pull` | `postId`；可选 `outputFile`、`overwrite` | 拉取完整 data 并原子写入版本化本地 JSON；省略路径时在结果目录生成唯一文件 |
+| `wp_elementor_inspect` | `dataFile`；可选 `jsonPointer`，或 `elementId`、`widgetType`、`searchText`、`limit`、`includeSubtree` | 纯本地返回文件摘要、指针值或有界元素匹配，不读取 client |
+| `wp_elementor_edit` | `dataFile`、`expectedFileSha256`，以及 `operations` 或 `operationsFile` | 纯本地顺序执行领域化操作，校验完整树后原子替换文件，并返回新文件哈希 |
+| `wp_elementor_push` | `dataFile` | 从文件读取站点、页面 ID、基线 revision 和完整 data；通过并发校验后上传、回读验证、刷新缓存并更新本地基线 |
 
-修改标题时先读取旧内容：
+先拉取页面：
 
 ```json
-{ "postId": 20, "searchText": "旧标题" }
+{ "postId": 20, "outputFile": "elementor-page-20.json" }
 ```
 
-读取结果会返回 `revision` 以及类似 `{ "elementId": "a1b2c3d4", "settings": { "title": "旧标题" } }` 的元素，随后回传版本并只发送变化字段：
+文件格式固定为 `wp-api.elementor-page` version 1。先用 inspect 定位元素并取得最新文件 SHA-256：
+
+```json
+{ "dataFile": "elementor-page-20.json", "searchText": "旧标题" }
+```
+
+随后使用 inspect 返回的 `file_sha256` 修改本地树：
 
 ```json
 {
-  "postId": 20,
-  "expectedRevision": "<读取结果中的 revision>",
-  "changes": [
-    { "elementId": "a1b2c3d4", "settings": { "title": "新标题" } }
+  "dataFile": "elementor-page-20.json",
+  "expectedFileSha256": "<最新文件 SHA-256>",
+  "operations": [
+    {
+      "op": "update_settings",
+      "elementId": "a1b2c3d4",
+      "settings": { "title": "新标题" }
+    }
   ]
 }
 ```
 
-局部修改要求值类型与读取结果一致。对象字段会深合并，数组字段整体替换；这样修改链接 URL 时不会意外删除同一链接对象中的其它值。页面在读取后已被其他编辑器修改时，过期的 `expectedRevision` 会被拒绝。完整覆盖前可先读取 `{ "postId": 20, "view": "data" }` 作为备份；结果超过 8 KiB 时直接把返回的 `file_path` 作为 `wp_elementor_import.dataFile` 使用。局部修改和完整导入都会返回回读 revision 与 `match: true`。
+可重复 inspect/edit；最终上传同一个文件：
 
-读取结果带有 `data_bytes`（完整元素树的 UTF-8 JSON 字节数）。Elementor 元素树有 10 MiB JSON、10,000 个元素和 100 层深度的固定上限，接近或超过上限的页面会整棵读取/写入失败并明确报错，Agent 应把错误提示中的 "Split or simplify" 当作可行改法（拆分或精简页面内容）；例行修改请使用默认 content 视图，`view: "data"` 只留给备份，避免把接近上限的完整树塞进 Agent 上下文。
+```json
+{ "dataFile": "elementor-page-20.json" }
+```
+
+文件中的 `source.site_url`、`source.post_id` 和 `source.revision` 用于阻止传错目标或覆盖并发编辑。push 会保留完整布局、样式和扩展字段；远端已等于本地目标数据时按安全重试处理。写入成功后会回读校验、刷新 Elementor 全站缓存，并原子更新同一文件的基线 revision。
+
+edit 支持以下操作：
+
+- `update_settings`：用 `settings` 新增或覆盖顶层 setting，可用 `removeSettings` 删除顶层键。
+- `replace_element`：用完整 `element` 替换目标及其子树，替换前后必须保持相同 ID。
+- `insert_child`：把完整 `element` 插入 `parentElementId` 的 children；省略父 ID 时插入 data 根数组，省略 `index` 时追加。
+- `remove_element`：删除目标及其完整子树。
+- `move_element`：移动目标及其子树；省略 `parentElementId` 时移动到根数组，禁止移动到自己的子树。
+
+每次 edit 最多执行 100 个操作，并按输入顺序应用；任一操作失败、出现重复元素 ID、超出深度/数量/字节限制或生成无效结构时，原文件保持不变。`operationsFile` 内容就是同样的操作数组，适合避免大型操作占用会话。
+
+紧凑 data 默认上限为 100 MiB、100,000 个元素和 100 层元素深度；可用 `WP_API_MAX_ELEMENTOR_DATA_BYTES` 调整字节上限。原生 WordPress REST 会把 data 作为转义字符串包含在响应中，因此处理大文件时 Node 进程峰值内存可能达到文件大小的数倍；PHP 和 Web 服务器也可能设置更低上限。
 
 ### 5.7 插件、主题与本地打包（8 个）
 
@@ -453,10 +481,10 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 | 单次请求 | 30 秒超时 |
 | 单个 WordPress REST 响应体 | 25 MiB |
 | `contentFile` | 25 MiB UTF-8 内容 |
-| `metaFile`、`changesFile` | 10 MiB JSON |
+| `metaFile` | 10 MiB JSON |
 | 本地媒体文件 | 50 MiB |
 | 本地插件/主题 ZIP | 100 MiB |
-| Elementor 元素树 | 10 MiB JSON、10,000 个元素、100 层父子深度 |
+| Elementor data | 100 MiB JSON、100,000 个元素、100 层父子深度；可配置 |
 | 资源 CSV 导入 | 25 MiB |
 | 单个资源 batch 请求 | 8 MiB JSON |
 | 单次资源 batch 调用 | 25 MiB 累计 JSON |

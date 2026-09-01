@@ -16,11 +16,25 @@ function readAllowedLocalRootsFromEnvironment(): string[] | undefined {
   return roots.length > 0 ? roots : undefined;
 }
 
+/** 从环境变量读取 Elementor data 正整数最大字节数。 */
+function readMaxElementorDataBytesFromEnvironment(): number | undefined {
+  const configuredBytes = process.env.WP_API_MAX_ELEMENTOR_DATA_BYTES?.trim();
+  if (!configuredBytes) {
+    return undefined;
+  }
+  const bytes = Number(configuredBytes);
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) {
+    throw new Error("WP_API_MAX_ELEMENTOR_DATA_BYTES must be a positive safe integer.");
+  }
+  return bytes;
+}
+
 try {
   await startStdioServer({
     configDir: process.env.WP_API_CONFIG_DIR?.trim() || undefined,
     allowedLocalRoots: readAllowedLocalRootsFromEnvironment(),
-    resultDirectory: process.env.WP_API_RESULT_DIR?.trim() || undefined
+    resultDirectory: process.env.WP_API_RESULT_DIR?.trim() || undefined,
+    maxElementorDataBytes: readMaxElementorDataBytesFromEnvironment()
   });
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

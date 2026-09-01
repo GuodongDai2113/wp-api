@@ -1,6 +1,6 @@
 # wp-api
 
-A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 32 structured tools for clients, local structure guidance, live REST schema discovery, content, SEO, Elementor, media, packages, and inquiries.
+A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 35 structured tools for clients, local structure guidance, live REST schema discovery, content, SEO, Elementor, media, packages, and inquiries.
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md) · Detailed MCP setup: [mcp.md](./mcp.md)
 
@@ -106,7 +106,7 @@ Except for the standalone public `wp_rest_api` query, all remote tools require `
 
 ## Tools
 
-The server exposes exactly 34 tools.
+The server exposes exactly 35 tools.
 
 ### Client configuration (2)
 
@@ -160,13 +160,14 @@ Post CSV columns are exactly `id,title,slug,status,excerpt,content,gutenberg,fea
 
 SEO requires Jelly SEO or an equivalent site plugin to register `rank_math_title`, `rank_math_description`, and `rank_math_focus_keyword` as writable string meta with `show_in_rest`. `wp_seo_list` keeps its inline response paginated (`perPage` is `1..100`), while `outputFile` exports all matches in 100-row pages. Resource and SEO exports update their stopping point from each page's latest pagination headers and use exclusive publication so a target created concurrently is never overwritten; page-number pagination still cannot provide snapshot consistency during concurrent writes. CSV columns are exactly `id,rank_math_title,rank_math_description,rank_math_focus_keyword`; empty imported SEO cells explicitly clear values. Local CSV paths remain restricted to the configured MCP local roots.
 
-### Elementor page content (3)
+### Elementor local-file workflow (4)
 
-- `wp_elementor_get` — pages only; returns a revision, element IDs, and editable content settings by default, accepts `searchText` to locate existing copy, and stores the complete backup tree in a local result file with `view: "data"`.
-- `wp_elementor_update` — partially merge existing content settings using the latest read `revision` as `expectedRevision`; accepts inline `changes` or a local JSON `changesFile`, rejects stale or non-content changes, and refreshes the Elementor cache automatically.
-- `wp_elementor_import` — read a complete Elementor tree from local `dataFile`, replace the page tree, verify persistence, and refresh the Elementor cache. The file may contain a raw element array or a stored `wp_elementor_get` data result.
+- `wp_elementor_pull` — pull complete page data into a versioned local JSON file containing the normalized site, page ID, and baseline revision; accepts optional `outputFile` and `overwrite`.
+- `wp_elementor_inspect` — locally inspect file metadata, one JSON Pointer, or bounded element matches by ID, widget type, and text without requiring a WordPress client.
+- `wp_elementor_edit` — use the latest file SHA-256 for local concurrency protection and atomically apply ordered settings updates, replacements, insertions, removals, and moves from inline `operations` or `operationsFile`.
+- `wp_elementor_push` — read a pulled `dataFile`, validate its source and baseline, upload the complete `data` tree, verify persistence, refresh caches, and atomically update the local baseline.
 
-The target site must expose Elementor's private `_elementor_data` page meta through the WordPress REST API (`show_in_rest`) and return it after writes. That site-side bridge should save through Elementor's document layer or invalidate Elementor's generated data and element caches. The tools fail explicitly when REST meta access is unavailable instead of treating hidden data as an empty page.
+The recommended flow is `pull → inspect → edit (repeat as needed) → push`. Inspect and edit are local-only; every edit requires the latest file SHA-256 returned by pull, inspect, or the preceding edit. The workflow preserves layouts, styles, and plugin extension fields and rejects concurrent remote changes. The target site must expose Elementor's private `_elementor_data` page meta through the WordPress REST API (`show_in_rest`) and return it after writes.
 
 ### Plugins, themes, and local packaging (8)
 
@@ -202,7 +203,7 @@ See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 
 ### Local file boundary
 
-The following fields can read or write local files: `contentFile`, `metaFile`, resource and SEO `csvFile`/`outputFile`, Elementor `changesFile` and `dataFile`, media `filePath`, package `file`, pack `folderPath`, and pack `outputPath`.
+The following fields can read or write local files: `contentFile`, `metaFile`, resource and SEO `csvFile`/`outputFile`, Elementor `outputFile`, `dataFile`, and `operationsFile`, media `filePath`, package `file`, pack `folderPath`, and pack `outputPath`.
 
 By default, every such path must remain inside the MCP server process's `cwd`. Add trusted roots with `WP_API_ALLOWED_LOCAL_ROOTS`. Separate roots with the platform path delimiter:
 
@@ -211,7 +212,7 @@ By default, every such path must remain inside the MCP server process's `cwd`. A
 
 Both lexical and resolved real paths are checked. Existing symlinks cannot be used to escape an allowed root. Configured roots must already exist and be directories. Keep the allowlist narrow: every permitted root becomes available to whichever agent can invoke these file tools.
 
-When a tool's compact JSON result exceeds 8 KiB, the complete result is omitted from `structuredContent` and stored under `.wp-api-results` in the current working directory. The MCP response returns only the absolute file path, byte count, and SHA-256. Set `WP_API_RESULT_DIR` to change this directory; if a stored file will later be used as tool input, its directory must also be inside `cwd` or `WP_API_ALLOWED_LOCAL_ROOTS`. Result files may contain site content, so clean them up when no longer needed and do not commit them. The 8 KiB value is this project's conversation-inline policy, not an MCP or WordPress hard limit.
+When a tool's compact JSON result exceeds 8 KiB, the complete result is omitted from `structuredContent` and stored under `.wp-api-results` in the current working directory. The MCP response returns only the absolute file path, byte count, and SHA-256. Set `WP_API_RESULT_DIR` to change this directory; the configured result directory is automatically trusted as a local result-file root. Result files may contain site content, so clean them up when no longer needed and do not commit them.
 
 This allowlist is an application boundary, not an operating-system sandbox. Use roots that untrusted local users and processes cannot mutate while a tool is running; otherwise path replacement between validation and file access remains an operating-system race.
 
@@ -222,10 +223,10 @@ This allowlist is an application boundary, not an operating-system sandbox. Use 
 | Network request timeout | 30 seconds |
 | One WordPress REST response | 25 MiB |
 | One `contentFile` | 25 MiB |
-| One `metaFile` or `changesFile` | 10 MiB JSON |
+| One `metaFile` | 10 MiB JSON |
 | One media file | 50 MiB |
 | One plugin/theme ZIP | 100 MiB |
-| One Elementor tree | 10 MiB JSON, 10,000 elements, 100 levels |
+| One Elementor data tree | 100 MiB JSON, 100,000 elements, 100 levels; configurable with `WP_API_MAX_ELEMENTOR_DATA_BYTES` |
 | Resource CSV import | 25 MiB |
 | One resource batch request | 8 MiB JSON |
 | One resource batch tool call | 25 MiB cumulative JSON |

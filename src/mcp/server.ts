@@ -96,9 +96,10 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_post_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_post_content_replace: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_media_upload: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  wp_elementor_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  wp_elementor_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  wp_elementor_import: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_elementor_pull: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_elementor_inspect: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  wp_elementor_edit: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  wp_elementor_push: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_package_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_package_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_package_install: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -160,20 +161,51 @@ const resourceDataSchema = z.object({
 /** 批量资源字段 schema，不包含不支持逐项读取的本地文件字段。 */
 const resourceBatchDataSchema = resourceDataSchema.omit({ contentFile: true, metaFile: true });
 
-/** Elementor MCP 工具共用的输入字段。 */
-const elementorBaseShape = {
-  ...globalInputShape,
-  postId: z.number().int().positive().describe("WordPress page ID.")
-};
-
-/** Elementor settings 对象 schema。 */
-const elementorSettingsSchema = z.record(z.unknown()).describe("Elementor settings object.");
-
-/** Elementor 单元素局部正文修改 schema。 */
-const elementorContentChangeSchema = z.object({
-  elementId: nonBlankStringSchema.describe("Element ID copied from wp_elementor_get."),
-  settings: elementorSettingsSchema.describe("Only changed content keys already shown by wp_elementor_get for this element.")
+/** Elementor settings 顶层更新操作 schema。 */
+const elementorUpdateSettingsOperationSchema = z.object({
+  op: z.literal("update_settings"),
+  elementId: nonBlankStringSchema,
+  settings: z.record(z.unknown()),
+  removeSettings: z.array(nonBlankStringSchema).optional()
 }).strict();
+
+/** Elementor 完整元素替换操作 schema。 */
+const elementorReplaceElementOperationSchema = z.object({
+  op: z.literal("replace_element"),
+  elementId: nonBlankStringSchema,
+  element: z.record(z.unknown())
+}).strict();
+
+/** Elementor 子元素插入操作 schema。 */
+const elementorInsertChildOperationSchema = z.object({
+  op: z.literal("insert_child"),
+  parentElementId: nonBlankStringSchema.optional(),
+  index: z.number().int().nonnegative().optional(),
+  element: z.record(z.unknown())
+}).strict();
+
+/** Elementor 元素删除操作 schema。 */
+const elementorRemoveElementOperationSchema = z.object({
+  op: z.literal("remove_element"),
+  elementId: nonBlankStringSchema
+}).strict();
+
+/** Elementor 元素移动操作 schema。 */
+const elementorMoveElementOperationSchema = z.object({
+  op: z.literal("move_element"),
+  elementId: nonBlankStringSchema,
+  parentElementId: nonBlankStringSchema.optional(),
+  index: z.number().int().nonnegative().optional()
+}).strict();
+
+/** Elementor 本地编辑支持的领域操作联合 schema。 */
+const elementorEditOperationSchema = z.discriminatedUnion("op", [
+  elementorUpdateSettingsOperationSchema,
+  elementorReplaceElementOperationSchema,
+  elementorInsertChildOperationSchema,
+  elementorRemoveElementOperationSchema,
+  elementorMoveElementOperationSchema
+]);
 
 /** MCP 工具结果允许直接进入会话的最大紧凑 JSON 字节数。 */
 const MAX_INLINE_RESULT_BYTES = 8 * 1024;
@@ -214,7 +246,7 @@ async function storeLargeToolResult(
 
 /**
  * 将任意结构化数据包装为 MCP 工具响应。
- * 超过 8 KiB 的完整结果和 Elementor 完整 data 视图只写入本地文件，避免 structuredContent 再次占用会话上下文。
+ * 超过 8 KiB 的完整结果只写入本地文件，避免 structuredContent 再次占用会话上下文。
  */
 async function toToolResult(
   toolName: WpApiToolName,
@@ -227,12 +259,7 @@ async function toToolResult(
     throw new Error(`MCP tool ${toolName} returned a value that cannot be serialized as JSON.`);
   }
   const serializedBytes = Buffer.byteLength(serializedJson, "utf8");
-  const isElementorDataResult = toolName === "wp_elementor_get"
-    && typeof data === "object"
-    && data !== null
-    && "view" in data
-    && data.view === "data";
-  if (serializedBytes > MAX_INLINE_RESULT_BYTES || isElementorDataResult) {
+  if (serializedBytes > MAX_INLINE_RESULT_BYTES) {
     const storedResult = await storeLargeToolResult(toolName, serializedJson, context);
     return {
       structuredContent: {
@@ -274,11 +301,10 @@ async function toToolResult(
   };
 }
 
-/** 创建绑定具体工具名和上下文的 MCP 回调，并为结构查询及 Elementor 读取启用单份结构化输出。 */
+/** 创建绑定具体工具名和上下文的 MCP 回调，并为紧凑查询启用单份结构化输出。 */
 function createToolCallback(toolName: WpApiToolName, context: WpApiToolContext) {
   const structuredOnly = toolName === "wp_structure_get"
-    || toolName === "wp_rest_api"
-    || toolName === "wp_elementor_get";
+    || toolName === "wp_rest_api";
   return async (input: WpApiToolInput) => toToolResult(
     toolName,
     await executeWpApiTool(toolName, input, context),
@@ -664,39 +690,57 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   registerElementorTool(
     server,
     context,
-    "wp_elementor_get",
-    "Read Elementor page content",
-    "Read editable content from a WordPress page. The default content view returns only element IDs and existing content settings, plus update guidance. Use searchText to locate text or view data only for a full backup before import.",
+    "wp_elementor_pull",
+    "Pull Elementor page data",
+    "Pull the complete Elementor data tree from a WordPress page into a versioned local JSON file. Edit only the file's data field, then call wp_elementor_push.",
     {
-      ...elementorBaseShape,
-      view: z.enum(["content", "data"]).optional().describe("content (default) returns editable text/content fields; data returns the complete element tree for backup or import."),
-      searchText: nonBlankStringSchema.optional().describe("Case-insensitive filter across editable content values; only valid with the content view.")
+      ...globalInputShape,
+      postId: z.number().int().positive().describe("WordPress page ID."),
+      outputFile: nonBlankStringSchema.optional().describe("Optional local JSON output path. A unique file in WP_API_RESULT_DIR is created when omitted."),
+      overwrite: z.boolean().optional().describe("Allow atomic replacement of an existing outputFile. Defaults to false.")
     }
   );
 
   registerElementorTool(
     server,
     context,
-    "wp_elementor_update",
-    "Update Elementor page content",
-    "Partially update existing page content by element ID. First call wp_elementor_get, then copy each elementId and send only changed setting keys. Layout, style, new elements, and unknown settings are rejected; all changes are saved once and the site-wide Elementor cache is refreshed automatically.",
+    "wp_elementor_inspect",
+    "Inspect local Elementor data",
+    "Inspect a versioned local Elementor file without contacting WordPress. Return file hashes and tree statistics, resolve one JSON Pointer, or find a bounded set of elements by ID, widget type, or text.",
     {
-      ...elementorBaseShape,
-      expectedRevision: nonBlankStringSchema.describe("Revision copied from the latest wp_elementor_get result. The update is rejected if the page changed meanwhile."),
-      changes: z.array(elementorContentChangeSchema).min(1).max(100).optional().describe("One or more content-only element updates applied in a single page save. Do not provide together with changesFile."),
-      changesFile: nonBlankStringSchema.optional().describe("Local JSON file containing the changes array. Use for large batches; do not provide together with changes.")
+      dataFile: nonBlankStringSchema.describe("Versioned local JSON file created by wp_elementor_pull."),
+      jsonPointer: nonBlankStringSchema.optional().describe("RFC 6901 pointer from the file root, such as /data/0/settings/title. Cannot be combined with element filters."),
+      elementId: nonBlankStringSchema.optional().describe("Exact Elementor element ID filter."),
+      widgetType: nonBlankStringSchema.optional().describe("Exact Elementor widgetType filter."),
+      searchText: nonBlankStringSchema.optional().describe("Case-insensitive text search across each element's own fields, excluding descendants."),
+      includeSubtree: z.boolean().optional().describe("Include the complete descendant tree for an exact elementId match. Defaults to false and requires elementId when true."),
+      limit: z.number().int().min(1).max(100).optional().describe("Maximum matched elements returned. Defaults to 20.")
     }
   );
 
   registerElementorTool(
     server,
     context,
-    "wp_elementor_import",
-    "Replace Elementor page data",
-    "Replace the complete Elementor element tree of an existing WordPress page from a local JSON file, then verify persistence and refresh the site-wide Elementor cache automatically. The file may contain a raw element array or a saved wp_elementor_get data result.",
+    "wp_elementor_edit",
+    "Edit local Elementor data",
+    "Atomically edit a versioned local Elementor file without contacting WordPress. Requires the latest file SHA-256 from pull, inspect, or a previous edit and validates the complete tree before replacing the file.",
     {
-      ...elementorBaseShape,
-      dataFile: nonBlankStringSchema.describe("Local JSON file containing a raw Elementor element array or a saved wp_elementor_get data result.")
+      dataFile: nonBlankStringSchema.describe("Versioned local JSON file created by wp_elementor_pull."),
+      expectedFileSha256: z.string().regex(/^[a-f0-9]{64}$/).describe("Current file SHA-256 returned by pull, inspect, or the previous edit."),
+      operations: z.array(elementorEditOperationSchema).min(1).max(100).optional().describe("Up to 100 ordered local tree operations. Do not provide together with operationsFile."),
+      operationsFile: nonBlankStringSchema.optional().describe("Local JSON file containing the operations array. Do not provide together with operations.")
+    }
+  );
+
+  registerElementorTool(
+    server,
+    context,
+    "wp_elementor_push",
+    "Push Elementor page data",
+    "Validate and upload a versioned local Elementor JSON file. The embedded site, page ID, and baseline revision prevent accidental or concurrent overwrites; successful pushes refresh Elementor caches and update the local baseline atomically.",
+    {
+      ...globalInputShape,
+      dataFile: nonBlankStringSchema.describe("Versioned local JSON file created by wp_elementor_pull. Edit only its data field before pushing.")
     }
   );
 

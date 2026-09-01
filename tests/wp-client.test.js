@@ -509,6 +509,8 @@ test("WordPressClient applies a request timeout signal and limits response bodie
 
   assert.equal(client.requestTimeoutMs, 1234);
   await assert.rejects(() => client.request("posts"), /maximum allowed size of 4 bytes/);
+  const overridden = await client.request("posts", { maxResponseBytes: 5 });
+  assert.equal(overridden.data, "12345");
 });
 
 test("WordPressClient rejects invalid pagination headers", async () => {

@@ -10,6 +10,7 @@ import {
 } from "../build/mcp/tool-router.js";
 import { registerWpApiTools } from "../build/mcp/server.js";
 import { ConfigStore } from "../build/config/store.js";
+import { createElementorRevision } from "../build/wordpress/elementor/document.js";
 
 /** 使用最小 MCP server 替身收集全部工具注册定义。 */
 function collectRegistrations() {
@@ -117,7 +118,10 @@ test("MCP server 只注册当前纯 MCP 工具集合", () => {
     "wp_elementor_export",
     "wp_elementor_structure",
     "wp_elementor_get_element",
-    "wp_elementor_find"
+    "wp_elementor_find",
+    "wp_elementor_get",
+    "wp_elementor_update",
+    "wp_elementor_import"
   ]) {
     assert.equal(registrations.has(removedName), false);
   }
@@ -337,7 +341,8 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   assert.equal(JSON.stringify(pageOverview).length < JSON.stringify(pageFull).length, true);
 
   const elementor = await executeWpApiTool("wp_structure_get", { structure: "elementor-page", section: "write" }, context);
-  assert.match(elementor.value.update, /elementId/);
+  assert.match(elementor.value.pull, /postId/);
+  assert.match(elementor.value.push, /dataFile/);
   assert.equal(resolverCalls, 0);
 
   await assert.rejects(
@@ -402,9 +407,27 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   const batchUpdateSchema = registrations.get("wp_resource_batch_update").inputSchema;
   assert.equal(batchUpdateSchema.items.safeParse([{ id: 9, data: { title: "Updated" } }]).success, true);
   assert.equal(batchUpdateSchema.items.safeParse([{ data: { title: "Missing ID" } }]).success, false);
-  const elementorUpdateSchema = registrations.get("wp_elementor_update").inputSchema;
-  assert.equal(elementorUpdateSchema.changes.safeParse(undefined).success, true);
-  assert.equal(elementorUpdateSchema.changesFile.safeParse("changes.json").success, true);
+  const elementorPullSchema = registrations.get("wp_elementor_pull").inputSchema;
+  assert.equal(elementorPullSchema.postId.safeParse(12).success, true);
+  assert.equal(elementorPullSchema.outputFile.safeParse("page.json").success, true);
+  assert.equal(elementorPullSchema.overwrite.safeParse(true).success, true);
+  const elementorPushSchema = registrations.get("wp_elementor_push").inputSchema;
+  assert.equal(elementorPushSchema.dataFile.safeParse("page.json").success, true);
+  assert.equal(Object.hasOwn(elementorPushSchema, "postId"), false);
+  const elementorInspectSchema = registrations.get("wp_elementor_inspect").inputSchema;
+  assert.equal(elementorInspectSchema.jsonPointer.safeParse("/data/0").success, true);
+  assert.equal(elementorInspectSchema.limit.safeParse(100).success, true);
+  assert.equal(Object.hasOwn(elementorInspectSchema, "client"), false);
+  const elementorEditSchema = registrations.get("wp_elementor_edit").inputSchema;
+  assert.equal(elementorEditSchema.expectedFileSha256.safeParse("a".repeat(64)).success, true);
+  assert.equal(elementorEditSchema.operations.safeParse([{
+    op: "move_element",
+    elementId: "head001",
+    parentElementId: "root001",
+    index: 0
+  }]).success, true);
+  assert.equal(elementorEditSchema.operationsFile.safeParse("operations.json").success, true);
+  assert.equal(Object.hasOwn(elementorEditSchema, "client"), false);
 
   const seoListSchema = registrations.get("wp_seo_list").inputSchema;
   assert.equal(seoListSchema.perPage.safeParse(100).success, true);
@@ -642,6 +665,42 @@ test("executeWpApiTool 对未知名称立即返回 MCP 工具错误", async () =
   );
 });
 
+test("Elementor inspect 和 edit 作为纯本地工具执行且不解析 client", async (t) => {
+  const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-elementor-local-"));
+  t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
+  const dataFile = path.join(workspaceDirectory, "page.json");
+  const data = [{ id: "head001", elType: "widget", settings: { title: "Before" }, elements: [] }];
+  await writeFile(dataFile, `${JSON.stringify({
+    format: "wp-api.elementor-page",
+    version: 1,
+    source: {
+      site_url: "https://example.com",
+      post_id: 12,
+      revision: createElementorRevision(data)
+    },
+    data
+  }, null, 2)}\n`, "utf8");
+  let resolverCalls = 0;
+  const context = {
+    /** 记录不应由纯本地工具触发的 client 解析。 */
+    async resolveClientImpl() {
+      resolverCalls += 1;
+      return createRemoteClientStub();
+    }
+  };
+
+  const inspected = await executeWpApiTool("wp_elementor_inspect", { dataFile, elementId: "head001" }, context);
+  const edited = await executeWpApiTool("wp_elementor_edit", {
+    dataFile,
+    expectedFileSha256: inspected.file_sha256,
+    operations: [{ op: "update_settings", elementId: "head001", settings: { title: "After" } }]
+  }, context);
+  assert.equal(inspected.matches[0].element.settings.title, "Before");
+  assert.equal(edited.edited, true);
+  assert.equal(JSON.parse(await readFile(dataFile, "utf8")).data[0].settings.title, "After");
+  assert.equal(resolverCalls, 0);
+});
+
 test("MCP 本地路径边界允许工作区内的正文文件并传递真实路径", async (t) => {
   const workspaceDirectory = await mkdtemp(path.join(process.cwd(), ".wp-api-mcp-local-"));
   t.after(() => rm(workspaceDirectory, { recursive: true, force: true }));
@@ -713,12 +772,8 @@ test("MCP 本地路径边界在解析 client 前拒绝工作区外输入", async
     /metaFile.*outside the allowed local roots/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_elementor_update", {
-      postId: 1,
-      expectedRevision: "revision",
-      changesFile
-    }, context),
-    /changesFile.*outside the allowed local roots/
+    () => executeWpApiTool("wp_elementor_push", { dataFile: changesFile }, context),
+    /dataFile.*outside the allowed local roots/
   );
   await assert.rejects(
     () => executeWpApiTool("wp_seo_batch_update", { resource: "posts", csvFile }, context),

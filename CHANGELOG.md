@@ -13,9 +13,10 @@
 - 移除 `WordPressClient.list()` 的 `per_page=-1` 内存聚合；Jelly Core 激活检查改为逐页查询，资源和 SEO CSV 共用有界解析与标准编码能力。
 - 用只读的 `wp_client_get` 替换 `wp_client_use`，`wp_client_list` 改为直接返回全部连接名称与站点 URL；移除当前连接状态、配置页面默认连接操作，并要求远端工具显式传入 `client`。
 - 所有 MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果改为保存到本地 `.wp-api-results` JSON 文件，MCP 响应只返回绝对路径、字节数和 SHA-256，避免大型 `structuredContent` 被会话折叠。
-- `wp_elementor_import` 改为通过本地 `dataFile` 导入完整元素树；文件既可包含原始元素数组，也可直接使用 `wp_elementor_get` 的完整 data 结果。
-- Elementor 局部更新和完整导入成功后返回回读 revision 与 `match: true`，明确报告服务端落盘校验结果。
-- 资源创建/更新新增 `metaFile`，Elementor 局部更新新增 `changesFile`；两者通过通用的 10 MiB 有界 JSON 文件读取器解析，减少大型写入参数占用 Agent 会话。
+- Elementor 破坏性替换旧的 get/update/import 工具为 `wp_elementor_pull` 和 `wp_elementor_push`：完整 data 通过带站点、页面和 revision 的版本化本地 JSON 往返，支持并发保护、安全重试、缓存刷新与本地基线原子更新。
+- 新增纯本地 `wp_elementor_inspect` 和 `wp_elementor_edit`：支持有界元素/JSON Pointer 定位、文件 SHA-256 并发保护，以及 settings 更新、元素替换、插入、删除和移动的原子树编辑。
+- Elementor 紧凑 data 默认上限从 10 MiB/10,000 元素提升到可配置的 100 MiB/100,000 元素，并通过 `WP_API_MAX_ELEMENTOR_DATA_BYTES` 覆盖；其他 WordPress REST 请求仍保持原响应上限。
+- 资源创建/更新新增 `metaFile`，通过通用的 10 MiB 有界 JSON 文件读取器解析，减少大型写入参数占用 Agent 会话。
 - 将 MCP 工具 `wp_api_schema` 重命名为 `wp_rest_api`；新工具移除 `client` 和 `siteUrl`，改为通过必填裸域名 `domain` 固定拼接公开 HTTPS REST 地址。`apiPath` 默认为 `wp-json`，支持完整 `wp-json/...` 路径和省略该前缀的简写，并且永不读取或发送本地凭据。
 
 ## 2.1.0

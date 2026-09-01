@@ -1,4 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { createPackageArchive } from "../wordpress/packages/archive.js";
@@ -99,9 +99,10 @@ export const WP_API_TOOL_NAMES = [
   "wp_post_link",
   "wp_post_content_replace",
   "wp_media_upload",
-  "wp_elementor_get",
-  "wp_elementor_update",
-  "wp_elementor_import",
+  "wp_elementor_pull",
+  "wp_elementor_inspect",
+  "wp_elementor_edit",
+  "wp_elementor_push",
   "wp_package_list",
   "wp_package_get",
   "wp_package_install",
@@ -134,6 +135,8 @@ export interface WpApiToolContext extends WordPressConnectionContext {
   allowedLocalRoots?: string[];
   /** 超过内联阈值的 MCP 结果保存目录；默认使用当前工作目录下的 .wp-api-results。 */
   resultDirectory?: string;
+  /** Elementor data 的最大紧凑 JSON 字节数；默认 100 MiB。 */
+  maxElementorDataBytes?: number;
   /** 覆盖 WordPress client 解析函数，主要用于不访问真实配置与网络的测试。 */
   resolveClientImpl?: ResolveWordPressClientImpl;
 }
@@ -171,7 +174,15 @@ function isPathWithinRoot(rootPath: string, targetPath: string): boolean {
 
 /** 解析默认工作目录和显式扩展目录，确保每个允许根目录都真实存在且为目录。 */
 async function resolveAllowedLocalRoots(context: WpApiToolContext): Promise<AllowedLocalRoot[]> {
-  const configuredRoots = [process.cwd(), ...(context.allowedLocalRoots ?? [])];
+  const trustedResultDirectory = context.resultDirectory ? resolve(context.resultDirectory) : undefined;
+  if (trustedResultDirectory) {
+    await mkdir(trustedResultDirectory, { recursive: true });
+  }
+  const configuredRoots = [
+    process.cwd(),
+    ...(context.allowedLocalRoots ?? []),
+    ...(trustedResultDirectory ? [trustedResultDirectory] : [])
+  ];
   const roots: AllowedLocalRoot[] = [];
 
   for (const configuredRoot of configuredRoots) {
@@ -304,7 +315,7 @@ async function validateToolLocalPaths(
   context: WpApiToolContext
 ): Promise<WpApiToolInput> {
   const validatedInput = { ...input };
-  const pathFields: Array<"contentFile" | "metaFile" | "filePath" | "file" | "dataFile" | "changesFile" | "csvFile"> = [];
+  const pathFields: Array<"contentFile" | "metaFile" | "filePath" | "file" | "dataFile" | "operationsFile" | "csvFile"> = [];
 
   if (toolName === "wp_resource_create" || toolName === "wp_resource_update") {
     if (typeof input.data !== "object" || input.data === null || Array.isArray(input.data)) {
@@ -324,10 +335,15 @@ async function validateToolLocalPaths(
     pathFields.push("filePath");
   } else if (toolName === "wp_package_install" || toolName === "wp_package_update") {
     pathFields.push("file");
-  } else if (toolName === "wp_elementor_import") {
+  } else if (
+    toolName === "wp_elementor_inspect"
+    || toolName === "wp_elementor_edit"
+    || toolName === "wp_elementor_push"
+  ) {
     pathFields.push("dataFile");
-  } else if (toolName === "wp_elementor_update" && input.changesFile !== undefined) {
-    pathFields.push("changesFile");
+    if (toolName === "wp_elementor_edit" && input.operationsFile !== undefined) {
+      pathFields.push("operationsFile");
+    }
   } else if (toolName === "wp_seo_batch_update" && input.csvFile !== undefined) {
     pathFields.push("csvFile");
   } else if ((toolName === "wp_resource_batch_create" || toolName === "wp_resource_batch_update") && input.csvFile !== undefined) {
@@ -352,7 +368,10 @@ async function validateToolLocalPaths(
     const validatedOutput = await validateLocalOutputPath("outputPath", requestedOutputPath, allowedRoots);
     validatedInput.folderPath = validatedFolder.realPath;
     validatedInput.outputPath = validatedOutput.realPath;
-  } else if ((toolName === "wp_seo_list" || toolName === "wp_resource_list") && input.outputFile !== undefined) {
+  } else if (
+    (toolName === "wp_seo_list" || toolName === "wp_resource_list" || toolName === "wp_elementor_pull")
+    && input.outputFile !== undefined
+  ) {
     const allowedRoots = await resolveAllowedLocalRoots(context);
     const outputFile = readRequiredString(input, "outputFile");
     const validatedOutput = await validateLocalOutputPath("outputFile", outputFile, allowedRoots);
@@ -384,10 +403,14 @@ function readConnectionInput(input: WpApiToolInput): WordPressConnectionInput {
 async function executeRemoteTool(
   toolName: WpApiToolName,
   input: WpApiToolInput,
-  client: WordPressClient
+  client: WordPressClient,
+  context: WpApiToolContext
 ): Promise<unknown> {
   if (isElementorToolName(toolName)) {
-    return executeElementorTool(toolName, client, input);
+    return executeElementorTool(toolName, client, input, {
+      resultDirectory: context.resultDirectory,
+      maxDataBytes: context.maxElementorDataBytes
+    });
   }
 
   switch (toolName) {
@@ -479,6 +502,12 @@ export async function executeWpApiTool(
       });
       return getApiSchema(publicClient, validatedInput as unknown as ApiSchemaInput);
     }
+    case "wp_elementor_inspect":
+    case "wp_elementor_edit":
+      return executeElementorTool(toolName, undefined, validatedInput, {
+        resultDirectory: context.resultDirectory,
+        maxDataBytes: context.maxElementorDataBytes
+      });
     case "wp_package_pack_theme":
     case "wp_package_pack_plugin":
       return createPackageArchive(
@@ -489,7 +518,7 @@ export async function executeWpApiTool(
     default: {
       const resolver = context.resolveClientImpl ?? resolveWordPressClient;
       const client = await resolver(readConnectionInput(validatedInput), context);
-      return executeRemoteTool(toolName, validatedInput, client);
+      return executeRemoteTool(toolName, validatedInput, client, context);
     }
   }
 }

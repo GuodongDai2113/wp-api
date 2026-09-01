@@ -190,7 +190,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "WordPress page",
       description: "Standard hierarchical WordPress page. Elementor tools also operate on this resource through page meta.",
       remoteSchemaPath: "wp-json/wp/v2/pages",
-      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update", "wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update", "wp_elementor_pull", "wp_elementor_inspect", "wp_elementor_edit", "wp_elementor_push"],
       writeShape: {
         target: "{type:\"post\",resource:\"pages\"}",
         id: "required positive integer for update/get/delete; omit for create",
@@ -380,26 +380,28 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     "elementor-page": {
       name: "elementor-page",
       title: "Elementor page content",
-      description: "Content-only reading and partial editing plus explicit full replacement for existing WordPress pages; writes refresh Elementor caches automatically.",
+      description: "Pull complete Elementor page data into a versioned local JSON file, inspect and edit it with bounded local tools, then safely push the full tree back.",
       remoteSchemaPath: "wp-json/wp/v2/pages",
-      mcpTools: ["wp_elementor_get", "wp_elementor_update", "wp_elementor_import"],
+      mcpTools: ["wp_elementor_pull", "wp_elementor_inspect", "wp_elementor_edit", "wp_elementor_push"],
       writeShape: {
-        postId: "required positive WordPress page ID",
-        read: "view content by default; optional searchText filters editable values; view data stores a full backup in a local result file",
-        update: "expectedRevision:string plus either changes:{elementId:string,settings:object}[] or changesFile:string; copy the revision, element IDs and setting keys from the latest content read result",
-        import: "dataFile:string; reads a raw element array or stored wp_elementor_get data result and replaces the complete page element tree"
+        pull: "postId:positive integer plus optional outputFile:string and overwrite:boolean",
+        inspect: "dataFile:string plus optional jsonPointer or elementId/widgetType/searchText filters",
+        edit: "dataFile:string, expectedFileSha256:string, and either operations or operationsFile; supports update_settings, replace_element, insert_child, remove_element, and move_element",
+        push: "dataFile:string; site, page ID, and baseline revision are read from the file"
       },
       responseShape: {
-        read: "revision plus content elements with elementId and editable settings, or a local result file reference when view=data",
-        update: "updated=true, match=true, revisions, cache_refreshed=true, plus changed element IDs and field names",
-        import: "imported=true, match=true, revision, cache_refreshed=true, plus recursive element count"
+        pull: "pulled=true plus file path, hashes, source, revision, element count, and byte counts",
+        inspect: "file hashes, source, revisions, tree statistics, and bounded pointer or element matches",
+        edit: "edited=true plus applied operations, before/after hashes and data revisions, element count, and bytes",
+        push: "pushed=true plus remote_updated, cache_refreshed, match, revisions, and updated local file hashes"
       },
       example: {
-        postId: 20,
-        expectedRevision: "<revision from wp_elementor_get>",
-        changes: [{ elementId: "a1b2c3d4", settings: { title: "New heading" } }]
+        pull: { postId: 20, outputFile: "elementor-page-20.json" },
+        inspect: { dataFile: "elementor-page-20.json", searchText: "Old heading" },
+        edit: { dataFile: "elementor-page-20.json", expectedFileSha256: "<latest file hash>", operations: [{ op: "update_settings", elementId: "a1b2c3d4", settings: { title: "New heading" } }] },
+        push: { dataFile: "elementor-page-20.json" }
       },
-      notes: ["Call wp_elementor_get before update and copy its revision, the returned elementId, and only changed setting keys.", "Use changesFile instead of inline changes when a batch would add excessive data to the Agent conversation.", "A stale expectedRevision is rejected to avoid overwriting a newer Elementor edit.", "Import replaces the full page tree; use get with view=data first when a backup is required.", "Update and import automatically clear the site-wide Elementor cache after the page data is verified.", "All three tools only write content through the WordPress pages route; cache refresh uses Elementor's DELETE elementor/v1/cache endpoint.", "The target site must expose _elementor_data through REST."]
+      notes: ["The pull file uses format wp-api.elementor-page version 1 and embeds normalized site URL, page ID, and baseline revision.", "Inspect and edit are pure local tools and do not require a client; edit requires the latest file hash and atomically validates the complete tree before replacement.", "Push rejects a changed remote revision unless the remote data already equals the local desired data during a safe retry.", "Successful writes verify persisted data, refresh the site-wide Elementor cache, and atomically update the local baseline.", "The default compact data limit is 100 MiB and can be changed with WP_API_MAX_ELEMENTOR_DATA_BYTES.", "The target site must expose _elementor_data through REST."]
     }
   };
 }

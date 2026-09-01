@@ -76,6 +76,8 @@ export interface RequestOptions {
   body?: unknown;
   /** 自定义请求头，与默认头合并。 */
   headers?: Record<string, string>;
+  /** 仅覆盖当前请求允许读取的最大响应字节数。 */
+  maxResponseBytes?: number;
 }
 
 /** WordPress 媒体上传选项。 */
@@ -807,8 +809,19 @@ export class WordPressClient {
   }
 
   /** 直接请求 `wp-json/` 下的指定 API path。 */
-  async requestApiPath<T = unknown>(apiPath: string, { method = "GET", query, body, headers: extraHeaders }: RequestOptions = {}): Promise<RequestResult<T>> {
+  async requestApiPath<T = unknown>(apiPath: string, {
+    method = "GET",
+    query,
+    body,
+    headers: extraHeaders,
+    maxResponseBytes
+  }: RequestOptions = {}): Promise<RequestResult<T>> {
     const url = joinApiUrl(this.baseUrl, apiPath, query);
+    const responseLimit = normalizePositiveInteger(
+      maxResponseBytes,
+      this.maxResponseBytes,
+      "Request maxResponseBytes"
+    );
     const headers = this.authentication === "basic"
       ? buildAuthenticatedHeaders(this.username, this.appPassword, extraHeaders, body !== undefined)
       : buildPublicHeaders(extraHeaders, body !== undefined);
@@ -829,7 +842,7 @@ export class WordPressClient {
     }
 
     await this.assertRequestDidNotRedirect(response, url);
-    const payload = await readResponsePayload(response, this.maxResponseBytes);
+    const payload = await readResponsePayload(response, responseLimit);
 
     if (!response.ok) {
       const errorPayload = asWordPressErrorPayload(payload);

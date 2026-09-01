@@ -24,14 +24,18 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   });
 
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 34);
+  assert.equal(tools.tools.length, 35);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_get"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_use"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_add"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_rest_api"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_api_schema"), false);
-  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_get"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_pull"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_inspect"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_edit"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_push"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_get"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_seo_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_seo_batch_update"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_cache_clear"), false);
@@ -79,15 +83,15 @@ test("MCP transport 把超过 8 KiB 的完整结果保存为本地 JSON 文件",
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createWpApiMcpServer({
     resultDirectory,
-    allowedLocalRoots: [resultDirectory],
     /** 返回包含大型正文的 WordPress client，以触发通用结果落盘。 */
     async resolveClientImpl() {
       return {
+        baseUrl: "https://example.com",
         /** 返回超过 MCP 内联阈值的固定页面实体。 */
         async get() {
           return { id: 1, content: { raw: "x".repeat(9 * 1024) } };
         },
-        /** 返回固定的轻量 Elementor 页面，验证 data 视图仍会强制落盘。 */
+        /** 返回固定的轻量 Elementor 页面，供 pull 写入版本化本地文件。 */
         async request() {
           return {
             data: {
@@ -105,10 +109,6 @@ test("MCP transport 把超过 8 KiB 的完整结果保存为本地 JSON 文件",
             },
             pagination: { total: 0, totalPages: 0 }
           };
-        },
-        /** 回显 Elementor 导入提交的数据，供 handler 完成落盘校验。 */
-        async update(route, id, body) {
-          return { id, type: "page", meta: body.meta };
         },
         /** 接受 Elementor 保存后的缓存刷新请求。 */
         async requestApiPath() {
@@ -137,14 +137,14 @@ test("MCP transport 把超过 8 KiB 的完整结果保存为本地 JSON 文件",
   assert.equal(storedPayload.content.raw.length, 9 * 1024);
 
   const elementorData = await client.callTool({
-    name: "wp_elementor_get",
-    arguments: { client: "test", postId: 12, view: "data" }
+    name: "wp_elementor_pull",
+    arguments: { client: "test", postId: 12 }
   });
-  assert.equal(elementorData.structuredContent.result.stored, true);
+  assert.equal(elementorData.structuredContent.result.pulled, true);
   const elementorImport = await client.callTool({
-    name: "wp_elementor_import",
-    arguments: { client: "test", postId: 12, dataFile: elementorData.structuredContent.result.file_path }
+    name: "wp_elementor_push",
+    arguments: { client: "test", dataFile: elementorData.structuredContent.result.file_path }
   });
-  assert.equal(elementorImport.structuredContent.result.imported, true);
+  assert.equal(elementorImport.structuredContent.result.pushed, true);
   assert.equal(elementorImport.structuredContent.result.match, true);
 });
