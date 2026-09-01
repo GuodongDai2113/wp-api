@@ -9,7 +9,7 @@ import {
   installPackage,
   listPackages,
   updatePackage
-} from "../build/mcp/handlers/package-tools.js";
+} from "../build/mcp/tools/packages.js";
 
 /** 创建只实现当前测试所需方法的 WordPressClient 替身。 */
 function createClientStub(overrides = {}) {

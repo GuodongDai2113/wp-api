@@ -9,8 +9,8 @@ import {
   importElementorPage,
   readElementorPage,
   updateElementorPageContent
-} from "../build/mcp/handlers/elementor-tools.js";
-import { createElementorRevision } from "../build/lib/elementor.js";
+} from "../build/mcp/tools/elementor.js";
+import { createElementorRevision } from "../build/wordpress/elementor/document.js";
 
 /** 构造包含 Elementor 元数据的 WordPress REST 页面实体。 */
 function elementorEntity(data) {

@@ -2,8 +2,8 @@ import { timingSafeEqual, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
-import { ConfigStore } from "../lib/config-store.js";
-import { WordPressApiError, WordPressClient, normalizeWordPressBaseUrl } from "../lib/wp-client.js";
+import { ConfigStore } from "./store.js";
+import { WordPressApiError, WordPressClient, normalizeWordPressBaseUrl } from "../wordpress/client.js";
 
 /** 配置请求体允许占用的最大字节数。 */
 const MAX_REQUEST_BYTES = 64 * 1024;

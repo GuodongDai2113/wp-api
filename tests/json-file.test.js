@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { readBoundedJsonFile } from "../build/lib/json-file.js";
+import { readBoundedJsonFile } from "../build/shared/files/json.js";
 
 test("readBoundedJsonFile 分块读取有效 JSON 并执行文件大小限制", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "wp-api-json-file-"));

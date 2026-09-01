@@ -7,9 +7,9 @@ import path from "node:path";
 import {
   executeWpApiTool,
   WP_API_TOOL_NAMES
-} from "../build/mcp/wp-api-tools.js";
+} from "../build/mcp/tool-router.js";
 import { registerWpApiTools } from "../build/mcp/server.js";
-import { ConfigStore } from "../build/lib/config-store.js";
+import { ConfigStore } from "../build/config/store.js";
 
 /** 使用最小 MCP server 替身收集全部工具注册定义。 */
 function collectRegistrations() {
@@ -375,6 +375,7 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(listSchema.perPage.safeParse(101).success, false);
   assert.equal(listSchema.include.safeParse([1, 2]).success, true);
   assert.equal(listSchema.outputFile.safeParse("resources.csv").success, true);
+  assert.equal(listSchema.overwrite.safeParse(true).success, true);
 
   const countSchema = registrations.get("wp_resource_count").inputSchema;
   assert.equal(countSchema.perPage.safeParse(undefined).success, true);
@@ -392,6 +393,8 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(updateSchema.data.safeParse({ productTags: [3, 4] }).success, false);
   assert.equal(updateSchema.data.safeParse({ meta: { _product_sku: "JC-100" }, metaFile: "product-meta.json" }).success, true);
   assert.equal(updateSchema.data.safeParse({ name: "Term", parent: 0 }).success, true);
+  assert.equal(updateSchema.data.safeParse({ name: "Term", parent: 0, categories: [3] }).success, true);
+  assert.equal(updateSchema.data.safeParse({ name: "Term", unknownField: true }).success, false);
   const batchCreateSchema = registrations.get("wp_resource_batch_create").inputSchema;
   assert.equal(batchCreateSchema.items.safeParse([{ id: 9, data: { title: "Copy" } }]).success, true);
   assert.equal(batchCreateSchema.items.safeParse([{ data: { title: "Copy", contentFile: "post.html" } }]).success, false);
@@ -408,6 +411,7 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(seoListSchema.perPage.safeParse(-1).success, false);
   assert.equal(seoListSchema.include.safeParse([1, 2]).success, true);
   assert.equal(seoListSchema.outputFile.safeParse("seo.csv").success, true);
+  assert.equal(seoListSchema.overwrite.safeParse(false).success, true);
   const seoBatchSchema = registrations.get("wp_seo_batch_update").inputSchema;
   assert.equal(seoBatchSchema.items.safeParse([{ id: 1, title: "SEO" }]).success, true);
   assert.equal(seoBatchSchema.csvFile.safeParse("seo.csv").success, true);

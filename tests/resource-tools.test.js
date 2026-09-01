@@ -13,8 +13,8 @@ import {
   batchUpdateResources,
   countResource,
   listResource
-} from "../build/mcp/handlers/resource-tools.js";
-import { WordPressApiError } from "../build/lib/wp-client.js";
+} from "../build/mcp/tools/resources.js";
+import { WordPressApiError } from "../build/wordpress/client.js";
 
 /** 资源计数只发出一次最小分页请求并返回响应头分页结果。 */
 test("resource count maps filters and pagination headers", async () => {
@@ -118,6 +118,9 @@ test("resource list exports every page to an atomic post CSV", async (t) => {
     () => listResource(client, { target: { type: "post", resource: "posts" }, outputFile }),
     /already exists/
   );
+  await writeFile(outputFile, "stale", "utf8");
+  await listResource(client, { target: { type: "post", resource: "posts" }, outputFile, overwrite: true });
+  assert.ok((await readFile(outputFile, "utf8")).startsWith(`\uFEFF${POST_RESOURCE_CSV_HEADERS.join(",")}\r\n`));
 });
 
 /** 资源导出分页失败时删除临时文件，且列表拒绝旧的全量聚合分页值。 */
@@ -125,6 +128,7 @@ test("resource list cleans failed exports and rejects perPage -1", async (t) => 
   const directory = await mkdtemp(join(tmpdir(), "wp-api-resource-export-failure-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outputFile = join(directory, "failed.csv");
+  await writeFile(outputFile, "keep", "utf8");
   let calls = 0;
   const client = {
     /** 在第二个导出分页模拟远端失败。 */
@@ -137,9 +141,13 @@ test("resource list cleans failed exports and rejects perPage -1", async (t) => 
   };
 
   await assert.rejects(() => listResource(client, { target: { type: "post", resource: "posts" }, perPage: -1 }), /between 1 and 100/);
-  await assert.rejects(() => listResource(client, { target: { type: "post", resource: "posts" }, outputFile }), /Page two failed/);
+  await assert.rejects(
+    () => listResource(client, { target: { type: "post", resource: "posts" }, outputFile, overwrite: true }),
+    /Page two failed/
+  );
   assert.equal(calls, 3);
-  assert.deepEqual(await readdir(directory), []);
+  assert.equal(await readFile(outputFile, "utf8"), "keep");
+  assert.deepEqual(await readdir(directory), ["failed.csv"]);
 });
 
 /** 资源导出使用每页最新的总页数，并把集合缩减后的页码越界视为正常结束。 */
@@ -444,14 +452,17 @@ test("resource batch update validates every item before network calls", async ()
   assert.equal(calls, 0);
 });
 
-/** 资源 CSV 导入要求固定表头和至少一条数据。 */
-test("resource CSV import rejects invalid headers and empty data", async (t) => {
+/** 资源 CSV 导入要求固定表头、至少一条数据，并由更新调用方要求目标 ID。 */
+test("resource CSV import preserves optional ids until update validation", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "wp-api-resource-csv-validation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const invalidHeader = join(directory, "invalid.csv");
   const emptyData = join(directory, "empty.csv");
+  const missingUpdateId = join(directory, "missing-update-id.csv");
   await writeFile(invalidHeader, "id,title\r\n1,Post\r\n", "utf8");
   await writeFile(emptyData, `${POST_RESOURCE_CSV_HEADERS.join(",")}\r\n`, "utf8");
+  const missingIdRow = ["", "Updated", "", "", "", "", "", "", "", ""].map(csvField).join(",");
+  await writeFile(missingUpdateId, `${POST_RESOURCE_CSV_HEADERS.join(",")}\r\n${missingIdRow}\r\n`, "utf8");
   const client = {
     /** 任何无效 CSV 都不应进入远端 batch。 */
     async requestApiPath() {
@@ -466,5 +477,9 @@ test("resource CSV import rejects invalid headers and empty data", async (t) => 
   await assert.rejects(
     () => batchUpdateResources(client, { target: { type: "post", resource: "posts" }, csvFile: emptyData }),
     /must contain at least one data row/
+  );
+  await assert.rejects(
+    () => batchUpdateResources(client, { target: { type: "post", resource: "posts" }, csvFile: missingUpdateId }),
+    /Resource update item 1 id must be a positive integer/
   );
 });

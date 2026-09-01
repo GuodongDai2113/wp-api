@@ -4,8 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { ConfigStore } from "../build/lib/config-store.js";
-import { getStoredClient, listStoredClients, resolveWordPressClient } from "../build/mcp/client-tools.js";
+import { ConfigStore } from "../build/config/store.js";
+import { getStoredClient, listStoredClients, resolveWordPressClient } from "../build/mcp/client-registry.js";
 
 /** 创建包含一个已加密连接的隔离测试目录。 */
 async function seedClient(t) {

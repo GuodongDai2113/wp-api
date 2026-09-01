@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
-import { startConfigServer } from "../build/config/config-server.js";
-import { ConfigStore } from "../build/lib/config-store.js";
+import { startConfigServer } from "../build/config/server.js";
+import { ConfigStore } from "../build/config/store.js";
 
 /** 启动隔离的配置服务并在测试结束时关闭与清理。 */
 async function createService(t, options = {}) {

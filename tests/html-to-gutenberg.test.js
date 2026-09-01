@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parse as parseWordPressBlocks } from "@wordpress/block-serialization-default-parser";
 
-import { convertHtmlToGutenberg } from "../build/lib/html-to-gutenberg.js";
+import { convertHtmlToGutenberg } from "../build/wordpress/content/gutenberg.js";
 
 /** 验证常用文章元素会生成与 WordPress 块分隔符约定一致的 Gutenberg 标记。 */
 test("convertHtmlToGutenberg converts common article HTML into Gutenberg blocks", () => {

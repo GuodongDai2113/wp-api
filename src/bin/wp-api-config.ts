@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { startConfigServer } from "../config/config-server.js";
+import { startConfigServer } from "../config/server.js";
 
 try {
   const service = await startConfigServer({

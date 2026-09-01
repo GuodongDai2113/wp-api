@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 
-import { createPackageArchive } from "../build/lib/package-archive.js";
+import { createPackageArchive } from "../build/wordpress/packages/archive.js";
 
 test("createPackageArchive enforces source size and entry count limits", async (t) => {
   const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "wp-api-archive-limits-"));

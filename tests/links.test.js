@@ -8,7 +8,7 @@ import {
   listLinksInContent,
   removeLinkFromContent,
   updateLinkInContent
-} from "../build/lib/links.js";
+} from "../build/wordpress/content/links.js";
 
 test("extractPostContent prefers raw content over rendered content", () => {
   assert.equal(

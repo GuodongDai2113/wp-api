@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 
-import { ConfigStore } from "../build/lib/config-store.js";
+import { ConfigStore } from "../build/config/store.js";
 
 /** 创建测试专用临时凭据目录并在测试结束时清理。 */
 async function createStore(t) {
@@ -16,7 +16,7 @@ async function createStore(t) {
 
 /** 在独立 Node 进程中保存一个连接，用于验证文件锁。 */
 async function saveFromChildProcess(configDir, name) {
-  const moduleUrl = new URL("../build/lib/config-store.js", import.meta.url).href;
+  const moduleUrl = new URL("../build/config/store.js", import.meta.url).href;
   const source = `import { ConfigStore } from ${JSON.stringify(moduleUrl)}; const store = new ConfigStore({configDir: process.env.TEST_VAULT_DIR}); await store.saveClient({name: process.env.TEST_CLIENT_NAME, siteUrl: 'https://' + process.env.TEST_CLIENT_NAME + '.example.com', username: 'user-' + process.env.TEST_CLIENT_NAME, appPassword: 'pass-' + process.env.TEST_CLIENT_NAME});`;
   await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "--eval", source], {

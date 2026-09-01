@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { replaceContentText } from "../build/lib/content-replace.js";
+import { replaceContentText } from "../build/wordpress/content/replace.js";
 
 test("replaceContentText replaces every exact occurrence and reports the count", () => {
   assert.deepEqual(

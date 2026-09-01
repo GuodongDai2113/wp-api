@@ -1,4 +1,4 @@
-import type { WordPressClient } from "../../lib/wp-client.js";
+import type { WordPressClient } from "../../wordpress/client.js";
 
 /** Jelly Form 询价列表工具的输入参数。 */
 export interface JellyFormInquiryListInput {

@@ -10,9 +10,9 @@ import {
   type ElementorEditableContent,
   type ElementorElement,
   type ElementorSettings
-} from "../../lib/elementor.js";
-import { readBoundedJsonFile } from "../../lib/json-file.js";
-import type { WordPressClient } from "../../lib/wp-client.js";
+} from "../../wordpress/elementor/document.js";
+import { readBoundedJsonFile } from "../../shared/files/json.js";
+import type { WordPressClient } from "../../wordpress/client.js";
 
 /** Elementor MCP handler 支持的三个页面内容工具名称。 */
 export type ElementorToolName =

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import {
   batchUpdateResourceSeo,
   listResourceSeo
-} from "../build/mcp/handlers/seo-tools.js";
+} from "../build/mcp/tools/seo.js";
+import { MAX_WORDPRESS_BATCH_REQUEST_BYTES } from "../build/mcp/shared/wordpress.js";
 
 /** 验证 SEO 列表会映射查询字段并把缺失 meta 规范化为空字符串。 */
 test("SEO handler maps paginated list queries", async () => {
@@ -50,6 +51,24 @@ test("SEO handler maps paginated list queries", async () => {
     rank_math_description: "",
     rank_math_focus_keyword: ""
   });
+});
+
+/** Taxonomy SEO 查询在发送请求前拒绝 WordPress 不支持的 status 参数。 */
+test("SEO handler rejects taxonomy status filters", async () => {
+  let calls = 0;
+  const client = {
+    /** 记录不应发生的 taxonomy 列表请求。 */
+    async list() {
+      calls += 1;
+      return { items: [], pagination: { total: 0, totalPages: 0 } };
+    }
+  };
+
+  await assert.rejects(
+    () => listResourceSeo(client, { resource: "categories", status: "publish" }),
+    /Taxonomy resource queries do not support status/
+  );
+  assert.equal(calls, 0);
 });
 
 /** 验证 CSV 导出忽略内联分页窗口并逐页写出全部查询匹配项。 */
@@ -121,8 +140,8 @@ test("SEO export follows pagination growth", async (t) => {
   assert.match(await readFile(outputFile, "utf8"), /Page 3/);
 });
 
-/** 验证全量 CSV 导出拒绝覆盖已经存在的目标文件。 */
-test("SEO handler refuses to overwrite an existing CSV export", async (t) => {
+/** SEO 导出默认拒绝覆盖，并在显式授权后原子替换现有目标文件。 */
+test("SEO handler requires explicit overwrite for an existing CSV export", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "wp-api-seo-existing-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const outputFile = join(directory, "existing.csv");
@@ -139,6 +158,12 @@ test("SEO handler refuses to overwrite an existing CSV export", async (t) => {
     /already exists/
   );
   assert.equal(await readFile(outputFile, "utf8"), "keep");
+
+  await listResourceSeo(client, { resource: "posts", outputFile, overwrite: true });
+  assert.equal(
+    (await readFile(outputFile, "utf8")).startsWith("\uFEFFid,rank_math_title,rank_math_description,rank_math_focus_keyword\r\n"),
+    true
+  );
 });
 
 /** 验证 batch 更新按 25 条分块，并继续汇总单条 WordPress 错误。 */
@@ -178,6 +203,27 @@ test("SEO handler chunks batch updates and summarizes item failures", async () =
   assert.equal(result.succeeded, 25);
   assert.equal(result.failed, 1);
   assert.deepEqual(result.items[1].error, { code: "rest_cannot_edit", message: "Forbidden", status: 403 });
+});
+
+/** SEO 批量更新在网络请求前拒绝超过共享 WordPress batch 字节预算的单项。 */
+test("SEO handler enforces the shared batch byte budget", async () => {
+  let calls = 0;
+  const client = {
+    /** 记录所有不应发生的超限 batch 请求。 */
+    async requestApiPath() {
+      calls += 1;
+      return {};
+    }
+  };
+
+  await assert.rejects(
+    () => batchUpdateResourceSeo(client, {
+      resource: "posts",
+      items: [{ id: 1, title: "x".repeat(MAX_WORDPRESS_BATCH_REQUEST_BYTES) }]
+    }),
+    /maximum batch request size/
+  );
+  assert.equal(calls, 0);
 });
 
 /** 验证 CSV 导入把空单元格映射为显式清空值。 */

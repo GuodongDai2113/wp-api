@@ -6,7 +6,7 @@ import sharp from "sharp";
 import {
   calculateWebpDimensions,
   prepareMediaImage
-} from "../build/lib/image-compression.js";
+} from "../build/wordpress/media/image.js";
 
 test("WebP dimension rules match the reference plugin thresholds", () => {
   assert.deepEqual(calculateWebpDimensions(1200, 1200), { width: 800, height: 800 });

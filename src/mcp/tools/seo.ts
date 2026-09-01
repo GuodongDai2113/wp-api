@@ -1,17 +1,23 @@
-import { mkdir, open, rm } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
-
 import {
-  assertExportTargetAbsent,
   encodeCsvField,
   forEachDynamicPage,
   parseCsvRows,
-  publishFileExclusive,
-  readBoundedCsvFile
-} from "../../lib/csv.js";
-import { getResourceConfig, type ResourceName } from "../../lib/resources.js";
-import { type Pagination, type QueryParams, WordPressApiError, WordPressClient } from "../../lib/wp-client.js";
+  readBoundedCsvFile,
+  writeCsvFileAtomically
+} from "../../shared/files/csv.js";
+import { compactObject } from "../../shared/objects.js";
+import { getResourceConfig, type ResourceName } from "../../wordpress/resources.js";
+import { type Pagination, type QueryParams, WordPressClient } from "../../wordpress/client.js";
+import {
+  chunkWordPressBatchEntries,
+  isInvalidWordPressPageNumberError,
+  isSuccessfulWordPressBatchResponse,
+  normalizeWordPressBatchError,
+  type WordPressBatchError,
+  type WordPressBatchRequest,
+  type WordPressBatchResponse
+} from "../shared/wordpress.js";
+import { assertPerPage, assertPositiveId, assertUniquePositiveIds } from "../shared/validation.js";
 
 /** SEO CSV 文件固定使用的列名。 */
 const SEO_CSV_HEADERS = [
@@ -24,15 +30,14 @@ const SEO_CSV_HEADERS = [
 /** 单个 SEO CSV 导入文件允许占用的最大字节数。 */
 const MAX_SEO_CSV_BYTES = 10 * 1024 * 1024;
 
-/** WordPress batch v1 默认支持的单批最大请求数。 */
-const SEO_BATCH_SIZE = 25;
-
 /** WordPress SEO 实体中当前工具需要读取的最小字段集合。 */
 interface SeoResourceEntity {
   /** WordPress 资源 ID。 */
   id?: number;
   /** 已通过 REST 暴露的 WordPress meta。 */
   meta?: Record<string, unknown>;
+  /** 允许保留 WordPress 返回的其他资源字段。 */
+  [key: string]: unknown;
 }
 
 /** Rank Math SEO 读取工具输入。 */
@@ -74,6 +79,8 @@ export interface ResourceSeoListInput {
   include?: number[];
   /** 可选全量 CSV 输出路径。 */
   outputFile?: string;
+  /** 是否在导出全部成功后原子替换已存在的输出文件。 */
+  overwrite?: boolean;
 }
 
 /** Rank Math SEO 批量更新工具输入。 */
@@ -120,29 +127,8 @@ export interface ResourceSeoListResult {
   export?: ResourceSeoExportResult;
 }
 
-/** batch v1 单条子响应的最小结构。 */
-interface WordPressBatchSubresponse {
-  /** 子请求 HTTP 状态码。 */
-  status?: number;
-  /** 子请求返回体。 */
-  body?: unknown;
-}
-
-/** batch v1 顶层响应结构。 */
-interface WordPressBatchResponse {
-  /** 与请求顺序一致的子响应。 */
-  responses?: WordPressBatchSubresponse[];
-}
-
 /** SEO 批量更新中的规范化失败信息。 */
-export interface ResourceSeoBatchError {
-  /** WordPress 错误码。 */
-  code: string;
-  /** 可供调用方展示的错误消息。 */
-  message: string;
-  /** 子请求 HTTP 状态码。 */
-  status: number;
-}
+export type ResourceSeoBatchError = WordPressBatchError;
 
 /** SEO 批量更新单项结果。 */
 export interface ResourceSeoBatchItemResult {
@@ -168,18 +154,6 @@ export interface ResourceSeoBatchUpdateResult {
   failed: number;
   /** 与输入顺序一致的逐项结果。 */
   items: ResourceSeoBatchItemResult[];
-}
-
-/** 校验 ID 是可安全传给 WordPress REST API 的正整数。 */
-function assertPositiveId(id: number, label: string): void {
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-}
-
-/** 移除值为 undefined 的字段，同时保留空字符串清空语义。 */
-function compactObject<T extends Record<string, unknown>>(value: T): Partial<T> {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
 }
 
 /** 从 WordPress 实体中提取稳定的 Rank Math SEO 返回结构。 */
@@ -208,22 +182,19 @@ function buildSeoMeta(item: ResourceSeoUpdateItem): Record<string, string> {
 
 /** 校验列表分页、include ID 和输出路径等业务输入。 */
 function validateSeoListInput(input: ResourceSeoListInput): void {
+  if (getResourceConfig(input.resource).type === "taxonomy" && input.status !== undefined) {
+    throw new Error("Taxonomy resource queries do not support status.");
+  }
   if (input.page !== undefined) {
     assertPositiveId(input.page, "Page");
   }
-  if (input.perPage !== undefined && (!Number.isSafeInteger(input.perPage) || input.perPage < 1 || input.perPage > 100)) {
-    throw new Error("Items per page must be between 1 and 100.");
-  }
-  if (input.include !== undefined) {
-    if (!Array.isArray(input.include) || input.include.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
-      throw new Error("Include must contain only positive integers.");
-    }
-    if (new Set(input.include).size !== input.include.length) {
-      throw new Error("Include must not contain duplicate IDs.");
-    }
-  }
+  assertPerPage(input.perPage);
+  assertUniquePositiveIds(input.include, "Include");
   if (input.outputFile !== undefined && input.outputFile.trim().length === 0) {
     throw new Error("SEO CSV outputFile must not be blank.");
+  }
+  if (input.overwrite !== undefined && input.outputFile === undefined) {
+    throw new Error("SEO CSV overwrite requires outputFile.");
   }
 }
 
@@ -297,59 +268,34 @@ async function resolveBatchItems(input: ResourceSeoBatchUpdateInput): Promise<Re
   return items;
 }
 
-/** 从 WordPress 子响应中提取错误码、消息和状态。 */
-function normalizeBatchError(response: WordPressBatchSubresponse): ResourceSeoBatchError {
-  const body = typeof response.body === "object" && response.body !== null
-    ? response.body as Record<string, unknown>
-    : {};
-  return {
-    code: typeof body.code === "string" ? body.code : "wordpress_batch_item_failed",
-    message: typeof body.message === "string" ? body.message : "WordPress batch item update failed.",
-    status: typeof response.status === "number" ? response.status : 500
-  };
-}
-
 /** 将全部匹配 SEO 记录逐页写入临时 CSV，并在成功后替换为最终文件。 */
 async function exportSeoCsv(
   client: WordPressClient,
   input: ResourceSeoListInput
 ): Promise<ResourceSeoExportResult> {
-  const outputFile = resolve(input.outputFile as string);
-  await mkdir(dirname(outputFile), { recursive: true });
-  await assertExportTargetAbsent(outputFile, "SEO CSV");
-  const temporaryFile = resolve(dirname(outputFile), `.${basename(outputFile)}.${randomUUID()}.tmp`);
-  const file = await open(temporaryFile, "wx");
-  let rows = 0;
-  let totalPages = 0;
-  try {
-    await file.writeFile(`\uFEFF${SEO_CSV_HEADERS.join(",")}\r\n`, "utf8");
-    const config = getResourceConfig(input.resource);
-    const firstPage = await client.list<SeoResourceEntity>(config.route, buildSeoListQuery(input, { page: 1, perPage: 100 }));
-    totalPages = await forEachDynamicPage({
-      firstPage,
-      loadPage: (page) => client.list<SeoResourceEntity>(config.route, buildSeoListQuery(input, { page, perPage: 100 })),
-      consumePage: async (items) => {
-        const payloads = items.map((entity) => extractResourceSeo(input.resource, entity, entity.id ?? 0));
-        await file.write(`${payloads.map(encodeSeoCsvRow).join("\r\n")}\r\n`, undefined, "utf8");
-        rows += payloads.length;
-      },
-      isTerminalPageError: isInvalidPageNumberError
-    });
-    await file.close();
-    await publishFileExclusive(temporaryFile, outputFile, "SEO CSV");
-    return { file_path: outputFile, rows, totalPages };
-  } catch (error) {
-    await file.close().catch(() => undefined);
-    await rm(temporaryFile, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-/** 判断 WordPress 错误是否表示分页期间集合缩减导致页码超出范围。 */
-function isInvalidPageNumberError(error: unknown): boolean {
-  return error instanceof WordPressApiError
-    && error.status === 400
-    && error.code.endsWith("invalid_page_number");
+  const exported = await writeCsvFileAtomically({
+    outputFile: input.outputFile as string,
+    label: "SEO CSV",
+    headers: SEO_CSV_HEADERS,
+    overwrite: input.overwrite,
+    writeRows: async (file) => {
+      let rows = 0;
+      const config = getResourceConfig(input.resource);
+      const firstPage = await client.list<SeoResourceEntity>(config.route, buildSeoListQuery(input, { page: 1, perPage: 100 }));
+      const totalPages = await forEachDynamicPage({
+        firstPage,
+        loadPage: (page) => client.list<SeoResourceEntity>(config.route, buildSeoListQuery(input, { page, perPage: 100 })),
+        consumePage: async (items) => {
+          const payloads = items.map((entity) => extractResourceSeo(input.resource, entity, entity.id ?? 0));
+          await file.write(`${payloads.map(encodeSeoCsvRow).join("\r\n")}\r\n`, undefined, "utf8");
+          rows += payloads.length;
+        },
+        isTerminalPageError: isInvalidWordPressPageNumberError
+      });
+      return { rows, totalPages };
+    }
+  });
+  return { file_path: exported.filePath, ...exported.result };
 }
 
 /** 读取指定资源的 Rank Math SEO 字段。 */
@@ -400,35 +346,41 @@ export async function batchUpdateResourceSeo(
   const items = await resolveBatchItems(input);
   const config = getResourceConfig(input.resource);
   const results: ResourceSeoBatchItemResult[] = [];
+  const prepared = items.map((item) => {
+    const request: WordPressBatchRequest = {
+      method: "POST",
+      path: `/wp/v2/${config.route}/${item.id}`,
+      body: { meta: buildSeoMeta(item) }
+    };
+    return { item, request };
+  });
 
-  for (let offset = 0; offset < items.length; offset += SEO_BATCH_SIZE) {
-    const chunk = items.slice(offset, offset + SEO_BATCH_SIZE);
+  for (const chunk of chunkWordPressBatchEntries(prepared, "SEO batch update")) {
     const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
       method: "POST",
       body: {
         validation: "normal",
-        requests: chunk.map((item) => ({
-          method: "POST",
-          path: `/wp/v2/${config.route}/${item.id}`,
-          body: { meta: buildSeoMeta(item) }
-        }))
+        requests: chunk.map((entry) => entry.request)
       }
     });
     if (!Array.isArray(batch.data.responses) || batch.data.responses.length !== chunk.length) {
       throw new Error("WordPress batch response count does not match the submitted SEO updates.");
     }
     for (let index = 0; index < chunk.length; index += 1) {
-      const item = chunk[index];
+      const item = chunk[index].item;
       const response = batch.data.responses[index];
-      if (typeof response.status === "number" && response.status >= 200 && response.status < 300
-        && typeof response.body === "object" && response.body !== null) {
+      if (isSuccessfulWordPressBatchResponse(response)) {
         results.push({
           id: item.id,
           success: true,
-          seo: extractResourceSeo(input.resource, response.body as SeoResourceEntity, item.id)
+          seo: extractResourceSeo(input.resource, response.body, item.id)
         });
       } else {
-        results.push({ id: item.id, success: false, error: normalizeBatchError(response) });
+        results.push({
+          id: item.id,
+          success: false,
+          error: normalizeWordPressBatchError(response, "WordPress batch item update failed.")
+        });
       }
     }
   }

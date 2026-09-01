@@ -8,14 +8,14 @@ import {
   managePostLink,
   replacePostContent,
   uploadMedia
-} from "../build/mcp/handlers/content-tools.js";
+} from "../build/mcp/tools/content.js";
 import {
   createResource,
   deleteResource,
   listResource,
   updateResource
-} from "../build/mcp/handlers/resource-tools.js";
-import { updateResourceSeo } from "../build/mcp/handlers/seo-tools.js";
+} from "../build/mcp/tools/resources.js";
+import { updateResourceSeo } from "../build/mcp/tools/seo.js";
 
 /** 验证资源列表会把 MCP camelCase 查询字段直接映射到 WordPress REST 字段。 */
 test("content handler maps resource list input without CLI arguments", async () => {
@@ -357,8 +357,12 @@ test("content handler rejects empty or mismatched resource updates", async () =>
     /No update fields were provided/
   );
   await assert.rejects(
-    () => updateResource(client, { target: { type: "taxonomy", resource: "product-categories" }, id: 8, data: { content: "wrong" } }),
-    /not supported for product-categories: content/
+    () => updateResource(client, {
+      target: { type: "taxonomy", resource: "product-categories" },
+      id: 8,
+      data: { name: "Term", parent: 0, categories: [3] }
+    }),
+    /not supported for product-categories: categories/
   );
   assert.equal(updates, 0);
 });

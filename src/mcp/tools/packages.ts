@@ -1,4 +1,4 @@
-import type { ListResult, QueryParams, WordPressClient } from "../../lib/wp-client.js";
+import type { ListResult, QueryParams, WordPressClient } from "../../wordpress/client.js";
 
 /** MCP 软件包工具支持的软件包类型。 */
 export type WordPressPackageType = "plugin" | "theme";

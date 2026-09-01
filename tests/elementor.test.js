@@ -8,7 +8,7 @@ import {
   extractElementorEditableContent,
   isElementorContentSettingKey,
   parseElementorData
-} from "../build/lib/elementor.js";
+} from "../build/wordpress/elementor/document.js";
 
 /** 验证页面版本校验值对相同数据保持稳定，并能识别任意正文变化。 */
 test("createElementorRevision fingerprints the complete element tree", () => {

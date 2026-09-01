@@ -1,25 +1,33 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, open, rm } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
-
 import {
-  assertExportTargetAbsent,
   encodeCsvField,
   forEachDynamicPage,
   parseCsvRows,
-  publishFileExclusive,
-  readBoundedCsvFile
-} from "../../lib/csv.js";
-import { resolveContentInput } from "../../lib/content-input.js";
-import { convertHtmlToGutenberg } from "../../lib/html-to-gutenberg.js";
-import { readBoundedJsonFile } from "../../lib/json-file.js";
+  readBoundedCsvFile,
+  writeCsvFileAtomically
+} from "../../shared/files/csv.js";
+import { compactObject } from "../../shared/objects.js";
+import { resolveContentInput } from "../../wordpress/content/input.js";
+import { convertHtmlToGutenberg } from "../../wordpress/content/gutenberg.js";
+import { readBoundedJsonFile } from "../../shared/files/json.js";
 import {
   getResourceTargetConfig,
   type PostResourceTarget,
   type ResourceTarget,
   type TaxonomyResourceTarget
-} from "../../lib/resources.js";
-import { type Pagination, type QueryParams, WordPressApiError, WordPressClient } from "../../lib/wp-client.js";
+} from "../../wordpress/resources.js";
+import { type Pagination, type QueryParams, WordPressClient } from "../../wordpress/client.js";
+import {
+  chunkWordPressBatchEntries,
+  isInvalidWordPressPageNumberError,
+  isSuccessfulWordPressBatchResponse,
+  MAX_WORDPRESS_BATCH_REQUEST_BYTES,
+  MAX_WORDPRESS_BATCH_TOTAL_BYTES,
+  normalizeWordPressBatchError,
+  type WordPressBatchError,
+  type WordPressBatchRequest,
+  type WordPressBatchResponse
+} from "../shared/wordpress.js";
+import { assertPerPage, assertPositiveId, assertUniquePositiveIds } from "../shared/validation.js";
 
 /** Post 类型资源 CSV 固定列名。 */
 export const POST_RESOURCE_CSV_HEADERS = [
@@ -51,14 +59,11 @@ const EMPTY_STRING_MARKER = "__EMPTY__";
 /** 单个资源 CSV 导入文件允许占用的最大字节数。 */
 const MAX_RESOURCE_CSV_BYTES = 25 * 1024 * 1024;
 
-/** WordPress batch v1 默认支持的单批最大请求数。 */
-const RESOURCE_BATCH_SIZE = 25;
-
 /** 单次发送到 WordPress batch/v1 的 JSON 请求体最大字节数。 */
-export const MAX_RESOURCE_BATCH_REQUEST_BYTES = 8 * 1024 * 1024;
+export const MAX_RESOURCE_BATCH_REQUEST_BYTES = MAX_WORDPRESS_BATCH_REQUEST_BYTES;
 
 /** 单次资源批量工具调用准备的全部子请求累计最大字节数。 */
-export const MAX_RESOURCE_BATCH_TOTAL_BYTES = 25 * 1024 * 1024;
+export const MAX_RESOURCE_BATCH_TOTAL_BYTES = MAX_WORDPRESS_BATCH_TOTAL_BYTES;
 
 /** WordPress REST 资源实体中资源工具会读取的字段集合。 */
 export interface WordPressResourceEntity {
@@ -118,6 +123,8 @@ export interface ResourceListInput extends ResourceQueryInput {
   perPage?: number;
   /** 可选全量 CSV 输出路径。 */
   outputFile?: string;
+  /** 是否在导出全部成功后原子替换已存在的输出文件。 */
+  overwrite?: boolean;
 }
 
 /** 单个资源读取工具输入。 */
@@ -214,6 +221,14 @@ export interface ResourceBatchUpdateItem<TData extends ResourceBatchBodyInput = 
   data: TData;
 }
 
+/** 从资源 CSV 解析出的中性行，不预设用于创建还是更新。 */
+interface ParsedResourceCsvRow<TData extends ResourceBatchBodyInput = ResourceBatchBodyInput> {
+  /** CSV 中的可选资源 ID，由调用方决定作为来源关联还是更新目标。 */
+  id?: number;
+  /** 当前 CSV 行解析得到的资源字段。 */
+  data: TData;
+}
+
 /** 批量创建工具输入。 */
 export type ResourceBatchCreateInput =
   | { target: PostResourceTarget; items?: ResourceBatchCreateItem<PostResourceBatchBodyInput>[]; csvFile?: string }
@@ -256,38 +271,12 @@ export interface ResourceListResult {
   export?: ResourceExportResult;
 }
 
-/** batch v1 单条子响应。 */
-interface WordPressBatchSubresponse {
-  /** 子请求 HTTP 状态码。 */
-  status?: number;
-  /** 子请求返回体。 */
-  body?: unknown;
-}
-
-/** batch v1 顶层响应。 */
-interface WordPressBatchResponse {
-  /** 与请求顺序一致的子响应。 */
-  responses?: WordPressBatchSubresponse[];
-}
-
-/** 发送给 WordPress batch/v1 的单个子请求。 */
-interface WordPressBatchRequest {
-  /** 子请求固定使用 POST。 */
-  method: "POST";
-  /** wp-json 根路径下的子请求路径。 */
-  path: string;
-  /** 已完成字段映射和校验的 REST 请求体。 */
-  body: Record<string, unknown>;
-}
-
 /** 已校验大小的批量条目共用字段。 */
 interface PreparedBatchEntry {
   /** 原始输入中的稳定顺序索引。 */
   index: number;
   /** 已准备好的 WordPress 子请求。 */
   request: WordPressBatchRequest;
-  /** 子请求自身序列化后的 UTF-8 字节数。 */
-  requestBytes: number;
 }
 
 /** 已准备好的批量创建条目。 */
@@ -302,18 +291,8 @@ interface PreparedBatchUpdateEntry extends PreparedBatchEntry {
   id: number;
 }
 
-/** 空 batch/v1 请求包装的序列化字节数，用于精确累计实际请求大小。 */
-const EMPTY_BATCH_PAYLOAD_BYTES = Buffer.byteLength(JSON.stringify({ validation: "normal", requests: [] }), "utf8");
-
 /** 资源批量操作的规范化错误。 */
-export interface ResourceBatchError {
-  /** WordPress 错误码。 */
-  code: string;
-  /** 可展示的错误消息。 */
-  message: string;
-  /** 子请求 HTTP 状态码。 */
-  status: number;
-}
+export type ResourceBatchError = WordPressBatchError;
 
 /** 资源批量操作单项结果。 */
 export interface ResourceBatchItemResult {
@@ -343,25 +322,6 @@ export interface ResourceBatchResult {
   items: ResourceBatchItemResult[];
 }
 
-/** 仅移除未提供字段，并保留空字符串、0 和空数组的清空语义。 */
-function compactObject<T extends Record<string, unknown>>(value: T): Partial<T> {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
-}
-
-/** 校验 ID 是可安全传给 WordPress REST API 的正整数。 */
-function assertPositiveId(id: number, label: string): void {
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-}
-
-/** 校验分页大小符合 WordPress REST 的 1 到 100 边界。 */
-function assertPerPage(perPage: number | undefined): void {
-  if (perPage !== undefined && (!Number.isSafeInteger(perPage) || perPage < 1 || perPage > 100)) {
-    throw new Error("Items per page must be between 1 and 100.");
-  }
-}
-
 /** 校验可清空 ID 是非负安全整数。 */
 function assertOptionalNonNegativeId(id: number | undefined, label: string): void {
   if (id !== undefined && (!Number.isSafeInteger(id) || id < 0)) {
@@ -379,17 +339,6 @@ function assertTaxonomyIds(ids: number[] | undefined, label: string): void {
 /** 判断未知值是否为普通 JSON 对象。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** 校验查询 ID 白名单。 */
-function assertInclude(include: number[] | undefined): void {
-  if (include === undefined) {
-    return;
-  }
-  assertTaxonomyIds(include, "Include");
-  if (new Set(include).size !== include.length) {
-    throw new Error("Include must not contain duplicate IDs.");
-  }
 }
 
 /** Handler 内部用于统一读取两类可选字段的宽松资源数据。 */
@@ -563,8 +512,8 @@ function parseJsonCell(value: string, rowNumber: number, field: string): unknown
   }
 }
 
-/** 将一行 Post CSV 转换为批量资源字段。 */
-function parsePostResourceCsvRow(row: string[], rowNumber: number): ResourceBatchCreateItem<PostResourceBatchBodyInput> {
+/** 将一行 Post CSV 转换为不绑定创建或更新语义的资源字段。 */
+function parsePostResourceCsvRow(row: string[], rowNumber: number): ParsedResourceCsvRow<PostResourceBatchBodyInput> {
   if (row.length !== POST_RESOURCE_CSV_HEADERS.length) {
     throw new Error(`Post resource CSV row ${rowNumber} must contain exactly ${POST_RESOURCE_CSV_HEADERS.length} columns.`);
   }
@@ -588,8 +537,8 @@ function parsePostResourceCsvRow(row: string[], rowNumber: number): ResourceBatc
   };
 }
 
-/** 将一行 taxonomy CSV 转换为批量资源字段。 */
-function parseTaxonomyResourceCsvRow(row: string[], rowNumber: number): ResourceBatchCreateItem<TaxonomyResourceBatchBodyInput> {
+/** 将一行 taxonomy CSV 转换为不绑定创建或更新语义的资源字段。 */
+function parseTaxonomyResourceCsvRow(row: string[], rowNumber: number): ParsedResourceCsvRow<TaxonomyResourceBatchBodyInput> {
   if (row.length !== TAXONOMY_RESOURCE_CSV_HEADERS.length) {
     throw new Error(`Taxonomy resource CSV row ${rowNumber} must contain exactly ${TAXONOMY_RESOURCE_CSV_HEADERS.length} columns.`);
   }
@@ -607,8 +556,8 @@ function parseTaxonomyResourceCsvRow(row: string[], rowNumber: number): Resource
   };
 }
 
-/** 从有界 CSV 文件读取与目标 type 匹配的资源批量记录。 */
-async function readResourceCsvItems(filePath: string, target: ResourceTarget): Promise<ResourceBatchCreateItem[]> {
+/** 从有界 CSV 文件解析与目标 type 匹配的中性资源行。 */
+async function parseCsvResourceRows(filePath: string, target: ResourceTarget): Promise<ParsedResourceCsvRow[]> {
   const csvText = await readBoundedCsvFile(filePath, { label: "Resource CSV", maxBytes: MAX_RESOURCE_CSV_BYTES });
   const rows = parseCsvRows(csvText, "Resource CSV");
   const headers = target.type === "post" ? POST_RESOURCE_CSV_HEADERS : TAXONOMY_RESOURCE_CSV_HEADERS;
@@ -624,60 +573,32 @@ async function readResourceCsvItems(filePath: string, target: ResourceTarget): P
 
 /** 将全部匹配资源逐页追加到临时 CSV，并在成功后替换为最终文件。 */
 async function exportResourceCsv(client: WordPressClient, input: ResourceListInput): Promise<ResourceExportResult> {
-  const outputFile = resolve(input.outputFile as string);
-  await mkdir(dirname(outputFile), { recursive: true });
-  await assertExportTargetAbsent(outputFile, "Resource CSV");
-  const temporaryFile = resolve(dirname(outputFile), `.${basename(outputFile)}.${randomUUID()}.tmp`);
-  const file = await open(temporaryFile, "wx");
-  let rows = 0;
-  let totalPages = 0;
-  try {
-    const headers = input.target.type === "post" ? POST_RESOURCE_CSV_HEADERS : TAXONOMY_RESOURCE_CSV_HEADERS;
-    await file.writeFile(`\uFEFF${headers.join(",")}\r\n`, "utf8");
-    const config = getResourceTargetConfig(input.target);
-    const firstPage = await client.list<WordPressResourceEntity>(config.route, buildResourceQuery(input, { page: 1, perPage: 100 }, true));
-    totalPages = await forEachDynamicPage({
-      firstPage,
-      loadPage: (page) => client.list<WordPressResourceEntity>(config.route, buildResourceQuery(input, { page, perPage: 100 }, true)),
-      consumePage: async (items) => {
-        const encodedRows = input.target.type === "post"
-          ? items.map((entity) => encodePostResourceCsvRow(entity, input.target as PostResourceTarget))
-          : items.map(encodeTaxonomyResourceCsvRow);
-        await file.write(`${encodedRows.join("\r\n")}\r\n`, undefined, "utf8");
-        rows += items.length;
-      },
-      isTerminalPageError: isInvalidPageNumberError
-    });
-    await file.close();
-    await publishFileExclusive(temporaryFile, outputFile, "Resource CSV");
-    return { file_path: outputFile, rows, totalPages };
-  } catch (error) {
-    await file.close().catch(() => undefined);
-    await rm(temporaryFile, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-/** 判断 WordPress 错误是否表示分页期间集合缩减导致页码超出范围。 */
-function isInvalidPageNumberError(error: unknown): boolean {
-  return error instanceof WordPressApiError
-    && error.status === 400
-    && error.code.endsWith("invalid_page_number");
-}
-
-/** 从 WordPress batch 子响应中提取稳定错误信息。 */
-function normalizeBatchError(response: WordPressBatchSubresponse): ResourceBatchError {
-  const body = isRecord(response.body) ? response.body : {};
-  return {
-    code: typeof body.code === "string" ? body.code : "wordpress_batch_item_failed",
-    message: typeof body.message === "string" ? body.message : "WordPress batch resource operation failed.",
-    status: typeof response.status === "number" ? response.status : 500
-  };
-}
-
-/** 判断 WordPress batch 子响应是否成功并包含可读取的实体。 */
-function isSuccessfulBatchResponse(response: WordPressBatchSubresponse): boolean {
-  return typeof response.status === "number" && response.status >= 200 && response.status < 300 && isRecord(response.body);
+  const headers = input.target.type === "post" ? POST_RESOURCE_CSV_HEADERS : TAXONOMY_RESOURCE_CSV_HEADERS;
+  const exported = await writeCsvFileAtomically({
+    outputFile: input.outputFile as string,
+    label: "Resource CSV",
+    headers,
+    overwrite: input.overwrite,
+    writeRows: async (file) => {
+      let rows = 0;
+      const config = getResourceTargetConfig(input.target);
+      const firstPage = await client.list<WordPressResourceEntity>(config.route, buildResourceQuery(input, { page: 1, perPage: 100 }, true));
+      const totalPages = await forEachDynamicPage({
+        firstPage,
+        loadPage: (page) => client.list<WordPressResourceEntity>(config.route, buildResourceQuery(input, { page, perPage: 100 }, true)),
+        consumePage: async (items) => {
+          const encodedRows = input.target.type === "post"
+            ? items.map((entity) => encodePostResourceCsvRow(entity, input.target as PostResourceTarget))
+            : items.map(encodeTaxonomyResourceCsvRow);
+          await file.write(`${encodedRows.join("\r\n")}\r\n`, undefined, "utf8");
+          rows += items.length;
+        },
+        isTerminalPageError: isInvalidWordPressPageNumberError
+      });
+      return { rows, totalPages };
+    }
+  });
+  return { file_path: exported.filePath, ...exported.result };
 }
 
 /** 在运行时拒绝批量条目携带未经过逐项路径边界校验的本地文件字段。 */
@@ -688,61 +609,6 @@ function assertBatchItemHasNoLocalFiles(item: ResourceBatchBodyInput, index: num
   }
 }
 
-/** 计算单个 WordPress batch 子请求序列化后的 UTF-8 字节数。 */
-function measureBatchRequestBytes(request: WordPressBatchRequest): number {
-  return Buffer.byteLength(JSON.stringify(request), "utf8");
-}
-
-/** 校验单个子请求和整次批量调用的累计 JSON 大小，并返回新的累计值。 */
-function accumulateBatchBytes(
-  totalBytes: number,
-  requestBytes: number,
-  index: number,
-  label: string
-): number {
-  const singlePayloadBytes = EMPTY_BATCH_PAYLOAD_BYTES + requestBytes;
-  if (singlePayloadBytes > MAX_RESOURCE_BATCH_REQUEST_BYTES) {
-    throw new Error(`${label} item ${index + 1} exceeds the maximum batch request size of ${MAX_RESOURCE_BATCH_REQUEST_BYTES} bytes.`);
-  }
-  const nextTotalBytes = totalBytes + requestBytes + (index === 0 ? 0 : 1);
-  if (nextTotalBytes > MAX_RESOURCE_BATCH_TOTAL_BYTES) {
-    throw new Error(`${label} exceeds the maximum total batch size of ${MAX_RESOURCE_BATCH_TOTAL_BYTES} bytes.`);
-  }
-  return nextTotalBytes;
-}
-
-/** 同时按最多 25 条和最大 JSON 字节数把已校验条目切分为请求块。 */
-function chunkPreparedBatchEntries<TEntry extends PreparedBatchEntry>(entries: TEntry[], label: string): TEntry[][] {
-  const chunks: TEntry[][] = [];
-  let chunk: TEntry[] = [];
-  let chunkBytes = EMPTY_BATCH_PAYLOAD_BYTES;
-
-  for (const entry of entries) {
-    const additionBytes = entry.requestBytes + (chunk.length === 0 ? 0 : 1);
-    if (chunk.length >= RESOURCE_BATCH_SIZE || chunkBytes + additionBytes > MAX_RESOURCE_BATCH_REQUEST_BYTES) {
-      chunks.push(chunk);
-      chunk = [];
-      chunkBytes = EMPTY_BATCH_PAYLOAD_BYTES;
-    }
-    chunkBytes += entry.requestBytes + (chunk.length === 0 ? 0 : 1);
-    chunk.push(entry);
-  }
-  if (chunk.length > 0) {
-    chunks.push(chunk);
-  }
-  const totalPayloadBytes = chunks.reduce(
-    (total, currentChunk) => total
-      + EMPTY_BATCH_PAYLOAD_BYTES
-      + currentChunk.reduce((chunkTotal, entry) => chunkTotal + entry.requestBytes, 0)
-      + Math.max(0, currentChunk.length - 1),
-    0
-  );
-  if (totalPayloadBytes > MAX_RESOURCE_BATCH_TOTAL_BYTES) {
-    throw new Error(`${label} exceeds the maximum total batch size of ${MAX_RESOURCE_BATCH_TOTAL_BYTES} bytes.`);
-  }
-  return chunks;
-}
-
 /** 读取资源总数和按指定分页大小计算的总页数。 */
 export async function countResource(client: WordPressClient, input: ResourceCountInput): Promise<ResourceCountResult> {
   const config = getResourceTargetConfig(input.target);
@@ -750,7 +616,7 @@ export async function countResource(client: WordPressClient, input: ResourceCoun
     throw new Error("Taxonomy resource queries do not support status.");
   }
   assertPerPage(input.perPage);
-  assertInclude(input.include);
+  assertUniquePositiveIds(input.include, "Include");
   const perPage = input.perPage ?? 100;
   const result = await client.list<WordPressResourceEntity>(config.route, {
     ...buildResourceQuery(input, { page: 1, perPage }),
@@ -767,8 +633,9 @@ export async function listResource(client: WordPressClient, input: ResourceListI
   }
   if (input.page !== undefined) assertPositiveId(input.page, "Page");
   assertPerPage(input.perPage);
-  assertInclude(input.include);
+  assertUniquePositiveIds(input.include, "Include");
   if (input.outputFile !== undefined && input.outputFile.trim().length === 0) throw new Error("Resource CSV outputFile must not be blank.");
+  if (input.overwrite !== undefined && input.outputFile === undefined) throw new Error("Resource CSV overwrite requires outputFile.");
   const result = await client.list<WordPressResourceEntity>(config.route, {
     ...buildResourceQuery(input),
     page: input.page,
@@ -813,20 +680,19 @@ export async function deleteResource(client: WordPressClient, input: ResourceDel
 /** 解析并预校验全部批量创建输入及 WordPress 请求体。 */
 async function prepareBatchCreateItems(input: ResourceBatchCreateInput): Promise<PreparedBatchCreateEntry[]> {
   if ((input.items === undefined) === (input.csvFile === undefined)) throw new Error("Provide exactly one of items or csvFile for wp_resource_batch_create.");
-  const items = input.csvFile === undefined ? input.items as ResourceBatchCreateItem[] : await readResourceCsvItems(input.csvFile, input.target);
+  const items: readonly ParsedResourceCsvRow[] = input.csvFile === undefined
+    ? input.items ?? []
+    : await parseCsvResourceRows(input.csvFile, input.target);
   if (!Array.isArray(items) || items.length === 0) throw new Error("wp_resource_batch_create requires at least one item.");
   const route = getResourceTargetConfig(input.target).route;
   const prepared: PreparedBatchCreateEntry[] = [];
-  let totalBytes = EMPTY_BATCH_PAYLOAD_BYTES;
   for (const [index, item] of items.entries()) {
     assertBatchItemHasNoLocalFiles(item.data, index);
     if (item.id !== undefined) assertPositiveId(item.id, `Resource create item ${index + 1} source id`);
     const body = await buildResourceBody(input.target, item.data);
     if (Object.keys(body).length === 0) throw new Error(`Resource create item ${index + 1} requires at least one applicable field.`);
     const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}`, body };
-    const requestBytes = measureBatchRequestBytes(request);
-    totalBytes = accumulateBatchBytes(totalBytes, requestBytes, index, "Resource batch create");
-    prepared.push({ index, sourceId: item.id, request, requestBytes });
+    prepared.push({ index, sourceId: item.id, request });
   }
   return prepared;
 }
@@ -834,23 +700,23 @@ async function prepareBatchCreateItems(input: ResourceBatchCreateInput): Promise
 /** 解析并预校验全部批量更新输入及 WordPress 请求体。 */
 async function prepareBatchUpdateItems(input: ResourceBatchUpdateInput): Promise<PreparedBatchUpdateEntry[]> {
   if ((input.items === undefined) === (input.csvFile === undefined)) throw new Error("Provide exactly one of items or csvFile for wp_resource_batch_update.");
-  const rawItems = input.csvFile === undefined ? input.items as ResourceBatchUpdateItem[] : await readResourceCsvItems(input.csvFile, input.target) as ResourceBatchUpdateItem[];
+  const rawItems: readonly ParsedResourceCsvRow[] = input.csvFile === undefined
+    ? input.items ?? []
+    : await parseCsvResourceRows(input.csvFile, input.target);
   if (!Array.isArray(rawItems) || rawItems.length === 0) throw new Error("wp_resource_batch_update requires at least one item.");
   const route = getResourceTargetConfig(input.target).route;
   const seenIds = new Set<number>();
   const prepared: PreparedBatchUpdateEntry[] = [];
-  let totalBytes = EMPTY_BATCH_PAYLOAD_BYTES;
   for (const [index, item] of rawItems.entries()) {
     assertBatchItemHasNoLocalFiles(item.data, index);
-    assertPositiveId(item.id, `Resource update item ${index + 1} id`);
-    if (seenIds.has(item.id)) throw new Error(`Duplicate resource update id: ${item.id}.`);
-    seenIds.add(item.id);
+    const id = item.id;
+    assertPositiveId(id, `Resource update item ${index + 1} id`);
+    if (seenIds.has(id)) throw new Error(`Duplicate resource update id: ${id}.`);
+    seenIds.add(id);
     const body = await buildResourceBody(input.target, item.data);
     if (Object.keys(body).length === 0) throw new Error(`Resource update item ${index + 1} requires at least one update field.`);
-    const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}/${item.id}`, body };
-    const requestBytes = measureBatchRequestBytes(request);
-    totalBytes = accumulateBatchBytes(totalBytes, requestBytes, index, "Resource batch update");
-    prepared.push({ index, id: item.id, request, requestBytes });
+    const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}/${id}`, body };
+    prepared.push({ index, id, request });
   }
   return prepared;
 }
@@ -859,7 +725,7 @@ async function prepareBatchUpdateItems(input: ResourceBatchUpdateInput): Promise
 export async function batchCreateResources(client: WordPressClient, input: ResourceBatchCreateInput): Promise<ResourceBatchResult> {
   const items = await prepareBatchCreateItems(input);
   const results: ResourceBatchItemResult[] = [];
-  for (const chunk of chunkPreparedBatchEntries(items, "Resource batch create")) {
+  for (const chunk of chunkWordPressBatchEntries(items, "Resource batch create")) {
     const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
       method: "POST",
       body: { validation: "normal", requests: chunk.map((item) => item.request) }
@@ -867,11 +733,15 @@ export async function batchCreateResources(client: WordPressClient, input: Resou
     if (!Array.isArray(batch.data.responses) || batch.data.responses.length !== chunk.length) throw new Error("WordPress batch response count does not match the submitted resource creates.");
     batch.data.responses.forEach((response, index) => {
       const item = chunk[index];
-      if (isSuccessfulBatchResponse(response) && typeof (response.body as Record<string, unknown>).id === "number") {
-        const body = response.body as Record<string, unknown>;
-        results.push({ index: item.index, sourceId: item.sourceId, id: body.id as number, success: true });
+      if (isSuccessfulWordPressBatchResponse(response) && typeof response.body.id === "number") {
+        results.push({ index: item.index, sourceId: item.sourceId, id: response.body.id, success: true });
       } else {
-        results.push({ index: item.index, sourceId: item.sourceId, success: false, error: normalizeBatchError(response) });
+        results.push({
+          index: item.index,
+          sourceId: item.sourceId,
+          success: false,
+          error: normalizeWordPressBatchError(response, "WordPress batch resource operation failed.")
+        });
       }
     });
   }
@@ -883,7 +753,7 @@ export async function batchCreateResources(client: WordPressClient, input: Resou
 export async function batchUpdateResources(client: WordPressClient, input: ResourceBatchUpdateInput): Promise<ResourceBatchResult> {
   const items = await prepareBatchUpdateItems(input);
   const results: ResourceBatchItemResult[] = [];
-  for (const chunk of chunkPreparedBatchEntries(items, "Resource batch update")) {
+  for (const chunk of chunkWordPressBatchEntries(items, "Resource batch update")) {
     const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
       method: "POST",
       body: { validation: "normal", requests: chunk.map((item) => item.request) }
@@ -891,11 +761,15 @@ export async function batchUpdateResources(client: WordPressClient, input: Resou
     if (!Array.isArray(batch.data.responses) || batch.data.responses.length !== chunk.length) throw new Error("WordPress batch response count does not match the submitted resource updates.");
     batch.data.responses.forEach((response, index) => {
       const item = chunk[index];
-      if (isSuccessfulBatchResponse(response)) {
-        const body = response.body as Record<string, unknown>;
-        results.push({ index: item.index, id: typeof body.id === "number" ? body.id : item.id, success: true });
+      if (isSuccessfulWordPressBatchResponse(response)) {
+        results.push({ index: item.index, id: typeof response.body.id === "number" ? response.body.id : item.id, success: true });
       } else {
-        results.push({ index: item.index, id: item.id, success: false, error: normalizeBatchError(response) });
+        results.push({
+          index: item.index,
+          id: item.id,
+          success: false,
+          error: normalizeWordPressBatchError(response, "WordPress batch resource operation failed.")
+        });
       }
     });
   }

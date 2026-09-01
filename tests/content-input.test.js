@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 
-import { resolveContentInput } from "../build/lib/content-input.js";
+import { resolveContentInput } from "../build/wordpress/content/input.js";
 
 test("resolveContentInput 优先使用 MCP 内联正文", async () => {
   const value = await resolveContentInput({

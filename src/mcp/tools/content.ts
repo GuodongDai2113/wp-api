@@ -1,4 +1,4 @@
-import { replaceContentText, type ReplaceContentTextResult } from "../../lib/content-replace.js";
+import { replaceContentText, type ReplaceContentTextResult } from "../../wordpress/content/replace.js";
 import {
   addLinkToContent,
   extractPostContent,
@@ -7,12 +7,13 @@ import {
   removeLinkFromContent,
   updateLinkInContent,
   type PostLinkEntry
-} from "../../lib/links.js";
+} from "../../wordpress/content/links.js";
 import {
   type UploadMediaOptions,
   WordPressClient
-} from "../../lib/wp-client.js";
-import type { WordPressResourceEntity } from "./resource-tools.js";
+} from "../../wordpress/client.js";
+import { assertPositiveId } from "../shared/validation.js";
+import type { WordPressResourceEntity } from "./resources.js";
 
 /** 文章链接工具接收的 MCP 风格输入。 */
 export interface PostLinkInput {
@@ -115,13 +116,6 @@ export interface MediaUploadPayload {
   slug?: string;
   /** 允许保留 WordPress 返回的其他媒体字段。 */
   [key: string]: unknown;
-}
-
-/** 校验 ID 是可安全传给 WordPress REST API 的正整数。 */
-function assertPositiveId(id: number, label: string): void {
-  if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
 }
 
 /** 列出、添加、更新或移除文章正文中的链接。 */

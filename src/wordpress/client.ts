@@ -3,7 +3,7 @@ import { lookup as lookupHostname } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, extname } from "node:path";
 
-import { prepareMediaImage } from "./image-compression.js";
+import { prepareMediaImage } from "./media/image.js";
 
 /** 单次 WordPress 请求默认允许等待的最长时间。 */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -322,9 +322,42 @@ function asWordPressErrorPayload(payload: unknown): WordPressErrorPayload {
   return isObject(payload) ? payload : {};
 }
 
-/** 将未知错误缩窄为可读取消息、错误码和 cause 的结构。 */
+/** 将错误详情的任意运行时值转换为可安全展示和检查的字符串。 */
+function normalizeErrorDetail(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** 将未知错误规范化为仅包含字符串消息、错误码和单层 cause 的安全结构。 */
 function asErrorWithCauseDetails(error: unknown): ErrorWithCauseDetails {
-  return isObject(error) ? error : { message: String(error) };
+  if (!isObject(error)) {
+    return { message: normalizeErrorDetail(error) };
+  }
+  const cause = isObject(error.cause)
+    ? {
+      message: normalizeErrorDetail(error.cause.message),
+      code: normalizeErrorDetail(error.cause.code)
+    }
+    : error.cause === undefined
+      ? undefined
+      : { message: normalizeErrorDetail(error.cause) };
+  return {
+    message: normalizeErrorDetail(error.message),
+    code: normalizeErrorDetail(error.code),
+    cause
+  };
 }
 
 /** 从媒体上传结果中读取附件 ID，缺失时抛出明确错误。 */
@@ -642,20 +675,21 @@ export class WordPressNetworkError extends Error {
 function buildNetworkErrorMessage({ method, url, cause }: WordPressNetworkErrorOptions): string {
   const normalizedCause = asErrorWithCauseDetails(cause);
   const parts = [`Request failed: ${method} ${url}`];
+  const errorCode = normalizedCause.cause?.code ?? normalizedCause.code;
 
   if (normalizedCause.message) {
     parts.push(`Reason: ${normalizedCause.message}`);
   }
 
-  if (normalizedCause.cause?.code || normalizedCause.code) {
-    parts.push(`Code: ${normalizedCause.cause?.code ?? normalizedCause.code}`);
+  if (errorCode) {
+    parts.push(`Code: ${errorCode}`);
   }
 
   if (normalizedCause.cause?.message) {
     parts.push(`Cause: ${normalizedCause.cause.message}`);
   }
 
-  if ((normalizedCause.cause?.code ?? normalizedCause.code)?.includes("CERT")) {
+  if (errorCode?.includes("CERT")) {
     parts.push("Hint: self-signed or untrusted TLS certificate. Try `NODE_OPTIONS=--use-system-ca` if the site CA is installed locally.");
   }
 

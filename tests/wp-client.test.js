@@ -5,7 +5,7 @@ import path from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import sharp from "sharp";
 
-import { WordPressClient, WordPressApiError } from "../build/lib/wp-client.js";
+import { WordPressClient, WordPressApiError } from "../build/wordpress/client.js";
 
 test("WordPressClient sends Application Password auth and preserves pagination headers", async () => {
   const calls = [];
@@ -123,6 +123,33 @@ test("WordPressClient surfaces fetch errors with request context and cause detai
       assert.match(error.message, /fetch failed/);
       assert.match(error.message, /DEPTH_ZERO_SELF_SIGNED_CERT/);
       assert.match(error.message, /self-signed certificate/);
+      return true;
+    }
+  );
+});
+
+/** 非字符串底层错误码必须被安全格式化，不能在报告网络错误时再次抛出异常。 */
+test("WordPressClient safely formats non-string network error codes", async () => {
+  const fetchError = new TypeError("fetch failed", {
+    cause: { message: "socket closed", code: -104 }
+  });
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    /** 始终抛出带数字错误码的模拟网络故障。 */
+    fetchImpl: async () => {
+      throw fetchError;
+    }
+  });
+
+  await assert.rejects(
+    () => client.update("posts", 42, { title: "Updated" }),
+    (error) => {
+      assert.equal(error.name, "WordPressNetworkError");
+      assert.match(error.message, /Reason: fetch failed/);
+      assert.match(error.message, /Code: -104/);
+      assert.match(error.message, /Cause: socket closed/);
       return true;
     }
   );

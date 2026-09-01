@@ -1,5 +1,5 @@
-import { ConfigStore, type PublicClient } from "../lib/config-store.js";
-import { WordPressClient, normalizeWordPressBaseUrl } from "../lib/wp-client.js";
+import { ConfigStore, type PublicClient } from "../config/store.js";
+import { WordPressClient, normalizeWordPressBaseUrl } from "../wordpress/client.js";
 
 /** MCP client 工具和远端连接解析共用的运行上下文。 */
 export interface WordPressConnectionContext {

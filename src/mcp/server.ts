@@ -7,9 +7,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./wp-api-tools.js";
-import { normalizeRestApiDomain } from "./handlers/api-schema-tools.js";
-import { WP_STRUCTURE_NAMES, WP_STRUCTURE_SECTIONS } from "./handlers/structure-tools.js";
+import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./tool-router.js";
+import { normalizeRestApiDomain } from "./tools/api-schema.js";
+import { WP_STRUCTURE_NAMES, WP_STRUCTURE_SECTIONS } from "./tools/structures.js";
 
 /** 判断站点地址是否是适合作为 WordPress 根地址的 HTTP(S) URL。 */
 function isSafeSiteUrl(value: string): boolean {
@@ -151,23 +151,14 @@ const taxonomyResourceBodyShape = {
   metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST term meta object. Do not provide together with meta.")
 };
 
-/** Post 类型资源直接写入数据 schema。 */
-const postResourceDataSchema = z.object(postResourceBodyShape).strict();
+/** 所有已知资源字段的严格 schema；字段是否适用于 target 由领域 handler 精确校验。 */
+const resourceDataSchema = z.object({
+  ...postResourceBodyShape,
+  ...taxonomyResourceBodyShape
+}).strict();
 
-/** Taxonomy 类型资源直接写入数据 schema。 */
-const taxonomyResourceDataSchema = z.object(taxonomyResourceBodyShape).strict();
-
-/** 两类资源直接写入数据联合 schema。 */
-const resourceDataSchema = z.union([postResourceDataSchema, taxonomyResourceDataSchema]);
-
-/** Post 批量条目数据 schema，不包含逐项本地文件。 */
-const postResourceBatchDataSchema = postResourceDataSchema.omit({ contentFile: true, metaFile: true });
-
-/** Taxonomy 批量条目数据 schema，不包含逐项本地文件。 */
-const taxonomyResourceBatchDataSchema = taxonomyResourceDataSchema.omit({ metaFile: true });
-
-/** 两类资源批量条目数据联合 schema。 */
-const resourceBatchDataSchema = z.union([postResourceBatchDataSchema, taxonomyResourceBatchDataSchema]);
+/** 批量资源字段 schema，不包含不支持逐项读取的本地文件字段。 */
+const resourceBatchDataSchema = resourceDataSchema.omit({ contentFile: true, metaFile: true });
 
 /** Elementor MCP 工具共用的输入字段。 */
 const elementorBaseShape = {
@@ -413,7 +404,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         perPage: z.number().int().refine(isValidPerPage, "Items per page must be between 1 and 100.").optional().describe("Inline items per page, between 1 and 100."),
         status: z.string().optional().describe("Resource status filter."),
         include: z.array(z.number().int().positive()).optional().describe("Optional resource ID whitelist."),
-        outputFile: nonBlankStringSchema.optional().describe("Optional post or taxonomy CSV output path. Exports every match independently of page and perPage.")
+        outputFile: nonBlankStringSchema.optional().describe("Optional post or taxonomy CSV output path. Exports every match independently of page and perPage."),
+        overwrite: z.boolean().optional().describe("Set true to atomically replace an existing outputFile after the export succeeds. Defaults to false.")
       },
       outputSchema
     },
@@ -581,7 +573,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         page: z.number().int().positive().optional().describe("Inline result page number."),
         perPage: z.number().int().refine(isValidPerPage, "SEO items per page must be between 1 and 100.").optional().describe("Inline results per page, between 1 and 100."),
         include: z.array(z.number().int().positive()).optional().describe("Optional resource ID whitelist."),
-        outputFile: nonBlankStringSchema.optional().describe("Optional local CSV output path. Exports every match, independently of page and perPage.")
+        outputFile: nonBlankStringSchema.optional().describe("Optional local CSV output path. Exports every match, independently of page and perPage."),
+        overwrite: z.boolean().optional().describe("Set true to atomically replace an existing outputFile after the export succeeds. Defaults to false.")
       },
       outputSchema
     },

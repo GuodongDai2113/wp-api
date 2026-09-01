@@ -1,15 +1,15 @@
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
-import { createPackageArchive } from "../lib/package-archive.js";
-import { WordPressClient } from "../lib/wp-client.js";
+import { createPackageArchive } from "../wordpress/packages/archive.js";
+import { WordPressClient } from "../wordpress/client.js";
 import {
   getStoredClient,
   listStoredClients,
   resolveWordPressClient,
   type WordPressConnectionContext,
   type WordPressConnectionInput
-} from "./client-tools.js";
+} from "./client-registry.js";
 import {
   managePostLink,
   replacePostContent,
@@ -17,7 +17,7 @@ import {
   type MediaUploadInput,
   type PostContentReplaceInput,
   type PostLinkInput
-} from "./handlers/content-tools.js";
+} from "./tools/content.js";
 import {
   batchCreateResources,
   batchUpdateResources,
@@ -35,7 +35,7 @@ import {
   type ResourceGetInput,
   type ResourceListInput,
   type ResourceUpdateInput
-} from "./handlers/resource-tools.js";
+} from "./tools/resources.js";
 import {
   batchUpdateResourceSeo,
   getResourceSeo,
@@ -45,11 +45,11 @@ import {
   type ResourceSeoGetInput,
   type ResourceSeoListInput,
   type ResourceSeoUpdateInput
-} from "./handlers/seo-tools.js";
+} from "./tools/seo.js";
 import {
   executeElementorTool,
   type ElementorToolName
-} from "./handlers/elementor-tools.js";
+} from "./tools/elementor.js";
 import {
   activatePackage,
   deactivatePackage,
@@ -61,7 +61,7 @@ import {
   type PackageGetInput,
   type PackageListInput,
   type PackageStatusMutationInput
-} from "./handlers/package-tools.js";
+} from "./tools/packages.js";
 import {
   getJellyFormInquiry,
   getJellyFormSettings,
@@ -70,13 +70,13 @@ import {
   type JellyFormInquiryGetInput,
   type JellyFormInquiryListInput,
   type JellyFormSettingsUpdateInput
-} from "./handlers/jelly-form-tools.js";
+} from "./tools/jelly-form.js";
 import {
   getApiSchema,
   normalizeRestApiDomain,
   type ApiSchemaInput
-} from "./handlers/api-schema-tools.js";
-import { getWpStructure, type StructureGetInput } from "./handlers/structure-tools.js";
+} from "./tools/api-schema.js";
+import { getWpStructure, type StructureGetInput } from "./tools/structures.js";
 
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [

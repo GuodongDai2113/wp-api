@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, link, open, rm } from "node:fs/promises";
+import { access, link, mkdir, open, rename, rm, type FileHandle } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 
 /** 动态分页读取所需的最小分页结构。 */
 export interface DynamicPage<T> {
@@ -32,6 +34,28 @@ export interface BoundedCsvReadOptions {
   maxBytes: number;
 }
 
+/** 原子 CSV 导出所需的输出信息和正文写入回调。 */
+export interface AtomicCsvExportOptions<T> {
+  /** 最终输出文件路径，可使用相对路径。 */
+  outputFile: string;
+  /** 错误消息中使用的 CSV 类型名称。 */
+  label: string;
+  /** 按固定顺序写入的 CSV 表头。 */
+  headers: readonly string[];
+  /** 是否允许在全部内容成功写入后原子替换现有目标文件。 */
+  overwrite?: boolean;
+  /** 在表头之后写入数据行，并返回调用方需要的统计结果。 */
+  writeRows: (file: FileHandle) => Promise<T>;
+}
+
+/** 原子 CSV 导出完成后返回的规范化文件路径和调用方统计结果。 */
+export interface AtomicCsvExportResult<T> {
+  /** 已成功发布的绝对文件路径。 */
+  filePath: string;
+  /** 数据行写入回调生成的统计结果。 */
+  result: T;
+}
+
 /** 提前检查导出目标不存在，以避免在常见冲突场景下执行无用的远程查询。 */
 export async function assertExportTargetAbsent(filePath: string, label: string): Promise<void> {
   try {
@@ -62,6 +86,47 @@ export async function publishFileExclusive(temporaryFile: string, outputFile: st
     throw error;
   }
   await rm(temporaryFile, { force: true });
+}
+
+/** 使用同目录原子重命名发布临时文件，并允许替换现有普通文件。 */
+async function replaceFileAtomically(temporaryFile: string, outputFile: string): Promise<void> {
+  await rename(temporaryFile, outputFile);
+}
+
+/** 通过同目录临时文件完成 CSV 写入，并在全部成功后独占发布最终文件。 */
+export async function writeCsvFileAtomically<T>({
+  outputFile,
+  label,
+  headers,
+  overwrite = false,
+  writeRows
+}: AtomicCsvExportOptions<T>): Promise<AtomicCsvExportResult<T>> {
+  const resolvedOutputFile = resolve(outputFile);
+  await mkdir(dirname(resolvedOutputFile), { recursive: true });
+  if (!overwrite) {
+    await assertExportTargetAbsent(resolvedOutputFile, label);
+  }
+  const temporaryFile = resolve(
+    dirname(resolvedOutputFile),
+    `.${basename(resolvedOutputFile)}.${randomUUID()}.tmp`
+  );
+  const file = await open(temporaryFile, "wx");
+
+  try {
+    await file.writeFile(`\uFEFF${headers.join(",")}\r\n`, "utf8");
+    const result = await writeRows(file);
+    await file.close();
+    if (overwrite) {
+      await replaceFileAtomically(temporaryFile, resolvedOutputFile);
+    } else {
+      await publishFileExclusive(temporaryFile, resolvedOutputFile, label);
+    }
+    return { filePath: resolvedOutputFile, result };
+  } catch (error) {
+    await file.close().catch(() => undefined);
+    await rm(temporaryFile, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 /** 按每页最新分页头动态遍历，并在集合缩减造成页码越界时安全结束。 */

@@ -1,4 +1,4 @@
-import type { WordPressClient } from "../../lib/wp-client.js";
+import type { WordPressClient } from "../../wordpress/client.js";
 
 /** 读取远程 WordPress REST 接口结构时支持的输入。 */
 export interface ApiSchemaInput {
