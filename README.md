@@ -1,6 +1,12 @@
 # wp-api
 
-A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs. It runs over STDIO and exposes 35 structured tools for clients, local structure guidance, live REST schema discovery, content, SEO, Elementor, media, packages, and inquiries.
+### Jelly Catalog dynamic fields
+
+Use `wp_catalog_fields_get` with a saved authenticated `client` and `target: "product" | "product_cat"` to discover live writable fields, labels, descriptions, choices, and nested repeater schemas. This calls `jelly-catalog/v1/fields/{target}` with authentication; the anonymous `wp_api_route` tool cannot replace it.
+
+Read current values with `wp_resource_get` and `context: "edit"`, then use the existing `wp_resource_update` tool with `data.meta` or `data.metaFile`. Omitted keys remain unchanged, `null` deletes values, and arrays replace whole fields. Zero values, empty arrays, gallery ID strings, and editor HTML are passed through unchanged. Field definitions remain managed in WordPress admin. See [the MCP workflow](mcp.md#jelly-catalog-动态字段工作流) for examples and compatibility details.
+
+A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Inquiry REST APIs. It runs over STDIO and exposes 55 structured tools for clients, local structure guidance, live REST schema discovery, content, navigation menus, SEO, Elementor, media, packages, and inquiries.
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md) · Detailed MCP setup: [mcp.md](./mcp.md)
 
@@ -102,11 +108,11 @@ The configuration page never reads legacy plaintext configuration. Re-enter conn
 
 Vault writes use atomic replacement and a cross-process file lock. `wp_client_list` returns all saved connection names and site URLs; `wp_client_get` returns one matching connection or an error. Neither tool returns usernames, passwords, or password status.
 
-Except for the standalone public `wp_rest_api` query, all remote tools require `client` and accept an optional `siteUrl`. For authenticated requests, `siteUrl` may change only the path on the saved URL's origin. `wp_rest_api` accepts neither field: it requires a bare `domain`, always builds an HTTPS URL, and never sends saved credentials.
+Except for the standalone public `wp_api_route` query, all remote tools require `client` and accept an optional `siteUrl`. For authenticated requests, `siteUrl` may change only the path on the saved URL's origin. `wp_api_route` accepts neither field: it requires a bare `domain`, always builds an HTTPS URL, and never sends saved credentials.
 
 ## Tools
 
-The server exposes exactly 35 tools.
+The server exposes exactly 55 tools.
 
 ### Client configuration (2)
 
@@ -115,8 +121,8 @@ The server exposes exactly 35 tools.
 
 ### Structure and REST schema discovery (2)
 
-- `wp_structure_get` — query stable usage guidance for WordPress, Jelly Catalog, media, SEO, and Elementor. Request `section: "write"`, `"response"`, or `"example"` directly to receive only that fragment; the default is an overview and `"full"` is the compatibility escape hatch. The local catalog includes `product-tag` and requires no saved client.
-- `wp_rest_api` — provide a bare `domain` such as `example.com`; the tool always requests `https://{domain}/...` without reading a client or sending credentials. `apiPath` defaults to `wp-json` for a compact, searchable, paginated route index. After discovering a route, pass a full REST path such as `wp-json/wp/v2/product` for its methods, argument constraints, and fields. Use `detail: "full"` only when required.
+- `wp_structure_get` — query stable usage guidance for WordPress, Jelly Catalog, classic navigation menus, media, SEO, and Elementor. Request `section: "write"`, `"response"`, or `"example"` directly to receive only that fragment; the default is an overview and `"full"` is the compatibility escape hatch. This local catalog requires no saved client.
+- `wp_api_route` — provide a bare `domain`; requests use public HTTPS without saved credentials. The default `detail: "overview"` returns namespaces and a route count, or methods and field counts for a known `apiPath`. Use `search` or `section: "routes"` to discover routes. On a specific path, select `section: "arguments"` (optionally `httpMethod: "POST"`) or `section: "fields"` for a paginated name directory; add `names: ["meta"]` and `detail: "full"` to read only the required complete definitions. Direct selection is allowed without prior discovery. Directories default to 20 entries and support `search/offset/limit`. Migration: explicit `detail: "summary"` without a section preserves the previous compact response (root page size 50); `detail: "full"` without a section preserves the raw response. Pagination reduces context output, not upstream downloads.
 
 ### WordPress resources (8)
 
@@ -129,7 +135,7 @@ The server exposes exactly 35 tools.
 - `wp_resource_batch_update` — update inline or CSV-imported resources by ID through `batch/v1` in groups of 25.
 - `wp_resource_delete` — trash content or permanently delete a taxonomy term.
 
-Every resource tool identifies its resource with `target: { type, resource }`. `type: "post"` accepts `posts`, `pages`, and `products`; `type: "taxonomy"` accepts `categories` and `product-categories`. Mismatched combinations are rejected. Single create/update calls place writable fields under `data`; inline batch records use `{ id?, data }`, clearly separating resource selection, operation arguments, and writable data. `categories` maps automatically: posts use REST `categories`, Jelly Catalog products use REST `product_cat`, and pages reject the field. MCP does not expose the `product_tag` resource or product-tag assignments. Use `wp_rest_api` first to inspect the target site's current field definitions before writing plugin meta. Category and product-category deletion requires explicit `force: true`, because taxonomy terms have no trash. Resource list pagination is always bounded to `perPage: 1..100`.
+Every resource tool identifies its resource with `target: { type, resource }`. `type: "post"` accepts `posts`, `pages`, and `products`; `type: "taxonomy"` accepts `categories` and `product-categories`. Mismatched combinations are rejected. Single create/update calls place writable fields under `data`; inline batch records use `{ id?, data }`, clearly separating resource selection, operation arguments, and writable data. `categories` maps automatically: posts use REST `categories`, Jelly Catalog products use REST `product_cat`, and pages reject the field. MCP does not expose the `product_tag` resource or product-tag assignments. Use authenticated `wp_catalog_fields_get` before writing Jelly Catalog dynamic meta; use `wp_api_route` for other public API schemas. Category and product-category deletion requires explicit `force: true`, because taxonomy terms have no trash. Resource list pagination is always bounded to `perPage: 1..100`.
 
 Common Jelly Catalog product `meta` structures are:
 
@@ -144,7 +150,16 @@ Common Jelly Catalog product `meta` structures are:
 
 Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML marketing sections, `category_applications`, `product_cat_faqs`, and the `"0" | "1"` field `category_inherit_parent_content`. The live OPTIONS result remains authoritative because other active plugins may add fields.
 
-### SEO, post content, and media (7)
+### Classic navigation menus (8)
+
+- `wp_menu_list` — list menus together with active-theme menu locations and current assignments.
+- `wp_menu_get` — get one menu and all ordered editable menu items.
+- `wp_menu_create`, `wp_menu_update`, `wp_menu_delete` — manage menus and theme-location assignments; deletion requires `force: true`.
+- `wp_menu_item_create`, `wp_menu_item_update`, `wp_menu_item_delete` — manage custom links, posts, taxonomies, and post-type archives, including hierarchy and order.
+
+Read `wp_menu_list` before assigning `locations`, because an update replaces that menu's complete location assignment. Read `wp_menu_get` before changing `parent` or `menuOrder`. Menu items go to trash by default unless `force: true` is supplied.
+
+### SEO, post content, and media (8)
 
 - `wp_seo_get` — read Rank Math title, description, and focus keyword fields.
 - `wp_seo_update` — update or explicitly clear Rank Math REST meta fields.
@@ -153,6 +168,14 @@ Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML mar
 - `wp_post_link` — list, add, update, or remove links in editable raw post content.
 - `wp_post_content_replace` — replace every exact text occurrence in a post.
 - `wp_media_upload` — compress a local JPEG/PNG to WebP before upload, or upload GIF/AVIF/WebP unchanged, and optionally set attachment metadata.
+- `wp_media_alt_update` — update an existing media attachment's alt text by ID; an empty string clears it.
+- `wp_media_upload` and each batch-import item accept `post: ID` to attach the media during the initial upload, without an extra association request. `post: 0` leaves it unattached. WordPress validates the target post and edit permissions.
+- `wp_media_batch_import` — import 1–100 `items`, each using `filePath/title/altText/caption/description/categories`. Validates all inputs and paths before sequential uploads, continues after individual upload failures, and returns counts and per-item receipts. No automatic retries; check failed items against the library before retrying to avoid duplicate attachments.
+- `wp_media_list` / `wp_media_get` — search a paginated media library or read an attachment by `mediaId`; get supports `context: "edit"` for raw editable fields.
+- `wp_media_update` — update `mediaId` with `data: { title?, altText?, caption?, description?, slug?, post? }`; empty strings clear text and `post: 0` detaches the parent. Does not replace the file.
+- `wp_media_delete` — permanently delete an attachment and its files using `mediaId` and explicit `force: true`.
+- `wp_media_category_list/get/create/update/delete` — manage Jelly Editor categories at `wp/v2/media_category`. Create/update use `data: { name?, slug?, description?, parent? }` (name required on create); individual operations use `categoryId`. Delete requires `force: true` and keeps media files. Lists include empty categories by default.
+- Upload accepts `categories: [ID]` and assigns them during the same tool operation. Update accepts `data.categories` to replace all assignments (`[]` clears); list accepts `categories` to match any category. Requires REST-enabled Jelly Editor and Jelly Core. Managing categories requires `manage_categories`; assigning them requires `upload_files`.
 
 Post resource `data` accepts inline `content` or a local `contentFile`. Large REST meta objects can be submitted through `metaFile`; `meta` and `metaFile` cannot be combined. With `gutenberg: true`, the server parses the resolved body with an HTML5 parser, filters it through explicit tag and attribute allowlists plus the [WordPress allowed protocol](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/) list, and then generates Gutenberg block markup. Event attributes, inline styles, `javascript:`, `data:`, and active embedded content are removed; ordinary unknown containers are unwrapped while their safe text is preserved. Media extensions are limited to `.avif`, `.gif`, `.jpeg`, `.jpg`, `.png`, and `.webp`. JPEG and PNG inputs are converted in memory to quality-85 WebP before upload; GIF, AVIF, and existing WebP files are left unchanged.
 
@@ -180,12 +203,12 @@ The recommended flow is `pull → inspect → edit (repeat as needed) → push`.
 - `wp_package_pack_theme` — create an installable theme ZIP locally.
 - `wp_package_pack_plugin` — create an installable plugin ZIP locally.
 
-### Jelly Form
+### Inquiry
 
-- `wp_jelly_form_settings_get` — read the recipient, notification, redirect, and redacted SMTP settings.
-- `wp_jelly_form_settings_update` — update selected recipient, notification, redirect, or SMTP fields; omitted SMTP passwords are preserved.
-- `wp_jelly_form_inquiry_list` — list and filter non-spam inquiries (read-only).
-- `wp_jelly_form_inquiry_get` — read one non-spam inquiry by ID (read-only).
+- `wp_inquiry_settings_get` — read the recipient, notification, redirect, and redacted SMTP settings.
+- `wp_inquiry_settings_update` — update selected recipient, notification, redirect, or SMTP fields; omitted SMTP passwords are preserved.
+- `wp_inquiry_list` — list and filter non-spam inquiries (read-only).
+- `wp_inquiry_get` — read one non-spam inquiry by ID (read-only).
 
 See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 
@@ -195,9 +218,9 @@ See [mcp.md](./mcp.md) for input conventions and detailed operational notes.
 
 - Site URLs may use HTTP or HTTPS. HTTP Basic Authentication does not encrypt credentials in transit, so use HTTPS on untrusted networks.
 - A site URL cannot contain embedded credentials, a query string, or a fragment.
-- Authenticated `siteUrl` overrides must have the same origin as the saved URL; `wp_rest_api` instead uses a standalone bare domain and public HTTPS requests.
+- Authenticated `siteUrl` overrides must have the same origin as the saved URL; `wp_api_route` instead uses a standalone bare domain and public HTTPS requests.
 - Authenticated WordPress requests do not follow redirects. Configure the canonical site URL instead.
-- Except for public `wp_rest_api` requests that never read a client, authentication uses the saved WordPress Application Password; grant that account only the capabilities it needs.
+- Except for public `wp_api_route` requests that never read a client, authentication uses the saved WordPress Application Password; grant that account only the capabilities it needs.
 - Credentials default to `~/.wp-api/` and use AES-256-GCM; protect both the key and ciphertext files as current-user-only data.
 - File encryption prevents plaintext browsing, packaging, and accidental logging, but it cannot defeat malicious code with arbitrary access as the same operating-system user.
 
@@ -244,7 +267,7 @@ An installed and active Jelly Core plugin is required for:
 
 The server checks all active plugins before any of those mutations. If Jelly Core is unavailable, the operation stops before uploading or changing a package.
 
-Package listing/details and plugin activation/deactivation use native WordPress REST endpoints and do not require Jelly Core. Theme deactivation is unsupported. Jelly Core's custom REST routes must perform their own logged-in capability checks: the compatibility `X-Jelly-*` headers are not a shared secret and must not be treated as authentication.
+Package listing/details and plugin activation/deactivation use native WordPress REST endpoints and do not require Jelly Core. Theme deactivation is unsupported. Jelly Core 1.4.0 mutation routes require both a WordPress Application Password user with the relevant capabilities and the protocol's built-in fixed HMAC key. The MCP automatically signs the HTTP method, REST route, Unix timestamp, random nonce, and raw request-body SHA-256; the server accepts only an unused nonce within a five-minute window, with no additional secret configuration required.
 
 ## Credential-storage migration
 

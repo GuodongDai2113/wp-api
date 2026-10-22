@@ -6,8 +6,7 @@ import { join } from "node:path";
 
 import {
   managePostLink,
-  replacePostContent,
-  uploadMedia
+  replacePostContent
 } from "../build/mcp/tools/content.js";
 import {
   createResource,
@@ -287,32 +286,6 @@ test("content handler writes changed post content directly", async () => {
     { route: "posts", id: 1, body: { content: "Read <a href=\"/docs\">docs</a> now" } },
     { route: "posts", id: 2, body: { content: "right right" } }
   ]);
-});
-
-/** 验证媒体上传无需 CLI 参数层即可把 camelCase 元数据传给 WordPress client。 */
-test("content handler maps media upload input directly", async () => {
-  const calls = [];
-  const client = {
-    /** 记录媒体上传调用并返回模拟附件实体。 */
-    async uploadMediaFromFile(filePath, options) {
-      calls.push({ filePath, options });
-      return { id: 15, source_url: "https://example.test/image.png" };
-    }
-  };
-
-  const result = await uploadMedia(client, {
-    filePath: "C:/safe/image.png",
-    title: "Image",
-    altText: "Alternative",
-    caption: "",
-    description: "Description"
-  });
-
-  assert.equal(result.id, 15);
-  assert.deepEqual(calls, [{
-    filePath: "C:/safe/image.png",
-    options: { title: "Image", altText: "Alternative", description: "Description" }
-  }]);
 });
 
 /** 资源创建必须提供适用于所选资源类型的字段，不能静默丢弃错误域字段。 */

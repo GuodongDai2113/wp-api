@@ -184,10 +184,10 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
     }
   };
 
-  const index = await executeWpApiTool("wp_rest_api", { domain: "EXAMPLE.com", search: "wp/v2", limit: 1 }, context);
-  const fullIndex = await executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "wp-json", detail: "full" }, context);
-  const route = await executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "/wp-json/wp/v2/product/" }, context);
-  const fullRoute = await executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "wp/v2/product", detail: "full" }, context);
+  const index = await executeWpApiTool("wp_api_route", { domain: "EXAMPLE.com", search: "wp/v2", limit: 1, detail: "summary" }, context);
+  const fullIndex = await executeWpApiTool("wp_api_route", { domain: "example.com", apiPath: "wp-json", detail: "full" }, context);
+  const route = await executeWpApiTool("wp_api_route", { domain: "example.com", apiPath: "/wp-json/wp/v2/product/", detail: "summary" }, context);
+  const fullRoute = await executeWpApiTool("wp_api_route", { domain: "example.com", apiPath: "wp/v2/product", detail: "full" }, context);
 
   assert.deepEqual(calls, [
     { url: "https://example.com/wp-json/", method: "GET", authorization: undefined },
@@ -254,28 +254,28 @@ test("REST schema 工具读取路由索引和指定接口的 OPTIONS 定义", as
   assert.equal(JSON.stringify(route).length < JSON.stringify(fullRoute).length, true);
 
   await assert.rejects(
-    () => executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "wp/v2/../users" }, context),
+    () => executeWpApiTool("wp_api_route", { domain: "example.com", apiPath: "wp/v2/../users" }, context),
     /safe unencoded REST path/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_rest_api", { domain: "example.com", apiPath: "%2e%2e/admin" }, context),
+    () => executeWpApiTool("wp_api_route", { domain: "example.com", apiPath: "%2e%2e/admin" }, context),
     /safe unencoded REST path/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_rest_api", { domain: "example.com", limit: 101 }, context),
+    () => executeWpApiTool("wp_api_route", { domain: "example.com", limit: 101 }, context),
     /between 1 and 100/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_rest_api", { domain: "https://example.com" }, context),
+    () => executeWpApiTool("wp_api_route", { domain: "https://example.com" }, context),
     /bare hostname/
   );
   await assert.rejects(
-    () => executeWpApiTool("wp_rest_api", { domain: "example.com", client: "prod" }, context),
+    () => executeWpApiTool("wp_api_route", { domain: "example.com", client: "prod" }, context),
     /does not accept client or siteUrl/
   );
 });
 
-test("wp_rest_api 仅凭 domain 拼接公开 HTTPS REST 请求", async () => {
+test("wp_api_route 仅凭 domain 拼接公开 HTTPS REST 请求", async () => {
   const calls = [];
   const context = {
     /** 返回公开 WordPress REST 根索引，并记录请求不读取 client 或携带凭据。 */
@@ -296,7 +296,7 @@ test("wp_rest_api 仅凭 domain 拼接公开 HTTPS REST 请求", async () => {
     }
   };
 
-  const result = await executeWpApiTool("wp_rest_api", {
+  const result = await executeWpApiTool("wp_api_route", {
     domain: "example.com",
     search: "posts"
   }, context);
@@ -307,7 +307,7 @@ test("wp_rest_api 仅凭 domain 拼接公开 HTTPS REST 请求", async () => {
   assert.equal(calls[0].init.method, "GET");
   assert.equal(calls[0].init.headers.Authorization, undefined);
   await assert.rejects(
-    () => executeWpApiTool("wp_rest_api", {}, context),
+    () => executeWpApiTool("wp_api_route", {}, context),
     /domain is required/
   );
 });
@@ -327,6 +327,7 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   assert.equal(names.includes("post"), true);
   assert.equal(names.includes("page"), true);
   assert.equal(names.includes("product-category"), true);
+  assert.equal(names.includes("menu"), true);
   assert.equal(names.includes("product-tag"), false);
   assert.equal(names.includes("elementor-page"), true);
 
@@ -339,6 +340,20 @@ test("本地结构目录按需返回最小片段且无需 WordPress client", asy
   assert.equal(pageWrite.value.target, "{type:\"post\",resource:\"pages\"}");
   assert.equal(typeof pageWrite.value.data.title, "string");
   assert.equal(JSON.stringify(pageOverview).length < JSON.stringify(pageFull).length, true);
+
+  const productWrite = await executeWpApiTool("wp_structure_get", { structure: "product", section: "write" }, context);
+  assert.match(productWrite.value.data.meta.custom_layout_enabled, /0 or 1/);
+  assert.match(productWrite.value.data.meta.custom_layout_html, /safe post HTML/);
+  assert.match(productWrite.value.data.meta.custom_layout_css, /CSS/);
+
+  const productCategoryWrite = await executeWpApiTool("wp_structure_get", { structure: "product-category", section: "write" }, context);
+  assert.match(productCategoryWrite.value.data.meta.custom_layout_enabled, /0 or 1/);
+  assert.match(productCategoryWrite.value.data.meta.custom_layout_html, /safe post HTML/);
+  assert.match(productCategoryWrite.value.data.meta.custom_layout_css, /CSS/);
+
+  const menuWrite = await executeWpApiTool("wp_structure_get", { structure: "menu", section: "write" }, context);
+  assert.match(menuWrite.value.menu.data.locations, /replaces/);
+  assert.match(menuWrite.value.menuItem.data.type, /taxonomy/);
 
   const elementor = await executeWpApiTool("wp_structure_get", { structure: "elementor-page", section: "write" }, context);
   assert.match(elementor.value.pull, /postId/);
@@ -400,6 +415,10 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(updateSchema.data.safeParse({ name: "Term", parent: 0 }).success, true);
   assert.equal(updateSchema.data.safeParse({ name: "Term", parent: 0, categories: [3] }).success, true);
   assert.equal(updateSchema.data.safeParse({ name: "Term", unknownField: true }).success, false);
+  const mediaAltUpdateSchema = registrations.get("wp_media_alt_update").inputSchema;
+  assert.equal(mediaAltUpdateSchema.mediaId.safeParse(12).success, true);
+  assert.equal(mediaAltUpdateSchema.mediaId.safeParse(0).success, false);
+  assert.equal(mediaAltUpdateSchema.altText.safeParse("").success, true);
   const batchCreateSchema = registrations.get("wp_resource_batch_create").inputSchema;
   assert.equal(batchCreateSchema.items.safeParse([{ id: 9, data: { title: "Copy" } }]).success, true);
   assert.equal(batchCreateSchema.items.safeParse([{ data: { title: "Copy", contentFile: "post.html" } }]).success, false);
@@ -572,36 +591,59 @@ test("executeWpApiTool 分发 SEO 列表与 batch 更新", async () => {
   assert.equal(calls[1].route, "batch/v1");
 });
 
-test("Jelly Form MCP 工具映射设置与只读询价 REST 请求", async () => {
+test("executeWpApiTool 分发媒体替代文本更新", async () => {
   const calls = [];
   const client = createRemoteClientStub({
-    /** 记录 Jelly Form 自定义 REST 路由、方法、查询及请求体。 */
+    /** 记录媒体替代文本更新请求并返回模拟附件。 */
+    async update(route, id, body) {
+      calls.push({ route, id, body });
+      return { id, alt_text: body.alt_text };
+    }
+  });
+  const result = await executeWpApiTool("wp_media_alt_update", {
+    mediaId: 42,
+    altText: "设备安装现场"
+  }, {
+    /** 返回媒体工具使用的远端 client 替身。 */
+    async resolveClientImpl() {
+      return client;
+    }
+  });
+
+  assert.deepEqual(result, { id: 42, alt_text: "设备安装现场" });
+  assert.deepEqual(calls, [{ route: "media", id: 42, body: { alt_text: "设备安装现场" } }]);
+});
+
+test("Inquiry MCP 工具映射设置与只读询价 REST 请求", async () => {
+  const calls = [];
+  const client = createRemoteClientStub({
+    /** 记录 Inquiry 自定义 REST 路由、方法、查询及请求体。 */
     async requestApiPath(route, options = {}) {
       calls.push({ route, options });
       return { data: { ok: true }, pagination: { total: 0, totalPages: 0 } };
     }
   });
   const context = {
-    /** 返回不会发出真实网络请求的 Jelly Form client 替身。 */
+    /** 返回不会发出真实网络请求的 Inquiry client 替身。 */
     async resolveClientImpl() {
       return client;
     }
   };
 
-  await executeWpApiTool("wp_jelly_form_settings_get", {}, context);
-  await executeWpApiTool("wp_jelly_form_settings_update", {
+  await executeWpApiTool("wp_inquiry_settings_get", {}, context);
+  await executeWpApiTool("wp_inquiry_settings_update", {
     recipientEmail: "sales@example.com",
     smtpEnabled: true,
     smtp: { host: "smtp.example.com", password: "secret", clearPassword: false }
   }, context);
-  await executeWpApiTool("wp_jelly_form_inquiry_list", {
+  await executeWpApiTool("wp_inquiry_list", {
     page: 2,
     perPage: 25,
     startDate: "2026-08-01",
     orderBy: "created_at",
     order: "DESC"
   }, context);
-  await executeWpApiTool("wp_jelly_form_inquiry_get", { id: 9 }, context);
+  await executeWpApiTool("wp_inquiry_get", { id: 9 }, context);
 
   assert.deepEqual(calls, [
     { route: "jelly-form/v1/settings", options: {} },

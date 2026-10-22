@@ -1,19 +1,25 @@
 import type { WordPressClient } from "../../wordpress/client.js";
 
 /** 读取远程 WordPress REST 接口结构时支持的输入。 */
-export interface ApiSchemaInput {
+export interface ApiRouteInput {
   /** 目标 WordPress 站点的裸域名，不包含协议、端口、路径、查询或 fragment。 */
   domain: string;
   /** REST API 路径；默认为 `wp-json`，也接受省略 `wp-json/` 前缀的简写。 */
   apiPath?: string;
-  /** 根路由索引的路径或 namespace 筛选文本。 */
+  /** 根路由路径、namespace 或已选参数/字段目录的名称筛选文本。 */
   search?: string;
-  /** 根路由摘要中跳过的匹配路由数量。 */
+  /** 路由、参数或字段目录中跳过的匹配条目数量。 */
   offset?: number;
-  /** 根路由摘要最多返回的路由数量。 */
+  /** 目录最多返回的条目数量；概览默认 20，兼容摘要默认 50。 */
   limit?: number;
-  /** 返回摘要或 WordPress 原始完整响应；默认返回摘要。 */
-  detail?: "summary" | "full";
+  /** 默认概览不展开定义；summary 保留旧版约束摘要，full 返回完整定义。 */
+  detail?: "overview" | "summary" | "full";
+  /** 按需展开根路由目录、请求参数或响应字段；不指定时仅返回当前层级。 */
+  section?: "routes" | "arguments" | "fields";
+  /** 参数目录的 HTTP 方法筛选，例如 POST；仅用于 arguments。 */
+  httpMethod?: string;
+  /** 精确选择顶层参数或字段名；完整嵌套定义通过 full 按需读取。 */
+  names?: string[];
 }
 
 /** 单条 WordPress REST 路由的轻量摘要。 */
@@ -43,7 +49,7 @@ export interface ApiRouteIndexSummary {
 }
 
 /** 远程 WordPress REST 接口结构工具返回的稳定包装结构。 */
-export interface ApiSchemaResult {
+export interface ApiRouteResult {
   /** 经过校验和小写规范化的目标域名。 */
   domain: string;
   /** 规范化后的 REST 路径；根索引固定为 `wp-json`。 */
@@ -52,10 +58,12 @@ export interface ApiSchemaResult {
   url: string;
   /** 为获取接口定义而使用的 HTTP 方法。 */
   method: "GET" | "OPTIONS";
-  /** 当前响应采用摘要还是完整模式。 */
-  detail: "summary" | "full";
+  /** 当前响应采用概览、兼容摘要还是完整模式。 */
+  detail: "overview" | "summary" | "full";
   /** WordPress 站点实时返回的路由索引或 OPTIONS schema。 */
   schema: unknown;
+  /** 当前层级的按需读取提示；兼容摘要和原始完整响应不附加提示。 */
+  next?: string;
 }
 
 /** 单个 REST 参数或响应字段的紧凑约束说明。 */
@@ -220,7 +228,7 @@ export function summarizeApiPathSchema(data: unknown): ApiPathSummary {
 /** 将 WordPress REST 根索引压缩为可筛选、可分页的轻量路由目录。 */
 export function summarizeApiRouteIndex(
   data: unknown,
-  input: Pick<ApiSchemaInput, "search" | "offset" | "limit">
+  input: Pick<ApiRouteInput, "search" | "offset" | "limit">
 ): ApiRouteIndexSummary {
   const root = isRecord(data) ? data : {};
   const namespaces = Array.isArray(root.namespaces)
@@ -285,7 +293,7 @@ export function normalizeRestApiDomain(domain: unknown): string {
 }
 
 /** 校验 REST 路径并移除可选的 `wp-json/` 前缀，返回供 WordPress client 请求的相对路径。 */
-export function normalizeApiSchemaPath(apiPath: unknown): string {
+export function normalizeApiRoutePath(apiPath: unknown): string {
   if (apiPath === undefined) {
     return "";
   }
@@ -313,30 +321,143 @@ export function normalizeApiSchemaPath(apiPath: unknown): string {
   return normalized;
 }
 
-/** 从目标站点读取 REST 路由索引，或读取指定路由的 OPTIONS 接口定义。 */
-export async function getApiSchema(
-  client: WordPressClient,
-  input: ApiSchemaInput
-): Promise<ApiSchemaResult> {
-  if (input.detail !== undefined && input.detail !== "summary" && input.detail !== "full") {
-    throw new TypeError("detail must be summary or full when provided.");
+/** 在发起请求前检查披露层级与筛选组合，避免无效输入触发下载或静默忽略筛选。 */
+function validateDisclosureInput(input: ApiRouteInput, requestPath: string): void {
+  if (input.detail !== undefined && !["overview", "summary", "full"].includes(input.detail)) {
+    throw new TypeError("detail must be overview, summary or full when provided.");
   }
+  if (input.section !== undefined && !["routes", "arguments", "fields"].includes(input.section)) {
+    throw new TypeError("section must be routes, arguments or fields.");
+  }
+  if (input.search !== undefined && (typeof input.search !== "string" || input.search.trim() === "")) {
+    throw new TypeError("search must be a non-blank string when provided.");
+  }
+  if (input.offset !== undefined && (!Number.isInteger(input.offset) || input.offset < 0)) {
+    throw new TypeError("offset must be a non-negative integer when provided.");
+  }
+  if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)) {
+    throw new TypeError("limit must be an integer between 1 and 100 when provided.");
+  }
+  if (input.section === "routes" && requestPath !== ""
+    || (input.section === "arguments" || input.section === "fields") && requestPath === "") {
+    throw new TypeError("routes requires the root index; arguments and fields require a specific apiPath.");
+  }
+  if (input.httpMethod !== undefined && (input.section !== "arguments"
+    || typeof input.httpMethod !== "string" || !/^[A-Za-z]+$/.test(input.httpMethod))) {
+    throw new TypeError("httpMethod requires section arguments and an HTTP method such as POST.");
+  }
+  if (input.names !== undefined && ((input.section !== "arguments" && input.section !== "fields")
+    || !Array.isArray(input.names) || input.names.length === 0 || input.names.length > 100
+    || input.names.some((name) => typeof name !== "string" || name.trim() === ""))) {
+    throw new TypeError("names requires section arguments or fields and 1 to 100 non-blank exact names.");
+  }
+  if (requestPath !== "" && input.section === undefined
+    && (input.search !== undefined || input.offset !== undefined || input.limit !== undefined)) {
+    throw new TypeError("Select section arguments or fields before filtering or paging a specific apiPath.");
+  }
+}
+
+/** 仅在选定参数或字段分区后构建分页目录；完整模式保留所有原始约束，不截断嵌套定义。 */
+function selectApiDefinitions(data: unknown, input: ApiRouteInput): unknown {
+  const root = isRecord(data) ? data : {};
+  const responseSchema = isRecord(root.schema) ? root.schema : {};
+  const endpoints = Array.isArray(root.endpoints) ? root.endpoints.filter(isRecord) : [];
+  const httpMethod = input.httpMethod?.toUpperCase();
+  const entries = input.section === "fields"
+    ? Object.entries(isRecord(responseSchema.properties) ? responseSchema.properties : {})
+      .map(([name, definition]) => ({ name, methods: [] as string[], definition }))
+    : endpoints.flatMap((endpoint) => {
+      const methods = readStringArray(endpoint.methods);
+      return httpMethod && !methods.includes(httpMethod) ? []
+        : Object.entries(isRecord(endpoint.args) ? endpoint.args : {})
+          .map(([name, definition]) => ({ name, methods, definition }));
+    });
+  if (httpMethod && !endpoints.some((endpoint) => readStringArray(endpoint.methods).includes(httpMethod))) {
+    throw new TypeError(`No endpoint defines HTTP method ${httpMethod}.`);
+  }
+  const missing = input.names?.filter((name) => !entries.some((entry) => entry.name === name)) ?? [];
+  if (missing.length > 0) {
+    throw new TypeError(`Unknown ${input.section} names: ${missing.join(", ")}.`);
+  }
+  const search = input.search?.trim().toLowerCase() ?? "";
+  const matching = entries.filter((entry) => (!input.names || input.names.includes(entry.name))
+    && entry.name.toLowerCase().includes(search));
+  const offset = input.offset ?? 0;
+  const limit = input.limit ?? 20;
+  return {
+    section: input.section,
+    items: matching.slice(offset, offset + limit).map((entry) => ({
+      name: entry.name,
+      ...(input.section === "arguments" ? { methods: entry.methods } : {}),
+      ...(input.detail === "full" ? { definition: entry.definition }
+        : input.detail === "summary" ? { definition: summarizeApiValue(entry.definition) } : {})
+    })),
+    total: matching.length,
+    offset,
+    limit,
+    hasMore: offset + limit < matching.length
+  };
+}
+
+/** 默认仅披露 namespace、方法及条目数量；下一层目录和完整约束由调用方显式选择。 */
+function describeApiOverview(data: unknown, input: ApiRouteInput, requestPath: string): unknown {
+  const root = isRecord(data) ? data : {};
+  if (requestPath === "") {
+    if (input.section === "routes" || input.search !== undefined || input.offset !== undefined || input.limit !== undefined) {
+      const { namespaces: _namespaces, ...directory } = summarizeApiRouteIndex(data, { ...input, limit: input.limit ?? 20 });
+      return directory;
+    }
+    return {
+      namespaces: readStringArray(root.namespaces),
+      routeCount: isRecord(root.routes) ? Object.keys(root.routes).length : 0
+    };
+  }
+  const endpoints = Array.isArray(root.endpoints) ? root.endpoints.filter(isRecord) : [];
+  const responseSchema = isRecord(root.schema) ? root.schema : {};
+  return {
+    namespace: typeof root.namespace === "string" ? root.namespace : null,
+    methods: [...new Set([...readStringArray(root.methods), ...collectRouteMethods(root)])].sort(),
+    endpoints: endpoints.map((endpoint) => ({
+      methods: readStringArray(endpoint.methods),
+      argumentCount: isRecord(endpoint.args) ? Object.keys(endpoint.args).length : 0
+    })),
+    fieldCount: isRecord(responseSchema.properties) ? Object.keys(responseSchema.properties).length : 0
+  };
+}
+
+/** 从目标站点读取公开 REST 元数据，默认逐层披露，并保留显式摘要及原始完整读取能力。 */
+export async function getApiRoute(
+  client: WordPressClient,
+  input: ApiRouteInput
+): Promise<ApiRouteResult> {
   const domain = normalizeRestApiDomain(input.domain);
-  const requestPath = normalizeApiSchemaPath(input.apiPath);
+  const requestPath = normalizeApiRoutePath(input.apiPath);
+  validateDisclosureInput(input, requestPath);
   const apiPath = requestPath === "" ? "wp-json" : `wp-json/${requestPath}`;
   const method = requestPath === "" ? "GET" : "OPTIONS";
   const response = await client.requestApiPath(requestPath, { method });
-  const detail = input.detail ?? "summary";
+  const detail = input.detail ?? "overview";
+  const selected = input.section === "arguments" || input.section === "fields";
   return {
     domain,
     apiPath,
     url: `https://${domain}/${apiPath}${requestPath === "" ? "/" : ""}`,
     method,
     detail,
-    schema: detail === "full"
+    schema: selected ? selectApiDefinitions(response.data, input)
+      : input.section === "routes" ? describeApiOverview(response.data, input, requestPath)
+      : detail === "overview" ? describeApiOverview(response.data, input, requestPath)
+      : detail === "full"
       ? response.data
       : requestPath === ""
         ? summarizeApiRouteIndex(response.data, input)
-        : summarizeApiPathSchema(response.data)
+        : summarizeApiPathSchema(response.data),
+    ...(detail === "overview" || selected ? {
+      next: selected
+        ? "Use names + detail=full for exact definitions (including nested constraints); use offset/limit for more entries."
+        : requestPath === ""
+          ? "Use search or section=routes with offset/limit to find routes; if the path is known, query apiPath directly. Replace route regex placeholders with concrete values."
+          : "Use section=arguments + httpMethod, or section=fields, to list names; add names + detail=full for exact definitions."
+    } : {})
   };
 }

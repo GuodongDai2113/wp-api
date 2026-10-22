@@ -5,6 +5,7 @@ export const WP_STRUCTURE_NAMES = [
   "product",
   "category",
   "product-category",
+  "menu",
   "media",
   "seo-meta",
   "elementor-page"
@@ -35,7 +36,7 @@ export interface StructureDefinition {
   title: string;
   /** 结构用途和适用边界。 */
   description: string;
-  /** 可传给 `wp_rest_api` 的实时 REST 路径；纯本地结构可以为空。 */
+  /** 可传给 `wp_api_route` 的实时 REST 路径；纯本地结构可以为空。 */
   remoteSchemaPath: string | null;
   /** 可操作该结构的 MCP 工具名称。 */
   mcpTools: string[];
@@ -182,7 +183,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       },
       notes: [
         "Use context=edit permissions to receive raw title/content/excerpt fields from WordPress.",
-        "Use wp_rest_api with a domain and apiPath wp-json/wp/v2/posts to inspect fields added by active plugins."
+        "Use wp_api_route with a domain and apiPath wp-json/wp/v2/posts to inspect fields added by active plugins."
       ]
     },
     page: {
@@ -219,9 +220,9 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     product: {
       name: "product",
       title: "Jelly Catalog product",
-      description: "Jelly Catalog product content with product categories, gallery, attributes, FAQ, video, and download attachment meta.",
+      description: "Jelly Catalog product content with product categories, gallery, attributes, FAQ, video, download attachment meta, and optional custom HTML/CSS layout.",
       remoteSchemaPath: "wp-json/wp/v2/product",
-      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
+      mcpTools: ["wp_catalog_fields_get", "wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         target: "{type:\"post\",resource:\"products\"}",
         id: "required positive integer for update/get/delete; omit for create",
@@ -229,6 +230,9 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
           ...contentData,
           categories: "positive integer[]; mapped to REST product_cat; [] clears assignments",
           meta: {
+            custom_layout_enabled: "string enum 0 or 1; enables the custom layout when set to 1",
+            custom_layout_html: "string; custom layout HTML sanitized with WordPress safe post HTML rules; empty string clears it",
+            custom_layout_css: "string; multiline custom layout CSS with HTML tags removed; empty string clears it",
             _product_sku: "string; canonical product model/SKU",
             product_sku: "string; legacy import field; prefer _product_sku",
             _product_videourl: "string; absolute video URL",
@@ -258,7 +262,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
           }
         }
       },
-      notes: [
+      notes: ["Discover enabled dynamic fields using wp_catalog_fields_get with the same authenticated client. Read existing meta with context=edit before writing; send changed keys only. null deletes, arrays replace, omitted keys are preserved. Field definitions remain managed in WordPress admin.",
         "Upload media first and use returned attachment IDs for featuredMedia, product_file, and gallery fields.",
         "Jelly Catalog is not WooCommerce; do not send WooCommerce price or inventory fields unless another plugin explicitly registers them."
       ]
@@ -277,9 +281,9 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     "product-category": {
       name: "product-category",
       title: "Jelly Catalog product category (product_cat)",
-      description: "Hierarchical Jelly Catalog product_cat taxonomy with category marketing content and media meta.",
+      description: "Hierarchical Jelly Catalog product_cat taxonomy with category marketing content, media meta, and optional custom HTML/CSS layout.",
       remoteSchemaPath: "wp-json/wp/v2/product_cat",
-      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
+      mcpTools: ["wp_catalog_fields_get", "wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         ...createTaxonomyWriteShape("product-categories"),
         data: {
@@ -289,6 +293,9 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
           parent: "non-negative integer; 0 removes the parent",
           metaFile: "string; local JSON file containing the complete term meta object",
           meta: {
+            custom_layout_enabled: "string enum 0 or 1; enables the custom layout when set to 1",
+            custom_layout_html: "string; custom layout HTML sanitized with WordPress safe post HTML rules; empty string clears it",
+            custom_layout_css: "string; multiline custom layout CSS with HTML tags removed; empty string clears it",
             thumbnail_id: "non-negative integer; category thumbnail attachment ID",
             banner_id: "non-negative integer; category banner attachment ID",
             category_h1_title: "string",
@@ -321,18 +328,76 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
           }
         }
       },
-      notes: ["Deletion requires force=true.", "Use empty strings, empty arrays, 0, or string 0 according to each field's declared clearing value."]
+      notes: ["Discover enabled dynamic fields using wp_catalog_fields_get with the same authenticated client. Read existing meta with context=edit before writing; send changed keys only. null deletes, arrays replace, omitted keys are preserved. Field definitions remain managed in WordPress admin.", "Deletion requires force=true.", "Use empty strings, empty arrays, 0, or string 0 according to each field's declared clearing value."]
+    },
+    menu: {
+      name: "menu",
+      title: "WordPress classic navigation menu",
+      description: "Classic WordPress navigation menus, active-theme locations, and ordered hierarchical menu items.",
+      remoteSchemaPath: "wp-json/wp/v2/menus",
+      mcpTools: ["wp_menu_list", "wp_menu_get", "wp_menu_create", "wp_menu_update", "wp_menu_delete", "wp_menu_item_create", "wp_menu_item_update", "wp_menu_item_delete"],
+      writeShape: {
+        menu: {
+          data: {
+            name: "string; required when creating",
+            slug: "string",
+            description: "string",
+            locations: "string[]; replaces this menu's complete theme-location assignment; [] clears assignments",
+            autoAdd: "boolean; automatically add new top-level pages"
+          }
+        },
+        menuItem: {
+          data: {
+            menuId: "positive integer; required when creating; updating moves the item to another menu",
+            title: "string; required for custom items",
+            type: "custom | post_type | taxonomy | post_type_archive; defaults to custom",
+            url: "string; required for custom items",
+            object: "string; required for non-custom items, for example page, product, category, or product_cat",
+            objectId: "positive integer; required for post_type and taxonomy items",
+            parent: "non-negative integer; parent menu item ID, 0 makes the item top-level",
+            menuOrder: "positive integer; one-based position",
+            target: "empty string or _blank",
+            classes: "string[]; [] clears classes",
+            xfn: "string[]; [] clears XFN values",
+            description: "string",
+            attrTitle: "string",
+            status: "publish | draft",
+            meta: "object; registered menu-item REST meta"
+          }
+        }
+      },
+      responseShape: {
+        menu: "{id,name,slug,description,locations:string[],auto_add:boolean}",
+        locations: "object keyed by active-theme location name; each value contains name, description, and assigned menu ID",
+        items: "ordered array of {id,title,status,url,type,object,object_id,parent,menu_order,target,classes,xfn,menus,meta}"
+      },
+      example: {
+        createMenu: { data: { name: "Primary navigation", locations: ["primary"] } },
+        createCustomItem: { data: { menuId: 12, title: "Contact", type: "custom", url: "https://example.com/contact/", menuOrder: 1 } },
+        createProductCategoryItem: { data: { menuId: 12, title: "Pumps", type: "taxonomy", object: "product_cat", objectId: 8, parent: 0 } }
+      },
+      notes: [
+        "Call wp_menu_list first to discover menu IDs and valid theme location names, then wp_menu_get before changing hierarchy or order.",
+        "Updating locations replaces every location assigned to that menu; omitted locations are preserved.",
+        "Deleting a menu requires force=true because menus do not support trash; menu items use trash unless force=true."
+      ]
     },
     media: {
       name: "media",
       title: "WordPress media attachment",
       description: "WordPress media attachment uploaded from a local bitmap; JPEG and PNG sources are converted to WebP before upload.",
       remoteSchemaPath: "wp-json/wp/v2/media",
-      mcpTools: ["wp_media_upload", "wp_rest_api"],
+      mcpTools: ["wp_media_batch_import", "wp_media_upload", "wp_media_list", "wp_media_get", "wp_media_update", "wp_media_delete", "wp_media_alt_update", "wp_media_category_list", "wp_media_category_get", "wp_media_category_create", "wp_media_category_update", "wp_media_category_delete", "wp_api_route"],
       writeShape: {
         filePath: "required string; local .avif, .gif, .jpeg, .jpg, .png, or .webp path; JPEG/PNG upload as WebP",
+        post: "optional non-negative safe integer for upload and each batch item; parent post ID in initial upload, 0 leaves unattached",
+        mediaId: "required positive attachment ID for get/update/delete/alt_update",
+        data: "wp_media_update: non-empty object with title, altText, caption, description, slug, post, categories; empty strings clear text; post=0 detaches parent",
+        categories: "Jelly Editor media category IDs; upload assigns them, update replaces all ([] clears), list matches any; REST field media_category",
+        categoryId: "category get/update/delete ID; create/update use data:{name?,slug?,description?,parent?}; create requires name; delete requires force:true and keeps media files",
+        force: "wp_media_delete: required literal true; permanently deletes attachment and files",
         title: "string",
-        altText: "string; mapped to REST alt_text",
+        altText: "string; mapped to REST alt_text; empty string clears it when updating",
         caption: "string",
         description: "string"
       },
@@ -349,10 +414,11 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
         media_type: "string",
         mime_type: "string",
         media_details: "object; dimensions, sizes, and file metadata",
-        source_url: "string; uploaded file URL"
+        source_url: "string; uploaded file URL",
+        media_category: "integer[]; assigned Jelly Editor media category IDs, requires its REST-enabled taxonomy"
       },
       example: { filePath: "C:/content/product.jpg", title: "Product front view", altText: "Product front view" },
-      notes: ["JPEG and PNG are converted in memory to quality-85 WebP before any network request.", "GIF, AVIF, and existing WebP remain unchanged.", "The MCP tool intentionally rejects SVG and non-bitmap files.", "Upload first, then reuse the returned id in content or taxonomy writes."]
+      notes: ["JPEG and PNG are converted in memory to quality-85 WebP before any network request.", "GIF, AVIF, and existing WebP remain unchanged.", "The MCP upload tool intentionally rejects SVG and non-bitmap files.", "Use wp_media_alt_update with mediaId and altText to edit or clear an existing attachment's alt text.", "Upload first, then reuse the returned id in content or taxonomy writes."]
     },
     "seo-meta": {
       name: "seo-meta",

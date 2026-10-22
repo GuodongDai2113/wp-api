@@ -8,10 +8,7 @@ import {
   updateLinkInContent,
   type PostLinkEntry
 } from "../../wordpress/content/links.js";
-import {
-  type UploadMediaOptions,
-  WordPressClient
-} from "../../wordpress/client.js";
+import { WordPressClient } from "../../wordpress/client.js";
 import { assertPositiveId } from "../shared/validation.js";
 import type { WordPressResourceEntity } from "./resources.js";
 
@@ -85,37 +82,6 @@ export interface PostContentReplacePayload {
   replacement: string;
   /** 实际替换次数。 */
   replacements: number;
-}
-
-/** 媒体上传工具接收的 MCP 风格输入。 */
-export interface MediaUploadInput {
-  /** MCP 服务进程可读取的本地媒体文件路径。 */
-  filePath: string;
-  /** WordPress 媒体标题。 */
-  title?: string;
-  /** WordPress 媒体替代文本。 */
-  altText?: string;
-  /** WordPress 媒体说明文字。 */
-  caption?: string;
-  /** WordPress 媒体描述。 */
-  description?: string;
-}
-
-/** WordPress 媒体附件返回的最小稳定结构。 */
-export interface MediaUploadPayload {
-  /** WordPress 媒体附件 ID。 */
-  id?: number;
-  /** WordPress 媒体附件源文件 URL。 */
-  source_url?: string;
-  /** WordPress 媒体附件标题。 */
-  title?: {
-    /** 已渲染的标题文本。 */
-    rendered?: string;
-  };
-  /** WordPress 媒体附件 slug。 */
-  slug?: string;
-  /** 允许保留 WordPress 返回的其他媒体字段。 */
-  [key: string]: unknown;
 }
 
 /** 列出、添加、更新或移除文章正文中的链接。 */
@@ -213,21 +179,4 @@ export async function replacePostContent(
     replacement: input.replacement,
     replacements: result.replacements
   };
-}
-
-/** 从本地文件上传媒体，并把 MCP camelCase 元数据映射为 WordPress client 选项。 */
-export async function uploadMedia(
-  client: WordPressClient,
-  input: MediaUploadInput
-): Promise<MediaUploadPayload> {
-  if (!input.filePath) {
-    throw new Error("Media filePath is required.");
-  }
-  const options = Object.fromEntries(Object.entries({
-    title: input.title,
-    altText: input.altText,
-    caption: input.caption,
-    description: input.description
-  }).filter(([, value]) => value !== undefined && value !== "")) as UploadMediaOptions;
-  return client.uploadMediaFromFile<MediaUploadPayload>(input.filePath, options);
 }

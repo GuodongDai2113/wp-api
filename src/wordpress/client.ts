@@ -2,6 +2,7 @@ import { open } from "node:fs/promises";
 import { lookup as lookupHostname } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, extname } from "node:path";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 
 import { prepareMediaImage } from "./media/image.js";
 
@@ -19,6 +20,9 @@ const DEFAULT_MAX_PACKAGE_FILE_BYTES = 100 * 1024 * 1024;
 
 /** 远程插件下载默认允许跟随的最大重定向次数。 */
 const DEFAULT_MAX_REMOTE_REDIRECTS = 3;
+
+/** Jelly Core 当前更新协议使用的固定 HMAC 密钥。 */
+const JELLY_CORE_REST_SECRET = "jellydai-password";
 
 /** 媒体上传允许使用的常见位图扩展名及对应 MIME 类型。 */
 const ALLOWED_MEDIA_CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
@@ -82,6 +86,10 @@ export interface RequestOptions {
 
 /** WordPress 媒体上传选项。 */
 export interface UploadMediaOptions {
+  /** 首次创建附件时关联的文章 ID；0 表示不关联文章，省略沿用默认行为。 */
+  post?: number;
+  /** 上传后随元数据设置的 Jelly Editor 媒体分类 ID；空数组表示无分类。 */
+  categories?: number[];
   /** 写入 WordPress 媒体库的标题。 */
   title?: string;
   /** 写入 WordPress 媒体库的替代文本。 */
@@ -98,6 +106,8 @@ export interface UploadMediaOptions {
 
 /** WordPress 媒体上传请求选项。 */
 interface MediaUploadRequestOptions {
+  /** 与二进制请求体一起提交的 REST 查询参数。 */
+  query?: QueryParams;
   /** HTTP 方法。 */
   method?: string;
   /** 额外请求头。 */
@@ -276,15 +286,29 @@ function buildPublicHeaders(
   return headers;
 }
 
+/** 将 JSON 请求值序列化为实际发送和签名共用的 UTF-8 字符串。 */
+function serializeJsonRequestBody(body: unknown): string {
+  return JSON.stringify(body);
+}
+
 /**
- * 构造 Jelly Core 旧版协议要求的兼容请求头。
- * 该值不包含秘密，不能替代 WordPress 应用密码与服务端权限校验。
+ * 按 Jelly Core v1 新协议构造绑定方法、路由、时间戳、Nonce 和请求体的 HMAC 请求头。
+ * WordPress 应用密码仍负责用户认证与能力校验，共享密钥只用于请求完整性和防重放。
  */
-function buildJellyCompatibilityHeaders(): Record<string, string> {
+function buildJellyRequestHeaders(
+  method: string,
+  apiPath: string,
+  body: string | Uint8Array
+): Record<string, string> {
   const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = randomBytes(18).toString("base64url");
+  const route = `/${apiPath.replace(/^\/+/, "")}`;
+  const bodyHash = createHash("sha256").update(body).digest("hex");
+  const payload = [method.toUpperCase(), route, timestamp, nonce, bodyHash].join("\n");
   return {
     "X-Jelly-Timestamp": timestamp,
-    "X-Jelly-Signature": Buffer.from(`jellycore${timestamp}`).toString("base64")
+    "X-Jelly-Nonce": nonce,
+    "X-Jelly-Signature": createHmac("sha256", JELLY_CORE_REST_SECRET).update(payload).digest("hex")
   };
 }
 
@@ -372,15 +396,16 @@ function readMediaId(media: unknown): number {
 }
 
 /** 构造媒体附件元数据更新请求体。 */
-function buildMediaMetadataBody(options: UploadMediaOptions): Record<string, string> {
+function buildMediaMetadataBody(options: UploadMediaOptions): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries({
       title: options.title,
       alt_text: options.altText,
       caption: options.caption,
-      description: options.description
+      description: options.description,
+      media_category: options.categories
     }).filter(([, value]) => value !== undefined && value !== "")
-  ) as Record<string, string>;
+  );
 }
 
 /** 校验并规范化要求为正整数的 client 限额选项。 */
@@ -835,7 +860,7 @@ export class WordPressClient {
       response = await this.fetchWithLimits(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body)
+        body: body === undefined ? undefined : serializeJsonRequestBody(body)
       });
     } catch (error) {
       throw new WordPressNetworkError({ method, url, cause: error });
@@ -866,9 +891,9 @@ export class WordPressClient {
   /** 直接请求 `wp-json/` 下的指定 API path，并发送非 JSON 请求体。 */
   async requestApiPathWithRawBody<T = unknown>(
     apiPath: string,
-    { method = "POST", headers: extraHeaders, body }: MediaUploadRequestOptions
+    { method = "POST", headers: extraHeaders, body, query }: MediaUploadRequestOptions
   ): Promise<RequestResult<T>> {
-    const url = joinApiUrl(this.baseUrl, apiPath);
+    const url = joinApiUrl(this.baseUrl, apiPath, query);
     const headers = this.authentication === "basic"
       ? buildAuthenticatedHeaders(this.username, this.appPassword, extraHeaders, false)
       : buildPublicHeaders(extraHeaders, false);
@@ -938,6 +963,14 @@ export class WordPressClient {
 
   /** 从本地路径读取图片，按需压缩为 WebP 后上传到 WordPress 媒体库。 */
   async uploadMediaFromFile<T = unknown>(filePath: string, options: UploadMediaOptions = {}): Promise<T> {
+    if (options.post !== undefined && (!Number.isSafeInteger(options.post) || options.post < 0)) {
+      throw new TypeError("Media post must be a non-negative safe integer.");
+    }
+    if (options.categories !== undefined && (!Array.isArray(options.categories)
+      || options.categories.some((id) => !Number.isSafeInteger(id) || id <= 0)
+      || new Set(options.categories).size !== options.categories.length)) {
+      throw new TypeError("Media categories must contain unique positive integer IDs.");
+    }
     const filename = options.filename ?? basename(filePath);
     const inferredContentType = inferImageContentType(filePath);
     inferImageContentType(filename);
@@ -946,6 +979,7 @@ export class WordPressClient {
     const preparedImage = await prepareMediaImage(fileBytes, filename, inferredContentType);
     const result = await this.requestApiPathWithRawBody<T>("wp/v2/media", {
       method: "POST",
+      query: options.post === undefined ? undefined : { post: options.post },
       headers: {
         "Content-Type": preparedImage.convertedToWebp ? preparedImage.contentType : contentType,
         "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(preparedImage.filename)}"`
@@ -960,7 +994,15 @@ export class WordPressClient {
 
     const mediaId = readMediaId(result.data);
     try {
-      return await this.update<T>("media", mediaId, metadataBody);
+      const updated = await this.update<T>("media", mediaId, metadataBody);
+      if (options.categories !== undefined) {
+        const assigned = isObject(updated) ? updated.media_category : undefined;
+        if (!Array.isArray(assigned) || assigned.length !== options.categories.length
+          || options.categories.some((id) => !assigned.includes(id))) {
+          throw new Error("Media categories were not assigned as requested. Enable Jelly Editor REST media_category and check the category IDs.");
+        }
+      }
+      return updated;
     } catch (error) {
       try {
         await this.delete("media", mediaId, { force: true });
@@ -973,10 +1015,13 @@ export class WordPressClient {
 
   /** 使用 jelly-core REST API 从远程包 URL 安装或更新插件。 */
   async jellyCorePluginInstall<T = unknown>(pluginSlug: string, packageUrl: string): Promise<T> {
+    const apiPath = "jelly-core/v1/plugins/update";
+    const body = { plugin_name: pluginSlug, package_url: packageUrl };
+    const serializedBody = serializeJsonRequestBody(body);
     const result = await this.requestApiPath<T>("jelly-core/v1/plugins/update", {
       method: "POST",
-      body: { plugin_name: pluginSlug, package_url: packageUrl },
-      headers: buildJellyCompatibilityHeaders()
+      body,
+      headers: buildJellyRequestHeaders("POST", apiPath, serializedBody)
     });
     return result.data;
   }
@@ -998,13 +1043,14 @@ export class WordPressClient {
     const filename = basename(filePath);
 
     const themeSlug = filename.replace(/\.zip$/i, "");
-    const result = await this.requestApiPathWithRawBody<T>("jelly-core/v1/themes/install", {
+    const apiPath = "jelly-core/v1/themes/install";
+    const result = await this.requestApiPathWithRawBody<T>(apiPath, {
       method: "POST",
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${escapeContentDispositionFilename(filename)}"`,
         "X-Jelly-Theme-Slug": themeSlug,
-        ...buildJellyCompatibilityHeaders()
+        ...buildJellyRequestHeaders("POST", apiPath, fileBytes)
       },
       body: fileBytes as BodyInit
     });
@@ -1018,15 +1064,18 @@ export class WordPressClient {
     status: "active" | "inactive",
     replacementTheme?: string
   ): Promise<T> {
+    const apiPath = `jelly-core/v1/themes/${encodeURIComponent(themeSlug)}/status`;
+    const body = {
+      status,
+      ...(replacementTheme ? { replacement_theme: replacementTheme } : {})
+    };
+    const serializedBody = serializeJsonRequestBody(body);
     const result = await this.requestApiPath<T>(
-      `jelly-core/v1/themes/${encodeURIComponent(themeSlug)}/status`,
+      apiPath,
       {
         method: "POST",
-        body: {
-          status,
-          ...(replacementTheme ? { replacement_theme: replacementTheme } : {})
-        },
-        headers: buildJellyCompatibilityHeaders()
+        body,
+        headers: buildJellyRequestHeaders("POST", apiPath, serializedBody)
       }
     );
 

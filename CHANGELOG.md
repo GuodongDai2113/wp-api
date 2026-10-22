@@ -4,6 +4,27 @@
 
 ## Unreleased
 
+### Added
+
+- 单文件媒体上传与批量导入条目新增 `post`，随首次附件创建请求关联父文章，不因关联操作追加更新请求；支持 `0` 表示不关联并校验安全整数。
+- 新增 `wp_media_batch_import`，支持 1～100 个本地媒体及独立元数据、分类的顺序导入；上传前校验全部路径，逐项失败继续并返回紧凑回执，不自动重试。
+- 新增五个 `wp_media_category_*` 工具，管理 Jelly Editor `media_category` 分类；媒体上传支持 `categories` 并核对分配结果，媒体更新支持替换/清空分类，媒体列表支持分类筛选。
+- 媒体工具拆分到独立 `media.ts`，新增 `wp_media_list/get/update/delete`，保留上传创建与独立 alt 更新；支持分页筛选、编辑上下文、元数据清空和显式永久删除。
+- 新增 8 个 WordPress 经典导航菜单工具，支持发现主题位置、读取完整菜单项以及创建、更新、排序、移动和删除菜单与菜单项。
+- 新增认证工具 `wp_catalog_fields_get`，读取 Jelly Catalog 产品和分类的字段说明、选项及完整重复组 schema。
+- `wp_resource_get` 新增 `context: "view" | "edit"`，支持更新前读取原始内容；补充动态 Meta 部分更新、删除及 HTML 内容工作流。
+
+- 新增 `wp_media_alt_update`，允许 Agent 按附件 ID 直接更新或清空媒体库图片的替代文本。
+
+### Changed
+
+- `wp_api_route` 默认改为严格分层的 `overview`，不自动展开路由定义；新增 `section/httpMethod/names` 支持分页目录及按需获取完整参数、字段定义。默认输出形状发生变化：依赖旧摘要的调用方需显式传入 `detail: "summary"`；无 section 的 `full` 原始响应保持不变。
+- 将公开 MCP 工具 `wp_rest_api` 重命名为 `wp_api_route`，并将源码模块 `api-schema` 同步重命名为 `api-route`；输入参数、返回结构和行为保持不变。
+
+### Security
+
+- 对接 Jelly Core 1.4.0 的 HMAC-SHA256 新协议：使用协议固定密钥，签名绑定方法、路由、时间戳、随机 Nonce 和原始请求体，无需额外配置 Jelly Core 密钥。
+
 ## 2.2.0
 
 ### Changed

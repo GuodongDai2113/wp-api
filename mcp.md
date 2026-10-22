@@ -1,6 +1,55 @@
 # wp-api MCP 服务配置与工具参考
 
-`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 35 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
+## Jelly Catalog 动态字段工作流
+
+新增认证只读工具 `wp_catalog_fields_get`。参数为已保存的 `client`、可选同源 `siteUrl`，以及 `target: "product" | "product_cat"`。分别请求 `GET jelly-catalog/v1/fields/product` 和 `GET jelly-catalog/v1/fields/product_cat`。完整保留 `dynamic_fields` 中的标签、用途、类型、选项以及重复组子字段 schema，同时返回 `meta_schema`、`endpoint` 和更新规则。大量输出仍遵守统一的本地 JSON 结果文件机制，不裁剪字段定义。
+
+Agent 应按以下顺序操作同一站点：
+
+1. 用 `wp_catalog_fields_get` 获取本次可填字段；不要猜测 `_jc_dynamic_` 键名或枚举值。
+2. 用 `wp_resource_get`，传入 `context: "edit"`，读取目标对象的当前值。省略 context 时保持原来的 view 行为。
+3. 用 `wp_resource_update` 的 `data.meta`（或 `data.metaFile`）提交需要改变的键。也支持现有创建与批量工具。
+4. 检查更新响应，必要时再次读取确认。字段停用后原生 API 可能忽略旧键，不能仅以 HTTP 成功判断该键已写入。
+
+```json
+{"client":"factory","target":"product_cat"}
+```
+
+上面用于 `wp_catalog_fields_get`；下面用于 `wp_resource_get`：
+
+```json
+{"client":"factory","target":{"type":"taxonomy","resource":"product-categories"},"id":45,"context":"edit"}
+```
+
+下面用于 `wp_resource_update`，其中动态字段键必须以实时目录为准：
+
+```json
+{
+  "client": "factory",
+  "target": {"type": "taxonomy", "resource": "product-categories"},
+  "id": 45,
+  "data": {
+    "meta": {
+      "category_buying_guide": "<p>根据工作介质、温度和压力选择型号。</p>",
+      "category_why_choose": "<p>提供可追溯的质量检验记录。</p>",
+      "_jc_dynamic_material": "steel"
+    }
+  }
+}
+```
+
+产品对应发现目标 `product`，资源目标为 `{"type":"post","resource":"products"}`。分类对应发现目标 `product_cat`，资源目标为 `{"type":"taxonomy","resource":"product-categories"}`。
+
+- 顶层未提交键保持原值；`null` 删除 Meta；`0`、空字符串和空数组原样传递。
+- 重复组整体替换，不按行合并；提交行中省略的子字段会被后台清空，应先读取并保留其他内容。
+- 附件字段使用非负 ID；图库仍为 `"12,34"` 形式的字符串。数字使用 JSON number，开关使用整数 0/1；多选为选项值数组。以目录 schema 为最终依据。
+- 数字顶层字段清空使用 `null`，WordPress 回读空数字为 0。选项提交 value，不提交显示标签。
+- Buying Guide、Category Why Choose 等编辑器字段提交源 HTML，不写入 Elementor 前台渲染结果；段落格式化由站点负责。
+- 本工具仅发现定义、其他资源工具更新值；不提供远程新增、删除或停用字段定义的功能。
+- 必须使用配置好的 WordPress 认证用户并具备编辑权限。401/403 原样报错，404 表示需确认插件版本和路由；不要回退到匿名 `wp_api_route` 并假定目录为空。
+- 目录中的 endpoint 仅作说明，本工具不会向它转发认证信息。资源工具继续使用固定的 Jelly Catalog 原生路由；自定义重写 REST base 的站点暂不自动适配。
+
+`wp-api` 是纯 STDIO MCP 服务，产品能力面向 Jelly Catalog，不面向 WooCommerce。MCP host 应启动 `wp-api-mcp`，或在项目目录执行 `npm start`，然后通过 55 个结构化工具完成操作。账号凭据由独立的 `wp-api-config` 本地网页管理。
 
 ## 1. 安装和启动入口
 
@@ -124,7 +173,7 @@ wp-api-config
 
 浏览器页面支持新增、编辑、删除和测试连接。用户名与 Application Password 只提交给回环地址上的一次性配置服务，不应通过 Agent 或 MCP 工具输入。密码保存后不回显；编辑时留空表示保留原密码。
 
-凭据默认保存到当前用户的 `~/.wp-api/`。`vault.json` 是包含用户名和密码的 AES-256-GCM 密文，`vault.key` 是每台主机首次写入时生成的 256 位随机密钥。两者均使用当前用户专用文件权限，写入采用原子替换与跨进程锁。通过 `WP_API_CONFIG_DIR` 可以为多实例指定不同目录，但配置 UI 与 MCP host 必须使用同一个值。
+凭据默认保存到当前用户的 `~/.wp-api/`。`vault.json` 是包含用户名和应用密码的 AES-256-GCM 密文，`vault.key` 是每台主机首次写入时生成的 256 位随机密钥。两者均使用当前用户专用文件权限，写入采用原子替换与跨进程锁。通过 `WP_API_CONFIG_DIR` 可以为多实例指定不同目录，但配置 UI 与 MCP host 必须使用同一个值。
 
 构建过程不会读取或复制凭据，npm 包中也不包含凭据。文件加密可以防止明文误读、打包和日志泄漏，但不能抵御拥有同一系统用户任意文件及代码执行权限的恶意程序。
 
@@ -152,14 +201,14 @@ wp-api-config
 
 ## 4. 通用调用约定
 
-除两个 client 工具、`wp_structure_get`、`wp_rest_api` 和两个纯本地打包工具外，其他远端工具均支持：
+除两个 client 工具、`wp_structure_get`、`wp_api_route` 和两个纯本地打包工具外，其他远端工具均支持：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `client` | string，必填 | 本次调用使用的已保存 client |
 | `siteUrl` | string，可选 | 本次调用临时使用的同源 WordPress 子路径 |
 
-远端工具不传 `client` 时调用失败。`wp_rest_api` 是独立的公开只读工具：它不接受 `client` 或 `siteUrl`，只接受裸 `domain` 并固定拼接 HTTPS REST 地址，因此不会读取或发送本地凭据。
+远端工具不传 `client` 时调用失败。`wp_api_route` 是独立的公开只读工具：它不接受 `client` 或 `siteUrl`，只接受裸 `domain` 并固定拼接 HTTPS REST 地址，因此不会读取或发送本地凭据。
 
 不超过 8 KiB 的工具结果通过 MCP 同时返回文本 JSON 与结构化内容；结构化 payload 位于：
 
@@ -173,7 +222,7 @@ wp-api-config
 
 失败会作为 MCP tool error 返回，不会把错误伪装成成功结果。写操作应由上层 Agent 在调用前向用户确认目标站点、资源 ID 和破坏性语义。
 
-## 5. 35 个 MCP 工具
+## 5. 55 个 MCP 工具
 
 ### 5.1 Client（2 个）
 
@@ -184,21 +233,32 @@ wp-api-config
 
 Agent 不能通过 MCP 新增、编辑或删除连接；这些操作只能在 `wp-api-config` 页面完成。如需彻底停用旧凭据，还应在 WordPress 端撤销对应 Application Password。
 
-### 5.2 本地结构与 REST 接口结构（2 个）
+### 5.2 本地结构与 REST 接口结构（3 个）
 
 | 工具 | 必填输入 | 可选输入 | 说明 |
 | --- | --- | --- | --- |
+| `wp_catalog_fields_get` | `client`、`target` | `siteUrl` | 认证读取产品或分类字段目录；target 为 product 或 product_cat，保留说明与完整重复组结构 |
 | `wp_structure_get` | 无 | `structure`、`section` | 省略结构时列目录；指定结构后默认返回概览，也可只取 `write`、`response` 或 `example`；`full` 返回完整兼容结构；纯本地，不需要 client |
-| `wp_rest_api` | `domain` | `apiPath`、`search`、`offset`、`limit`、`detail` | 使用裸域名固定拼接公开 HTTPS 地址；`apiPath` 默认 `wp-json`，根路径返回分页路由摘要，具体路径以 `OPTIONS` 读取实时定义；不使用 client 凭据 |
+| `wp_api_route` | `domain` | `apiPath`、`section`、`httpMethod`、`names`、`search`、`offset`、`limit`、`detail` | 公开 HTTPS 元数据查询；默认 overview 不展开定义，按需获取目录及完整约束；不使用 client 凭据 |
+
+`wp_api_route` 按需披露，已知路径或字段名时可直接跳到所需层级：
+
+1. `{ "domain": "example.com" }`：仅命名空间和路由数量。
+2. 加 `search: "product"` 或 `section: "routes"`：路由目录，默认每页 20 条，支持 `offset/limit`。
+3. 加 `apiPath: "wp/v2/product"`：仅方法和参数、字段数量。索引中的正则占位符需替换为实际值后再查询。
+4. 在具体路径上加 `section: "arguments", httpMethod: "POST"` 或 `section: "fields"`：参数或响应字段名称目录，支持 `search/offset/limit`。
+5. 再加 `names: ["meta"], detail: "full"`：仅所选条目的完整定义，保留描述、深层嵌套和所有约束。`names` 精确匹配顶层名称。
+
+每层概览附带 `next` 提示，未请求的定义不会伪装成空对象。兼容旧行为时，显式使用无 section 的 `detail: "summary"`（旧摘要，根索引每页默认 50 条）或 `detail: "full"`（原始响应）。摘要会省略部分约束，不能代替完整校验设定。目录分页仅减少会话输出，每次仍获取上游元数据。
 
 `wp_structure_get` 支持：
 
 ```text
-post | page | product | category | product-category | product-tag
+post | page | product | category | product-category | menu
 media | seo-meta | elementor-page
 ```
 
-Agent 已能从工具输入 schema 看到稳定的本地结构，因此不必先列目录。应直接请求任务需要的最小片段；只有插件动态字段无法由本地目录确定时，再调用 `wp_rest_api`。例如：
+Agent 已能从工具输入 schema 看到稳定的本地结构，因此不必先列目录。应直接请求任务需要的最小片段；Jelly Catalog 动态字段使用认证工具 `wp_catalog_fields_get`，其他公开 REST 结构使用 `wp_api_route`。例如：
 
 ```json
 { "structure": "elementor-page", "section": "write" }
@@ -256,7 +316,7 @@ post 资源 `data` 写入字段：
 - `gutenberg`：先按标签、属性和 WordPress URL 协议允许列表清理解析后的 HTML，再转换为 Gutenberg 区块标记；事件属性、内联样式、活动协议和嵌入内容不会保留
 - `featuredMedia`：非负附件 ID，`0` 表示清空
 - `categories`：分类正整数 ID 数组，`[]` 表示清空；文章自动映射为 REST `categories`，产品自动映射为 REST `product_cat`，页面不支持
-- `meta`：目标资源已注册的 REST meta 对象；写入插件业务字段前先调用 `wp_rest_api`
+- `meta`：目标资源已注册的 REST meta 对象；Jelly Catalog 动态字段写入前先调用认证工具 `wp_catalog_fields_get`
 - `metaFile`：包含完整 REST meta 对象的本地 JSON 文件，适合大型 meta；不能和 `meta` 同时使用
 
 taxonomy 资源 `data` 写入字段：
@@ -303,9 +363,26 @@ Jelly Catalog 产品分类 `meta`：
 
 `perPage` 仅允许 `1..100`。`wp_resource_list.outputFile` 使用编辑上下文按每页 100 条把全部匹配项追加到临时 CSV，完成后通过同目录排他硬链接原子发布，目标即使在导出期间由其他进程创建也不会被覆盖。导出会读取每页最新的 `X-WP-TotalPages`，在页数增长时继续、缩减导致页码越界时正常结束；WordPress 页码分页仍不能提供并发写入下的快照一致性。post 表头为 `id,title,slug,status,excerpt,content,gutenberg,featuredMedia,categories,meta`；taxonomy 表头为 `id,name,slug,description,parent,meta`。post CSV 的 `categories` 同样按目标映射到文章分类或产品分类。工具根据 `target.type` 选择并严格校验表头。数组和 `meta` 使用 JSON，空单元格表示省略，`__EMPTY__` 表示显式清空字符串。批量工具通过 `/wp-json/batch/v1` 提交且不接受逐项 `contentFile` 或 `metaFile`；每批最多 25 条且序列化 JSON 不超过 8 MiB，整次调用的累计子请求 JSON 不超过 25 MiB，所有大小校验均在联网前完成。
 
-分类、产品分类和产品标签没有回收站，`wp_resource_delete` 对所有 taxonomy 资源强制要求 `force: true`；文章、页面和产品只有显式传入 `force: true` 才会永久删除，否则进入回收站。
+分类和产品分类没有回收站，`wp_resource_delete` 对所有 taxonomy 资源强制要求 `force: true`；文章、页面和产品只有显式传入 `force: true` 才会永久删除，否则进入回收站。
 
-### 5.4 SEO 与文章编辑（6 个）
+### 5.4 WordPress 经典导航菜单（8 个）
+
+菜单工具使用 WordPress 原生 `/wp-json/wp/v2/menus`、`menu-items` 和 `menu-locations` 接口：
+
+| 工具 | 必填输入 | 可选输入/说明 |
+| --- | --- | --- |
+| `wp_menu_list` | 通用连接字段 | `search`、`page`、`perPage`；同时返回主题位置及其菜单 ID |
+| `wp_menu_get` | `id`、通用连接字段 | 返回菜单和按 `menu_order` 排序的全部可编辑菜单项 |
+| `wp_menu_create` | `data.name`、通用连接字段 | `data` 可含 `slug`、`description`、`locations`、`autoAdd` |
+| `wp_menu_update` | `id`、`data`、通用连接字段 | 只发送变化字段；`locations` 会替换该菜单的全部位置分配 |
+| `wp_menu_delete` | `id`、`force: true`、通用连接字段 | 菜单没有回收站，永久删除必须显式确认 |
+| `wp_menu_item_create` | `data.menuId`、通用连接字段 | custom 需要 `title`、`url`；post_type/taxonomy 需要 `object`、`objectId` |
+| `wp_menu_item_update` | `id`、`data`、通用连接字段 | 可修改 `parent`、`menuOrder`、`menuId` 以调整层级、顺序或所属菜单 |
+| `wp_menu_item_delete` | `id`、通用连接字段 | 默认移入回收站；`force: true` 永久删除 |
+
+创建菜单项支持 `custom`、`post_type`、`taxonomy`、`post_type_archive`。调整层级或顺序前应先调用 `wp_menu_get`；分配主题位置前应先调用 `wp_menu_list` 获取有效位置名称。
+
+### 5.5 SEO 与文章编辑（6 个）
 
 | 工具 | 必填输入 | 可选/动作相关输入 |
 | --- | --- | --- |
@@ -339,7 +416,48 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 
 链接地址必须是 HTTP(S) URL 或不含控制字符的相对 URL。文章链接和正文替换都读取 `context=edit` 下的 raw content；账号必须有编辑权限。正文替换会替换所有精确匹配，`replacement: ""` 表示删除匹配文本。
 
-### 5.5 媒体（1 个）
+### 5.6 媒体（12 个）
+
+单文件 `wp_media_upload` 和批量导入的每个条目均支持可选 `post`：非负安全整数，正数为父文章 ID，`0` 表示不关联。该参数通过首次二进制上传请求的查询参数提交，不放入后续元数据更新体，因此仅传 `post` 时仍只有一次上传请求。省略时保持原行为；目标文章和编辑权限由 WordPress 校验。
+
+`wp_media_batch_import` 批量导入 1～100 个本地位图，按顺序执行并复用单文件上传的压缩、分类验证和清理逻辑。所有条目参数及路径边界在上传前验证；文件格式、内容及大小在逐项上传时检查。单项上传失败不会中断后续条目，也不会回滚之前的成功项。返回 `total/succeeded/failed/items`，每项包含零基 `index`、`filePath`、`success`，成功时包含 `id/source_url`，失败时包含简短 `error`。超时或清理失败可能留有附件，重试失败项前需核对媒体库；不得直接重跑整个批次。
+
+```json
+{
+  "client": "factory",
+  "items": [
+    { "filePath": "C:/content/front.jpg", "title": "产品正面", "altText": "产品正面图", "categories": [12] },
+    { "filePath": "C:/content/back.png", "title": "产品背面", "altText": "产品背面图", "categories": [12] }
+  ]
+}
+```
+
+Jelly Editor 媒体分类使用原生 `/wp-json/wp/v2/media_category` 接口，插件必须在 REST 请求中注册 `media_category` 并启用 `show_in_rest`。分类管理需要 `manage_categories`，附件分类分配需要 `upload_files` 和对应附件编辑权限。
+
+| 分类工具 | 输入与行为 |
+| --- | --- |
+| `wp_media_category_list` | `page/perPage/search/parent/hideEmpty` 可选；默认 1/20，`hideEmpty: false` 包含空分类 |
+| `wp_media_category_get` | 必填 `categoryId` |
+| `wp_media_category_create` | `data.name` 必填，可选 `slug/description/parent`，`parent: 0` 为顶级 |
+| `wp_media_category_update` | `categoryId` 和非空 `data`；同上可写字段，空描述清空、`parent: 0` 移至顶级 |
+| `wp_media_category_delete` | `categoryId` 和 `force: true`，仅删除分类和关联，不删除附件及文件 |
+
+媒体上传传入 `categories: [分类ID]`，同一次工具调用先上传文件，再随元数据设置分类，并核对返回的分类 ID。分类被忽略或分配失败时执行现有附件清理流程；清理失败仍返回原错误。它是两次 HTTP 写入，不是数据库事务。已有附件可通过 `wp_media_update` 的 `data.categories` 替换全部分类，`[]` 清空，省略不修改。媒体列表的 `categories` 匹配任一分类，空数组不筛选；媒体响应中的字段名为 `media_category`。
+
+```json
+{"client":"factory","filePath":"C:/content/product.jpg","altText":"产品正面图","categories":[12]}
+```
+
+媒体逻辑集中在 `src/mcp/tools/media.ts`，创建沿用上传工具：
+
+| 工具 | 输入与行为 |
+| --- | --- |
+| `wp_media_list` | 可选 `page/perPage`（默认 1/20）、`search/include/exclude/parent/mediaType/mimeType`；返回 `items` 和 `pagination`，`parent: 0` 筛选未关联文章的附件 |
+| `wp_media_get` | 必填 `mediaId`；可选 `context: "view" | "edit"`，默认 view，edit 读取原始可编辑字段并要求编辑权限 |
+| `wp_media_update` | 必填 `mediaId` 和非空 `data`；支持 `title/altText/caption/description/slug/post`，仅修改提供的字段，空字符串清空文本，`post: 0` 解除文章关联；不替换文件 |
+| `wp_media_delete` | 必填 `mediaId` 和 `force: true`，永久删除附件及文件；已有内容中的引用可能失效 |
+| `wp_media_upload` | 通过本地文件创建附件，详见下文 |
+| `wp_media_alt_update` | 独立更新或清空替代文本，详见下文 |
 
 `wp_media_upload` 必填 `filePath`，可选：
 
@@ -351,7 +469,9 @@ SEO 工具通过资源自身的 REST `meta` 读写：
 
 允许的位图扩展名为 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会先在内存中自动校正 EXIF 方向、按参考插件的尺寸阈值缩放，再以质量 85 编码为 WebP；正方形大图缩至 800×800，任一边达到 2000 或 4000 像素时分别缩至 80% 或 50%。GIF、AVIF 和已有 WebP 保持原样，避免动画丢失和重复有损压缩。转换完成后才会发出上传请求，且不会改写源文件或创建临时图片。上传成功后，如果提供了附件元数据，服务会再更新媒体实体。
 
-### 5.6 Elementor 本地文件工作流（4 个）
+`wp_media_alt_update` 必填正整数附件 ID `mediaId` 和字符串 `altText`，直接更新媒体库中已有附件的 REST `alt_text` 字段；`altText: ""` 会清除现有替代文本。工具返回 WordPress 更新后的完整媒体附件实体。
+
+### 5.7 Elementor 本地文件工作流（4 个）
 
 Elementor 工具固定操作 `pages`，通过完整 data 的“拉取到本地、修改、再上传”流程工作。目标站点必须把私有页面 meta `_elementor_data` 以 `show_in_rest` 注册并在写入响应中返回；REST meta 集成缺失时工具会明确失败，避免隐藏 meta 被误判为空页面。
 
@@ -410,7 +530,7 @@ edit 支持以下操作：
 
 紧凑 data 默认上限为 100 MiB、100,000 个元素和 100 层元素深度；可用 `WP_API_MAX_ELEMENTOR_DATA_BYTES` 调整字节上限。原生 WordPress REST 会把 data 作为转义字符串包含在响应中，因此处理大文件时 Node 进程峰值内存可能达到文件大小的数倍；PHP 和 Web 服务器也可能设置更低上限。
 
-### 5.7 插件、主题与本地打包（8 个）
+### 5.8 插件、主题与本地打包（8 个）
 
 远端软件包工具使用 `packageType: "plugin" | "theme"`。
 
@@ -425,16 +545,16 @@ edit 支持以下操作：
 | `wp_package_pack_theme` | `folderPath` | `outputPath`；纯本地，不使用 client |
 | `wp_package_pack_plugin` | `folderPath` | `outputPath`；纯本地，不使用 client |
 
-### 5.8 Jelly Form
+### 5.9 Inquiry
 
-目标站点需要启用包含 `jelly-form/v1` REST 路由的 Jelly Form 插件。设置工具要求当前 Application Password 用户具备 `manage_options` 权限；SMTP 密码不会被读取返回。
+目标站点需要启用包含 `jelly-form/v1` REST 路由的 Inquiry 插件。设置工具要求当前 Application Password 用户具备 `manage_options` 权限；SMTP 密码不会被读取返回。
 
 | 工具 | 必填输入 | 可选输入/说明 |
 | --- | --- | --- |
-| `wp_jelly_form_settings_get` | 无 | 通用连接字段；返回 `password_set`，不返回 SMTP 密码 |
-| `wp_jelly_form_settings_update` | 无 | `recipientEmail`、`emailEnabled`、`popupEnabled`、`ipinfoToken`、`redirectSlug`、`smtpEnabled`、`smtp`；未提供的字段保持不变 |
-| `wp_jelly_form_inquiry_list` | 无 | `search`、`page`、`perPage`、`startDate`、`endDate`、`orderBy`、`order`；只读且自动排除垃圾询价 |
-| `wp_jelly_form_inquiry_get` | `id` | 通用连接字段；只读且不会返回垃圾询价 |
+| `wp_inquiry_settings_get` | 无 | 通用连接字段；返回 `password_set`，不返回 SMTP 密码 |
+| `wp_inquiry_settings_update` | 无 | `recipientEmail`、`emailEnabled`、`popupEnabled`、`ipinfoToken`、`redirectSlug`、`smtpEnabled`、`smtp`；未提供的字段保持不变 |
+| `wp_inquiry_list` | 无 | `search`、`page`、`perPage`、`startDate`、`endDate`、`orderBy`、`order`；只读且自动排除垃圾询价 |
+| `wp_inquiry_get` | `id` | 通用连接字段；只读且不会返回垃圾询价 |
 
 `package` 对插件是主文件标识，对主题是 stylesheet slug。安装和更新只接受扩展名为 `.zip` 且具有常见 ZIP 文件头的本地文件。
 
@@ -460,7 +580,7 @@ edit 支持以下操作：
 
 需要 Jelly Core 的操作会按每页 100 条逐页检查活动插件，并识别 `jelly-core`、`jelly-core/jelly-core` 或 `jelly-core/jelly-core.php`。检查失败时不会上传文件或发出后续变更请求。
 
-Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 capability 校验。服务发出的 `X-Jelly-Timestamp`、`X-Jelly-Signature` 等字段只用于兼容旧协议，不含共享秘密，不能作为独立认证依据。
+Jelly Core 1.4.0 自定义变更端点同时执行 WordPress 登录用户 capability 校验和固定协议密钥签名校验，无需在 `wp-api-config` 中额外配置密钥。每次请求发送 `X-Jelly-Timestamp`、随机 `X-Jelly-Nonce` 和十六进制 `X-Jelly-Signature`；签名载荷依次为大写 HTTP 方法、带前导斜杠的 REST 路由、时间戳、Nonce、原始请求体 SHA-256，并以换行拼接后使用协议固定密钥计算 HMAC-SHA256。
 
 ## 7. URL 和网络安全规则
 
@@ -472,7 +592,7 @@ Jelly Core 自定义端点必须在 WordPress 服务端执行登录用户和 cap
 - 每次调用的 `siteUrl` 覆盖必须与已保存 URL 同源，仅可改变路径。
 - 携带 Application Password 的 WordPress 请求不跟随 301/302/303/307/308 重定向；应保存规范 URL。
 
-除完全不读取 client 的 `wp_rest_api` 公开 HTTPS 查询外，服务使用 HTTP Basic Authentication 发送 WordPress Application Password。使用 HTTP 时凭据没有传输层加密，可能被同一网络中的攻击者截获；请仅在可信内网使用 HTTP。请为 MCP 使用专门的低权限 WordPress 账号，定期轮换密码，并在不再使用时从 WordPress 撤销。
+除完全不读取 client 的 `wp_api_route` 公开 HTTPS 查询外，服务使用 HTTP Basic Authentication 发送 WordPress Application Password。使用 HTTP 时凭据没有传输层加密，可能被同一网络中的攻击者截获；请仅在可信内网使用 HTTP。请为 MCP 使用专门的低权限 WordPress 账号，定期轮换密码，并在不再使用时从 WordPress 撤销。
 
 ## 8. 默认资源上限
 

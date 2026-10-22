@@ -3,7 +3,7 @@
   "version": "2.2.0",
   "author": "JellyDai",
   "license": "MIT",
-  "description": "MCP server for managing WordPress through native, Jelly Core, Jelly Catalog, and Jelly Form REST APIs",
+  "description": "MCP server for managing WordPress through native, Jelly Core, Jelly Catalog, and Inquiry REST APIs",
   "keywords": [
     "mcp",
     "model-context-protocol",

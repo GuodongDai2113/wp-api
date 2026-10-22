@@ -1,6 +1,12 @@
 # wp-api
 
-一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Jelly Form REST API 管理站点。服务使用 STDIO 传输，提供 35 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、SEO、Elementor 页面、媒体、插件/主题及询价管理。
+### Jelly Catalog 动态字段
+
+新增 `wp_catalog_fields_get`：传入认证站点 `client` 和 `target: "product" | "product_cat"`，获取实时可填写字段、标签、说明、选项和重复组结构。它使用新的 `jelly-catalog/v1/fields/{target}` 接口，不同于匿名查询工具 `wp_api_route`。
+
+推荐先发现字段，再通过 `wp_resource_get` 的 `context: "edit"` 读取当前内容，最后使用现有 `wp_resource_update` 的 `data.meta` 或 `data.metaFile` 更新。未提交键保留，`null` 删除，数组整体替换；数字零值、空数组、图库 ID 字符串和编辑器 HTML 均保持原值传递。定义仍在 WordPress 后台管理。详见 [MCP 动态字段工作流](mcp.md#jelly-catalog-动态字段工作流)。
+
+一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Inquiry REST API 管理站点。服务使用 STDIO 传输，提供 55 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、导航菜单、SEO、Elementor 页面、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
 
@@ -102,11 +108,11 @@ wp-api-config
 
 凭据库写入使用原子替换和跨进程文件锁。`wp_client_list` 返回全部连接名称和站点 URL；`wp_client_get` 返回一个匹配连接，不存在时直接报错。两个工具都不会返回用户名、密码或密码状态。
 
-除独立公开查询工具 `wp_rest_api` 外，所有远端工具都要求显式传入 `client`，并接受可选的 `siteUrl`。认证请求中的 `siteUrl` 只能修改已保存 URL 同一 origin 下的路径。`wp_rest_api` 不接受这两个字段，只接受裸 `domain`，固定拼接 HTTPS 地址且绝不发送已保存凭据。
+除独立公开查询工具 `wp_api_route` 外，所有远端工具都要求显式传入 `client`，并接受可选的 `siteUrl`。认证请求中的 `siteUrl` 只能修改已保存 URL 同一 origin 下的路径。`wp_api_route` 不接受这两个字段，只接受裸 `domain`，固定拼接 HTTPS 地址且绝不发送已保存凭据。
 
 ## 工具列表
 
-服务共暴露 35 个工具。
+服务共暴露 55 个工具。
 
 ### Client 配置（2 个）
 
@@ -115,8 +121,8 @@ wp-api-config
 
 ### 本地结构与 REST 接口查询（2 个）
 
-- `wp_structure_get`：按需查询 `post`、`page`、`product`、`category`、`product-category`、`product-tag`、`media`、`seo-meta` 和 Elementor 结构。指定 `section: "write"`、`"response"` 或 `"example"` 只返回所需片段；默认返回概览，`"full"` 才返回完整定义。该工具纯本地且不要求 WordPress client。
-- `wp_rest_api`：必填裸域名 `domain`，例如 `example.com`；工具固定请求 `https://{domain}/...`，不读取 client 或发送凭据。`apiPath` 默认 `wp-json`，用于读取精简、可搜索、可分页的根路由摘要；查到目标路由后传入 `wp-json/wp/v2/product` 等完整 REST 路径，读取方法、参数约束和字段摘要。仅在摘要缺少必要约束时使用 `detail: "full"`。
+- `wp_structure_get`：按需查询 `post`、`page`、`product`、`category`、`product-category`、`menu`、`media`、`seo-meta` 和 Elementor 结构。指定 `section: "write"`、`"response"` 或 `"example"` 只返回所需片段；默认返回概览，`"full"` 才返回完整定义。该工具纯本地且不要求 WordPress client。
+- `wp_api_route`：必填裸域名 `domain`，固定使用公开 HTTPS，不读取已保存凭据。默认 `detail: "overview"` 只返回命名空间和路由数量；已知 `apiPath` 时只返回方法及参数、字段数量。用 `search` 或 `section: "routes"` 查找路由；指定路径后，用 `section: "arguments"`（可加 `httpMethod: "POST"`）或 `section: "fields"` 获取分页名称目录，再加 `names: ["meta"]` 和 `detail: "full"` 仅获取所需完整定义。已知路径和名称可直接读取，无需逐级调用。目录默认每页 20 条，支持 `search/offset/limit`。迁移：显式 `detail: "summary"` 且不指定 section 保留旧版摘要（根目录默认 50 条）；`detail: "full"` 且不指定 section 保留原始响应。分页减少上下文输出，不减少上游下载。
 
 ### WordPress 资源（8 个）
 
@@ -129,7 +135,7 @@ wp-api-config
 - `wp_resource_batch_update`：通过 `batch/v1` 每 25 条按 ID 更新内联或 CSV 导入资源。
 - `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
 
-所有资源工具都使用 `target: { type, resource }` 定位资源。`type: "post"` 对应 `posts`、`pages`、`products`，`type: "taxonomy"` 对应 `categories`、`product-categories`；不匹配的组合会被拒绝。单条创建/更新把业务字段放在 `data` 中，批量内联条目使用 `{ id?, data }`，从而把资源定位、操作参数和写入数据明确分开。`categories` 根据目标自动映射：文章写入 REST `categories`，Jelly Catalog 产品写入 REST `product_cat`，页面不支持该字段。MCP 不提供 `product_tag` 资源或产品标签写入。写入插件 meta 前可先用 `wp_rest_api` 查看目标站点的实时字段定义。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。资源列表始终使用 `perPage: 1..100` 的有界分页。
+所有资源工具都使用 `target: { type, resource }` 定位资源。`type: "post"` 对应 `posts`、`pages`、`products`，`type: "taxonomy"` 对应 `categories`、`product-categories`；不匹配的组合会被拒绝。单条创建/更新把业务字段放在 `data` 中，批量内联条目使用 `{ id?, data }`，从而把资源定位、操作参数和写入数据明确分开。`categories` 根据目标自动映射：文章写入 REST `categories`，Jelly Catalog 产品写入 REST `product_cat`，页面不支持该字段。MCP 不提供 `product_tag` 资源或产品标签写入。Jelly Catalog 动态字段先用认证工具 `wp_catalog_fields_get` 发现；其他公开接口结构可用 `wp_api_route` 查询。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。资源列表始终使用 `perPage: 1..100` 的有界分页。
 
 常用 Jelly Catalog 产品 `meta` 结构：
 
@@ -144,7 +150,16 @@ wp-api-config
 
 产品分类 `meta` 还包括 `thumbnail_id`、`banner_id`、标题字段、HTML 营销内容、`category_applications`、`product_cat_faqs`，以及取值为 `"0" | "1"` 的 `category_inherit_parent_content`。其他插件仍可能追加字段，因此应以目标站点实时返回的 OPTIONS 结果为准。
 
-### SEO、文章内容与媒体（7 个）
+### 经典导航菜单（8 个）
+
+- `wp_menu_list`：列出菜单，并同时返回当前主题注册的菜单位置及其分配状态。
+- `wp_menu_get`：读取一个菜单及其全部有序、可编辑菜单项。
+- `wp_menu_create`、`wp_menu_update`、`wp_menu_delete`：管理菜单和主题位置分配；删除菜单必须传 `force: true`。
+- `wp_menu_item_create`、`wp_menu_item_update`、`wp_menu_item_delete`：管理自定义链接、文章、分类和文章类型归档菜单项，包括层级与顺序。
+
+分配 `locations` 前先调用 `wp_menu_list`，因为更新会替换该菜单的全部位置分配。调整 `parent` 或 `menuOrder` 前先调用 `wp_menu_get`。菜单项默认进入回收站，传 `force: true` 才永久删除。
+
+### SEO、文章内容与媒体（8 个）
 
 - `wp_seo_get`：读取 Rank Math 标题、描述和焦点关键词。
 - `wp_seo_update`：更新或显式清空 Rank Math REST meta。
@@ -153,6 +168,14 @@ wp-api-config
 - `wp_post_link`：列出、新增、更新或删除可编辑文章正文中的链接。
 - `wp_post_content_replace`：替换文章中的所有精确文本匹配。
 - `wp_media_upload`：本地 JPEG/PNG 先压缩为 WebP 再上传，GIF/AVIF/WebP 原样上传，并可设置附件元数据。
+- `wp_media_alt_update`：按附件 ID 更新媒体库中已有图片的替代文本，传入空字符串可清除。
+- `wp_media_upload` 及批量导入的每个条目支持 `post: 文章ID`，在首次上传时关联父文章，不增加关联请求；`post: 0` 表示不关联。目标文章及编辑权限由 WordPress 校验。
+- `wp_media_batch_import`：传入 `items` 数组（1～100 项），每项使用单文件上传字段 `filePath/title/altText/caption/description/categories`。全部参数和路径先校验，再顺序上传；单项上传失败后继续，返回总数、成功数、失败数和逐项回执。不会自动重试，失败项重试前需核对媒体库，避免重复附件。
+- `wp_media_list` / `wp_media_get`：分页筛选媒体库或通过 `mediaId` 读取单个附件；单条读取支持 `context: "edit"` 获取可编辑原始字段。
+- `wp_media_update`：传入 `mediaId` 和非空 `data`，支持 `title/altText/caption/description/slug/post`；空字符串清空文本，`post: 0` 解除文章关联，不替换原始文件。
+- `wp_media_delete`：传入 `mediaId` 和显式 `force: true`，永久删除附件及文件。
+- `wp_media_category_list/get/create/update/delete`：管理 Jelly Editor 媒体分类，接口为 `wp/v2/media_category`；创建/更新使用 `data: { name?, slug?, description?, parent? }`，创建必填名称；单条操作使用 `categoryId`，删除必须 `force: true`，不删除媒体文件。
+- 上传可直接传 `categories: [分类ID]`，同一次工具调用完成上传和分类设置；更新传 `data.categories` 替换全部分类，`[]` 清空；列表传 `categories` 按任一分类筛选。需要启用支持 REST 分类的 Jelly Editor 和 Jelly Core；分类管理需要 `manage_categories`，分配需要 `upload_files`。分类列表默认包含空分类。
 
 post 类型资源的 `data` 支持直接传 `content` 或读取本地 `contentFile`；大型 REST meta 可通过包含完整 JSON 对象的 `metaFile` 提交，`meta` 和 `metaFile` 不能同时使用。设置 `gutenberg: true` 后，会先用 HTML5 parser 解析正文，再按明确的标签、属性和 [WordPress 允许协议](https://developer.wordpress.org/reference/functions/wp_allowed_protocols/)列表清理，最后生成 Gutenberg 区块标记。事件属性、内联样式、`javascript:`、`data:` 和活动嵌入内容会被移除；普通未知容器会展开并保留其中的安全文本。媒体扩展名仅支持 `.avif`、`.gif`、`.jpeg`、`.jpg`、`.png`、`.webp`。JPEG 和 PNG 会在内存中以质量 85 转换为 WebP 后再上传；GIF、AVIF 和已有 WebP 保持原格式。
 
@@ -180,12 +203,12 @@ SEO 要求站点安装 Jelly SEO 或等效插件，把 `rank_math_title`、`rank
 - `wp_package_pack_theme`：在本地创建可安装的主题 ZIP。
 - `wp_package_pack_plugin`：在本地创建可安装的插件 ZIP。
 
-### Jelly Form
+### Inquiry
 
-- `wp_jelly_form_settings_get`：读取接收邮箱、通知、跳转及脱敏后的 SMTP 设置。
-- `wp_jelly_form_settings_update`：按字段更新接收邮箱、通知、跳转或 SMTP 设置；省略 SMTP 密码时保留原密码。
-- `wp_jelly_form_inquiry_list`：分页、搜索并按日期读取非垃圾询价，只读。
-- `wp_jelly_form_inquiry_get`：按 ID 读取一条非垃圾询价，只读。
+- `wp_inquiry_settings_get`：读取接收邮箱、通知、跳转及脱敏后的 SMTP 设置。
+- `wp_inquiry_settings_update`：按字段更新接收邮箱、通知、跳转或 SMTP 设置；省略 SMTP 密码时保留原密码。
+- `wp_inquiry_list`：分页、搜索并按日期读取非垃圾询价，只读。
+- `wp_inquiry_get`：按 ID 读取一条非垃圾询价，只读。
 
 字段约定和操作细节见 [mcp.md](./mcp.md)。
 
@@ -195,9 +218,9 @@ SEO 要求站点安装 Jelly SEO 或等效插件，把 `rank_math_title`、`rank
 
 - 站点 URL 可以使用 HTTP 或 HTTPS。HTTP Basic Authentication 不提供传输加密，非可信网络应优先使用 HTTPS。
 - 站点 URL 不能嵌入用户名/密码，也不能包含 query 或 fragment。
-- 认证调用传入的 `siteUrl` 必须和已保存 URL 同源；`wp_rest_api` 改用独立裸域名并固定发起公开 HTTPS 请求。
+- 认证调用传入的 `siteUrl` 必须和已保存 URL 同源；`wp_api_route` 改用独立裸域名并固定发起公开 HTTPS 请求。
 - 携带 WordPress 凭据的请求不会跟随重定向；应直接配置站点的规范 URL。
-- 除不读取 client 的 `wp_rest_api` 公开查询外，服务使用已保存的 WordPress Application Password 认证。请只授予该 WordPress 用户实际需要的能力。
+- 除不读取 client 的 `wp_api_route` 公开查询外，服务使用已保存的 WordPress Application Password 认证。请只授予该 WordPress 用户实际需要的能力。
 - 凭据文件默认位于 `~/.wp-api/`，使用 AES-256-GCM 加密；密钥和密文文件均应仅允许当前系统用户访问。
 - 文件加密可避免明文误读、打包和日志泄漏，但不能抵御拥有同一系统用户任意文件及代码执行权限的恶意程序。
 
@@ -244,7 +267,7 @@ MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入
 
 执行这些变更前，服务会逐页检查活动插件。找不到 Jelly Core 时会在上传或修改软件包之前终止。
 
-软件包列表/详情、插件激活/停用使用 WordPress 原生 REST 端点，不依赖 Jelly Core；主题不支持停用。Jelly Core 自定义 REST 路由必须自行校验登录用户能力：兼容用的 `X-Jelly-*` 请求头不含共享秘密，不能当作独立认证机制。
+软件包列表/详情、插件激活/停用使用 WordPress 原生 REST 端点，不依赖 Jelly Core；主题不支持停用。Jelly Core 1.4.0 的变更路由同时要求具备对应能力的 WordPress 应用密码用户和协议内置固定 HMAC 密钥。MCP 自动使用该固定密钥，对请求方法、REST 路由、Unix 时间戳、随机 Nonce 和原始请求体 SHA-256 进行签名；服务端仅接受 5 分钟时间窗内且未使用过的 Nonce，无需额外配置密钥。
 
 ## 凭据存储迁移
 

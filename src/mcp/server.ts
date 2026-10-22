@@ -8,7 +8,7 @@ import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { executeWpApiTool, type WpApiToolContext, type WpApiToolInput, type WpApiToolName } from "./tool-router.js";
-import { normalizeRestApiDomain } from "./tools/api-schema.js";
+import { normalizeRestApiDomain } from "./tools/api-route.js";
 import { WP_STRUCTURE_NAMES, WP_STRUCTURE_SECTIONS } from "./tools/structures.js";
 
 /** 判断站点地址是否是适合作为 WordPress 根地址的 HTTP(S) URL。 */
@@ -36,7 +36,7 @@ const siteUrlSchema = z.string().url().refine(
   "WordPress site URL must use HTTP or HTTPS and cannot contain credentials, a query, or a fragment."
 );
 
-/** `wp_rest_api` 使用的裸域名 schema，固定由服务端拼接 HTTPS 和 REST 路径。 */
+/** `wp_api_route` 使用的裸域名 schema，固定由服务端拼接 HTTPS 和 REST 路径。 */
 const restApiDomainSchema = z.string().refine(
   (value) => {
     try {
@@ -80,7 +80,8 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_client_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_client_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_structure_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  wp_rest_api: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_catalog_fields_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_api_route: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_count: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -89,6 +90,14 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_resource_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_resource_batch_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_resource_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  wp_menu_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_menu_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_menu_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_menu_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_menu_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  wp_menu_item_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_menu_item_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_menu_item_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_seo_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_seo_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_seo_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -96,6 +105,17 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_post_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_post_content_replace: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_media_upload: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_media_batch_import: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_media_category_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_media_category_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_media_category_create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  wp_media_category_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_media_category_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_media_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_media_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_media_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_media_delete: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_media_alt_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_elementor_pull: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   wp_elementor_inspect: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_elementor_edit: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
@@ -108,10 +128,10 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_package_deactivate: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_package_pack_theme: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   wp_package_pack_plugin: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-  wp_jelly_form_settings_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  wp_jelly_form_settings_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  wp_jelly_form_inquiry_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  wp_jelly_form_inquiry_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }
+  wp_inquiry_settings_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_inquiry_settings_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  wp_inquiry_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  wp_inquiry_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true }
 } satisfies Record<WpApiToolName, ToolAnnotations>;
 
 /** 不执行 trim 转换、但拒绝空字符串和纯空白字符串的 MCP schema。 */
@@ -138,7 +158,7 @@ const postResourceBodyShape = {
   gutenberg: z.boolean().optional().describe("Convert resolved HTML content to WordPress Gutenberg block markup before upload."),
   featuredMedia: z.number().int().nonnegative().optional().describe("Featured media attachment ID; use 0 to clear the current featured image."),
   categories: z.array(z.number().int().positive()).optional().describe("Category IDs. Maps to categories for posts and product_cat for products; use an empty array to clear assignments. Not supported by pages."),
-  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. Inspect the resource route with wp_rest_api before writing plugin-specific fields."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. For Jelly Catalog products/categories, first call wp_catalog_fields_get with the same client. Send only changed keys; null deletes a value, arrays replace the entire field, and omitted keys are preserved. Use declared option values, not labels."),
   metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST meta object. Do not provide together with meta.")
 };
 
@@ -148,7 +168,7 @@ const taxonomyResourceBodyShape = {
   slug: z.string().optional().describe("Taxonomy term slug."),
   description: z.string().optional().describe("Taxonomy term description."),
   parent: z.number().int().nonnegative().optional().describe("Parent ID for hierarchical categories and product categories; use 0 to remove the parent. Not supported by product tags."),
-  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST term meta fields."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST term meta fields. For product-categories first call wp_catalog_fields_get(target=product_cat) with the same client. Send only changed keys; null deletes, arrays replace the entire field, omitted keys are preserved. HTML editor fields such as category_buying_guide and category_why_choose accept source HTML."),
   metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST term meta object. Do not provide together with meta.")
 };
 
@@ -160,6 +180,34 @@ const resourceDataSchema = z.object({
 
 /** 批量资源字段 schema，不包含不支持逐项读取的本地文件字段。 */
 const resourceBatchDataSchema = resourceDataSchema.omit({ contentFile: true, metaFile: true });
+
+/** 菜单创建与更新共用的可写字段 schema。 */
+const menuDataShape = {
+  name: z.string().optional().describe("Menu name."),
+  slug: z.string().optional().describe("Menu slug."),
+  description: z.string().optional().describe("Menu description."),
+  locations: z.array(nonBlankStringSchema).optional().describe("Theme menu location names. Updating replaces this menu's complete location assignment; use [] to unassign it from all locations."),
+  autoAdd: z.boolean().optional().describe("Automatically add newly created top-level pages to this menu.")
+};
+
+/** 菜单项创建与更新共用的可写字段 schema。 */
+const menuItemDataSchema = z.object({
+  menuId: z.number().int().positive().optional().describe("Parent menu term ID. Required when creating; updating it moves the item to another menu."),
+  title: z.string().optional().describe("Menu item title. Required for custom items."),
+  type: z.enum(["custom", "post_type", "taxonomy", "post_type_archive"]).optional().describe("Source type; defaults to custom when creating."),
+  url: z.string().optional().describe("Destination URL. Required for custom items."),
+  object: nonBlankStringSchema.optional().describe("Source object type, such as page, post, product, category, or product_cat."),
+  objectId: z.number().int().positive().optional().describe("Source post or term ID. Required for post_type and taxonomy items."),
+  parent: z.number().int().nonnegative().optional().describe("Parent menu item ID; use 0 for a top-level item."),
+  menuOrder: z.number().int().positive().optional().describe("One-based position within the menu."),
+  target: z.enum(["", "_blank"]).optional().describe("Link target; use _blank for a new browsing context or an empty string for the current context."),
+  classes: z.array(z.string()).optional().describe("CSS classes for the menu link; [] clears them."),
+  xfn: z.array(z.string()).optional().describe("XFN relationship values; [] clears them."),
+  description: z.string().optional().describe("Menu item description."),
+  attrTitle: z.string().optional().describe("Link title attribute text."),
+  status: z.enum(["publish", "draft"]).optional().describe("Menu item status."),
+  meta: z.record(z.unknown()).optional().describe("Registered menu-item REST meta fields.")
+}).strict();
 
 /** Elementor settings 顶层更新操作 schema。 */
 const elementorUpdateSettingsOperationSchema = z.object({
@@ -304,7 +352,7 @@ async function toToolResult(
 /** 创建绑定具体工具名和上下文的 MCP 回调，并为紧凑查询启用单份结构化输出。 */
 function createToolCallback(toolName: WpApiToolName, context: WpApiToolContext) {
   const structuredOnly = toolName === "wp_structure_get"
-    || toolName === "wp_rest_api";
+    || toolName === "wp_api_route";
   return async (input: WpApiToolInput) => toToolResult(
     toolName,
     await executeWpApiTool(toolName, input, context),
@@ -379,22 +427,28 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
-    "wp_rest_api",
+    "wp_api_route",
     {
       title: "Query public WordPress REST API metadata",
-      description: "Inspect a site's live public WordPress REST API without using saved clients or credentials. Provide a bare domain. Start with apiPath wp-json and optional search to discover routes, then query an exact path such as wp-json/wp/v2/posts to read its OPTIONS methods, arguments, and fields. Summary is the compact default; request full only when the summary omits a required constraint.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_rest_api,
+      description: "Discover public WordPress REST APIs without credentials. Default overview reveals no definitions. Use search to find routes, or query a known apiPath directly. Select arguments/fields to list names, then names + detail=full for required definitions. Follow the returned next hint.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_api_route,
       inputSchema: {
         domain: restApiDomainSchema.describe("Required bare domain only, for example example.com. The tool always requests https://{domain}/... and never uses saved WordPress credentials."),
         apiPath: nonBlankStringSchema.optional().describe("REST path beginning with wp-json, for example wp-json, wp-json/wp/v2/posts, or wp-json/jelly-form/v1/settings. Defaults to wp-json. The shorter wp/v2/posts form is also accepted."),
-        search: nonBlankStringSchema.optional().describe("Case-insensitive route path or namespace filter. Use only with the wp-json root index to find the exact route before querying it."),
-        offset: z.number().int().nonnegative().optional().describe("Root-index pagination offset. Use only with apiPath wp-json; defaults to 0."),
-        limit: z.number().int().min(1).max(100).optional().describe("Root-index page size from 1 to 100. Use only with apiPath wp-json; defaults to 50."),
-        detail: z.enum(["summary", "full"]).optional().describe("Output detail. Keep the default summary for route discovery and field constraints; use full only when exact raw WordPress metadata is necessary.")
+        search: nonBlankStringSchema.optional().describe("Case-insensitive route/namespace or selected argument/field name filter."),
+        offset: z.number().int().nonnegative().optional().describe("Directory offset; default 0."),
+        limit: z.number().int().min(1).max(100).optional().describe("Directory page size; default 20 (legacy root summary: 50)."),
+        detail: z.enum(["overview", "summary", "full"]).optional().describe("Default overview: no definitions. Summary: legacy compact constraints. Full: exact selected definitions, or raw response without section."),
+        /** 显式选择需要披露的目录，省略时只返回当前层级概览。 */
+        section: z.enum(["routes", "arguments", "fields"]).optional().describe("routes: root directory; arguments/fields: specific apiPath directory. Omit for overview."),
+        /** 按业务 HTTP 方法筛选参数，不改变读取元数据使用的 OPTIONS 方法。 */
+        httpMethod: z.string().regex(/^[A-Za-z]+$/).optional().describe("Filter arguments by HTTP method, e.g. POST; not the metadata request method."),
+        /** 精确选择顶层参数或字段，完整模式保留其所有嵌套约束。 */
+        names: z.array(nonBlankStringSchema).min(1).max(100).optional().describe("Exact top-level argument/field names. Combine with detail=full to read their complete nested definitions.")
       },
       outputSchema
     },
-    createToolCallback("wp_rest_api", context)
+    createToolCallback("wp_api_route", context)
   );
 
   server.registerTool(
@@ -442,12 +496,13 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_get",
     {
       title: "Get WordPress resource",
-      description: "Get one WordPress or Jelly Catalog resource by ID.",
+      description: "Get one WordPress or Jelly Catalog resource by ID. Use context=edit to read original content and meta before remote edits. Discover live Jelly Catalog field definitions with wp_catalog_fields_get.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_get,
       inputSchema: {
         ...globalInputShape,
         target: resourceTargetSchema,
-        id: z.number().int().positive().describe("Resource ID.")
+        id: z.number().int().positive().describe("Resource ID."),
+        context: z.enum(["view", "edit"]).optional().describe("Use edit before updating content or dynamic meta; requires object edit permission. Defaults to WordPress view context.")
       },
       outputSchema
     },
@@ -548,6 +603,132 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       outputSchema
     },
     createToolCallback("wp_resource_delete", context)
+  );
+
+  server.registerTool(
+    "wp_menu_list",
+    {
+      title: "List WordPress navigation menus",
+      description: "List one page of classic WordPress navigation menus and return every menu location registered by the active theme with its assigned menu ID.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_list,
+      inputSchema: {
+        ...globalInputShape,
+        search: z.string().optional().describe("Optional menu name search text."),
+        page: z.number().int().positive().optional().describe("Menu result page; defaults to 1."),
+        perPage: z.number().int().min(1).max(100).optional().describe("Menus per page, from 1 to 100.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_list", context)
+  );
+
+  server.registerTool(
+    "wp_menu_get",
+    {
+      title: "Get WordPress navigation menu",
+      description: "Get one classic WordPress navigation menu and all of its menu items in menu_order order with editable raw values.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_get,
+      inputSchema: {
+        ...globalInputShape,
+        id: z.number().int().positive().describe("Menu term ID.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_get", context)
+  );
+
+  server.registerTool(
+    "wp_menu_create",
+    {
+      title: "Create WordPress navigation menu",
+      description: "Create a classic WordPress navigation menu and optionally assign it to theme locations.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_create,
+      inputSchema: {
+        ...globalInputShape,
+        data: z.object({ ...menuDataShape, name: nonBlankStringSchema.describe("Required menu name.") }).strict()
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_create", context)
+  );
+
+  server.registerTool(
+    "wp_menu_update",
+    {
+      title: "Update WordPress navigation menu",
+      description: "Update a classic WordPress navigation menu. locations replaces this menu's complete theme-location assignment, so read wp_menu_list first.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_update,
+      inputSchema: {
+        ...globalInputShape,
+        id: z.number().int().positive().describe("Menu term ID."),
+        data: z.object(menuDataShape).strict()
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_update", context)
+  );
+
+  server.registerTool(
+    "wp_menu_delete",
+    {
+      title: "Delete WordPress navigation menu",
+      description: "Permanently delete a classic WordPress navigation menu. Menus have no trash, so force=true is required.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_delete,
+      inputSchema: {
+        ...globalInputShape,
+        id: z.number().int().positive().describe("Menu term ID."),
+        force: z.literal(true).describe("Required permanent-deletion confirmation.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_delete", context)
+  );
+
+  server.registerTool(
+    "wp_menu_item_create",
+    {
+      title: "Create WordPress navigation menu item",
+      description: "Create a custom link, post, taxonomy, or post-type archive item in a classic WordPress navigation menu.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_item_create,
+      inputSchema: {
+        ...globalInputShape,
+        data: menuItemDataSchema.extend({ menuId: z.number().int().positive().describe("Required parent menu term ID.") })
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_item_create", context)
+  );
+
+  server.registerTool(
+    "wp_menu_item_update",
+    {
+      title: "Update WordPress navigation menu item",
+      description: "Update, reorder, reparent, or move a classic WordPress navigation menu item. Send only changed fields.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_item_update,
+      inputSchema: {
+        ...globalInputShape,
+        id: z.number().int().positive().describe("Menu item post ID."),
+        data: menuItemDataSchema
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_item_update", context)
+  );
+
+  server.registerTool(
+    "wp_menu_item_delete",
+    {
+      title: "Delete WordPress navigation menu item",
+      description: "Delete a classic WordPress navigation menu item. By default it moves to trash; set force=true to delete it permanently.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_menu_item_delete,
+      inputSchema: {
+        ...globalInputShape,
+        id: z.number().int().positive().describe("Menu item post ID."),
+        force: z.boolean().optional().describe("Permanently delete instead of moving to trash; defaults to false.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_menu_item_delete", context)
   );
 
   server.registerTool(
@@ -668,6 +849,218 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     createToolCallback("wp_post_content_replace", context)
   );
 
+  /** Jelly Editor 媒体分类可写字段，共享创建和更新的字段类型。 */
+  const mediaCategoryDataShape = {
+    /** 分类名称，不允许空白文本。 */
+    name: nonBlankStringSchema.optional(),
+    /** 分类别名。 */
+    slug: z.string().optional(),
+    /** 分类说明，空字符串清空。 */
+    description: z.string().optional(),
+    /** 父分类 ID，0 表示顶级。 */
+    parent: z.number().int().nonnegative().optional()
+  };
+
+  server.registerTool("wp_media_category_list", {
+    title: "List media categories",
+    description: "List Jelly Editor media categories, including empty categories by default. Requires its media_category REST endpoint.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_media_category_list,
+    inputSchema: {
+      ...globalInputShape,
+      /** 当前页码，默认 1。 */
+      page: z.number().int().positive().optional(),
+      /** 每页分类数量，默认 20。 */
+      perPage: z.number().int().min(1).max(100).optional(),
+      /** 分类名称搜索文本。 */
+      search: z.string().optional(),
+      /** 限定父分类，0 表示顶级。 */
+      parent: z.number().int().nonnegative().optional(),
+      /** 是否隐藏空分类，默认 false。 */
+      hideEmpty: z.boolean().optional()
+    },
+    outputSchema
+  }, createToolCallback("wp_media_category_list", context));
+
+  server.registerTool("wp_media_category_get", {
+    title: "Get media category",
+    description: "Read one Jelly Editor media category by ID.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_media_category_get,
+    inputSchema: {
+      ...globalInputShape,
+      /** 需要读取的媒体分类 ID。 */
+      categoryId: z.number().int().positive()
+    },
+    outputSchema
+  }, createToolCallback("wp_media_category_get", context));
+
+  server.registerTool("wp_media_category_create", {
+    title: "Create media category",
+    description: "Create a Jelly Editor media category. Requires manage_categories permission. Use its returned ID in media upload categories.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_media_category_create,
+    inputSchema: {
+      ...globalInputShape,
+      /** 创建字段，必须提供分类名称。 */
+      data: z.object({ ...mediaCategoryDataShape, name: nonBlankStringSchema }).strict()
+    },
+    outputSchema
+  }, createToolCallback("wp_media_category_create", context));
+
+  server.registerTool("wp_media_category_update", {
+    title: "Update media category",
+    description: "Update a Jelly Editor media category. Empty description clears it; parent=0 moves it to the root. Requires manage_categories.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_media_category_update,
+    inputSchema: {
+      ...globalInputShape,
+      /** 需要更新的分类 ID。 */
+      categoryId: z.number().int().positive(),
+      /** 本次更新的非空分类字段集合。 */
+      data: z.object(mediaCategoryDataShape).strict().refine((data) => Object.values(data).some((value) => value !== undefined), "At least one category field is required.")
+    },
+    outputSchema
+  }, createToolCallback("wp_media_category_update", context));
+
+  server.registerTool("wp_media_category_delete", {
+    title: "Delete media category",
+    description: "Permanently delete a Jelly Editor media category and its assignments, not the media files. Requires force=true and manage_categories.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_media_category_delete,
+    inputSchema: {
+      ...globalInputShape,
+      /** 需要永久删除的分类 ID。 */
+      categoryId: z.number().int().positive(),
+      /** 显式确认永久删除分类。 */
+      force: z.literal(true)
+    },
+    outputSchema
+  }, createToolCallback("wp_media_category_delete", context));
+
+  server.registerTool(
+    "wp_media_list",
+    {
+      title: "List WordPress media",
+      description: "Search the media library with pagination. Returns items and pagination totals; use wp_media_get for one attachment.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_media_list,
+      inputSchema: {
+        ...globalInputShape,
+        /** 列表页码，从 1 开始。 */
+        page: z.number().int().positive().optional(),
+        /** 单页附件数量，默认 20。 */
+        perPage: z.number().int().min(1).max(100).optional().describe("Page size; default 20."),
+        /** 媒体搜索文本。 */
+        search: z.string().optional(),
+        /** 包含的附件 ID 列表。 */
+        include: z.array(z.number().int().positive()).optional(),
+        /** 排除的附件 ID 列表。 */
+        exclude: z.array(z.number().int().positive()).optional(),
+        /** 限定所属文章，0 表示未关联文章。 */
+        parent: z.number().int().nonnegative().optional().describe("Parent post ID; 0 selects unattached media."),
+        /** WordPress 媒体大类。 */
+        mediaType: z.enum(["image", "video", "audio", "application", "text"]).optional(),
+        /** 精确的媒体 MIME 类型。 */
+        mimeType: z.string().optional().describe("MIME type, e.g. image/webp."),
+        /** Jelly Editor 媒体分类筛选，匹配任一分类。 */
+        categories: z.array(z.number().int().positive()).optional().describe("Jelly Editor media category IDs; matches any. Empty array does not filter.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_media_list", context)
+  );
+
+  server.registerTool(
+    "wp_media_get",
+    {
+      title: "Get WordPress media",
+      description: "Read an attachment by ID. Use context=edit for raw editable text; requires edit permission.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_media_get,
+      inputSchema: {
+        ...globalInputShape,
+        /** 要读取的附件 ID。 */
+        mediaId: z.number().int().positive(),
+        /** 返回展示内容或可编辑原始字段。 */
+        context: z.enum(["view", "edit"]).optional()
+      },
+      outputSchema
+    },
+    createToolCallback("wp_media_get", context)
+  );
+
+  server.registerTool(
+    "wp_media_update",
+    {
+      title: "Update WordPress media",
+      description: "Update attachment metadata without replacing its file. Omitted fields stay unchanged; empty strings clear text and post=0 detaches the parent post.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_media_update,
+      inputSchema: {
+        ...globalInputShape,
+        /** 要更新的附件 ID。 */
+        mediaId: z.number().int().positive(),
+        /** 本次要修改的非空元数据集合。 */
+        data: z.object({
+          /** 媒体标题，可显式清空。 */
+          title: z.string().optional(),
+          /** 媒体替代文本，可显式清空。 */
+          altText: z.string().optional(),
+          /** 媒体说明文字，可显式清空。 */
+          caption: z.string().optional(),
+          /** 媒体描述，可显式清空。 */
+          description: z.string().optional(),
+          /** 媒体别名，由 WordPress 规范化。 */
+          slug: z.string().optional(),
+          /** 所属文章 ID，0 解除关联。 */
+          post: z.number().int().nonnegative().optional(),
+          /** 替换全部媒体分类，空数组清空。 */
+          categories: z.array(z.number().int().positive()).optional().describe("Replace all Jelly Editor media category IDs; [] clears them.")
+        }).strict().refine((data) => Object.values(data).some((value) => value !== undefined), "At least one media field is required.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_media_update", context)
+  );
+
+  server.registerTool(
+    "wp_media_delete",
+    {
+      title: "Delete WordPress media permanently",
+      description: "Permanently delete an attachment and its files. Requires force=true. Existing content referencing its URL or ID may break.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_media_delete,
+      inputSchema: {
+        ...globalInputShape,
+        /** 要永久删除的附件 ID。 */
+        mediaId: z.number().int().positive(),
+        /** 显式确认永久删除附件及其文件。 */
+        force: z.literal(true)
+      },
+      outputSchema
+    },
+    createToolCallback("wp_media_delete", context)
+  );
+
+  server.registerTool("wp_media_batch_import", {
+    title: "Batch import WordPress media",
+    description: "Import 1–100 local bitmaps sequentially, with per-file metadata and Jelly Editor categories. Validates all paths before uploading. Continues after individual upload failures and returns per-item receipts. No automatic retries; failed requests may have created attachments, so check the library before retrying. Uses the same conversion and cleanup as wp_media_upload.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_media_batch_import,
+    inputSchema: {
+      ...globalInputShape,
+      /** 按顺序上传的文件及其独立元数据，最多 100 个。 */
+      items: z.array(z.object({
+        /** 服务端允许目录内的本地位图路径。 */
+        filePath: nonBlankStringSchema,
+        /** 创建附件时关联的文章 ID，0 表示不关联。 */
+        post: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe("Parent post ID set in the initial upload; 0 leaves it unattached."),
+        /** 附件标题。 */
+        title: z.string().optional(),
+        /** 附件替代文本。 */
+        altText: z.string().optional(),
+        /** 附件说明文字。 */
+        caption: z.string().optional(),
+        /** 附件描述。 */
+        description: z.string().optional(),
+        /** 上传时分配的 Jelly Editor 媒体分类 ID。 */
+        categories: z.array(z.number().int().positive()).optional()
+      }).strict()).min(1).max(100)
+    },
+    outputSchema
+  }, createToolCallback("wp_media_batch_import", context));
+
   server.registerTool(
     "wp_media_upload",
     {
@@ -677,6 +1070,10 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       inputSchema: {
         ...globalInputShape,
         filePath: z.string().min(1).describe("Local .avif, .gif, .jpeg, .jpg, .png, or .webp path readable by the MCP server process. JPEG and PNG are uploaded as WebP."),
+        /** 创建附件时关联的文章 ID，0 表示不关联。 */
+        post: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe("Parent post ID set in the initial upload; 0 leaves it unattached."),
+        /** 上传后立即随元数据设置的媒体分类 ID。 */
+        categories: z.array(z.number().int().positive()).optional().describe("Jelly Editor media category IDs to assign during this upload operation; requires its REST-enabled taxonomy."),
         title: z.string().optional().describe("Media title."),
         altText: z.string().optional().describe("Media alt text."),
         caption: z.string().optional().describe("Media caption."),
@@ -685,6 +1082,22 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       outputSchema
     },
     createToolCallback("wp_media_upload", context)
+  );
+
+  server.registerTool(
+    "wp_media_alt_update",
+    {
+      title: "Update WordPress media alt text",
+      description: "Update an existing WordPress media attachment's alt text by ID. Pass an empty altText string to clear it.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_media_alt_update,
+      inputSchema: {
+        ...globalInputShape,
+        mediaId: z.number().int().positive().describe("Media attachment ID."),
+        altText: z.string().describe("Replacement media alt text; use an empty string to clear it.")
+      },
+      outputSchema
+    },
+    createToolCallback("wp_media_alt_update", context)
   );
 
   registerElementorTool(
@@ -744,7 +1157,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     }
   );
 
-  const jellyFormSmtpSchema = z.object({
+  const inquirySmtpSchema = z.object({
     host: z.string().optional().describe("SMTP host name."),
     port: z.number().int().min(1).max(65535).optional().describe("SMTP port."),
     encryption: z.enum(["none", "ssl", "tls"]).optional().describe("SMTP encryption mode."),
@@ -756,23 +1169,38 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   }).strict();
 
   server.registerTool(
-    "wp_jelly_form_settings_get",
+    "wp_catalog_fields_get",
     {
-      title: "Get Jelly Form settings",
-      description: "Read Jelly Form recipient email, notification, redirect, and redacted SMTP settings.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_settings_get,
-      inputSchema: { ...globalInputShape },
+      title: "Get Jelly Catalog writable fields",
+      description: "Discover live product or product-category field definitions using the saved authenticated client. Returns labels, descriptions, types, choices, nested repeater schema, native meta schema and update semantics without truncating field definitions. Call before wp_resource_create/update or batch updates with meta. Read existing values via wp_resource_get (context=edit). Only enabled dynamic fields are available; this tool does not change field definitions. Requires the Jelly Catalog fields endpoint and edit permission; wp_api_route is anonymous and is not a substitute.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_catalog_fields_get,
+      inputSchema: {
+        ...globalInputShape,
+        target: z.enum(["product", "product_cat"]).describe("product maps to resource target {type:post,resource:products}; product_cat maps to {type:taxonomy,resource:product-categories}.")
+      },
       outputSchema
     },
-    createToolCallback("wp_jelly_form_settings_get", context)
+    createToolCallback("wp_catalog_fields_get", context)
   );
 
   server.registerTool(
-    "wp_jelly_form_settings_update",
+    "wp_inquiry_settings_get",
     {
-      title: "Update Jelly Form settings",
-      description: "Update selected Jelly Form recipient email, notification, redirect, or SMTP settings.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_settings_update,
+      title: "Get Inquiry settings",
+      description: "Read Inquiry recipient email, notification, redirect, and redacted SMTP settings.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_inquiry_settings_get,
+      inputSchema: { ...globalInputShape },
+      outputSchema
+    },
+    createToolCallback("wp_inquiry_settings_get", context)
+  );
+
+  server.registerTool(
+    "wp_inquiry_settings_update",
+    {
+      title: "Update Inquiry settings",
+      description: "Update selected Inquiry recipient email, notification, redirect, or SMTP settings.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_inquiry_settings_update,
       inputSchema: {
         ...globalInputShape,
         recipientEmail: z.string().email().optional().describe("Email address that receives inquiry notifications."),
@@ -781,19 +1209,19 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
         ipinfoToken: z.string().regex(/^[a-zA-Z0-9]*$/).optional().describe("IPInfo token; use an empty string to clear it."),
         redirectSlug: z.string().optional().describe("Success redirect path; use an empty string to disable redirects."),
         smtpEnabled: z.boolean().optional().describe("Enable custom SMTP delivery."),
-        smtp: jellyFormSmtpSchema.optional().describe("Selected SMTP fields to update.")
+        smtp: inquirySmtpSchema.optional().describe("Selected SMTP fields to update.")
       },
       outputSchema
     },
-    createToolCallback("wp_jelly_form_settings_update", context)
+    createToolCallback("wp_inquiry_settings_update", context)
   );
 
   server.registerTool(
-    "wp_jelly_form_inquiry_list",
+    "wp_inquiry_list",
     {
-      title: "List Jelly Form inquiries",
-      description: "Read a filtered page of non-spam Jelly Form inquiry submissions. This tool is read-only.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_inquiry_list,
+      title: "List Inquiry inquiries",
+      description: "Read a filtered page of non-spam Inquiry inquiry submissions. This tool is read-only.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_inquiry_list,
       inputSchema: {
         ...globalInputShape,
         search: z.string().optional().describe("Search submission content, page title, or country."),
@@ -806,22 +1234,22 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       },
       outputSchema
     },
-    createToolCallback("wp_jelly_form_inquiry_list", context)
+    createToolCallback("wp_inquiry_list", context)
   );
 
   server.registerTool(
-    "wp_jelly_form_inquiry_get",
+    "wp_inquiry_get",
     {
-      title: "Get Jelly Form inquiry",
-      description: "Read one non-spam Jelly Form inquiry submission by ID. This tool is read-only.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_jelly_form_inquiry_get,
+      title: "Get Inquiry inquiry",
+      description: "Read one non-spam Inquiry inquiry submission by ID. This tool is read-only.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_inquiry_get,
       inputSchema: {
         ...globalInputShape,
         id: z.number().int().positive().describe("Inquiry ID.")
       },
       outputSchema
     },
-    createToolCallback("wp_jelly_form_inquiry_get", context)
+    createToolCallback("wp_inquiry_get", context)
   );
 
   const packageTypeSchema = z.enum(["plugin", "theme"]).describe("WordPress package type.");

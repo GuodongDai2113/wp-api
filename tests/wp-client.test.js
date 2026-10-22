@@ -2,10 +2,93 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import sharp from "sharp";
 
 import { WordPressClient, WordPressApiError } from "../build/wordpress/client.js";
+
+/** Jelly Core 当前更新协议使用的固定 HMAC 密钥。 */
+const JELLY_CORE_REST_SECRET = "jellydai-password";
+
+/** 父文章随首次二进制上传提交，不为关联文章追加请求，并在读取文件前拒绝无效 ID。 */
+test("WordPressClient sets post in the initial media upload without extra requests", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-parent-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "photo.webp");
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: "white" } }).webp().toFile(filePath);
+  const calls = [];
+  const client = new WordPressClient({
+    baseUrl: "https://example.com", username: "admin", appPassword: "secret",
+    /** 回显首次上传传入的父文章，记录请求次数和二进制请求体。 */
+    async fetchImpl(url, init) {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: 5, post: Number(new URL(url).searchParams.get("post")) }), {
+        status: 201, headers: { "content-type": "application/json" }
+      });
+    }
+  });
+  for (const post of [42, 0, undefined]) {
+    const before = calls.length;
+    const result = await client.uploadMediaFromFile(filePath, { post });
+    assert.equal(calls.length, before + 1);
+    assert.equal(calls.at(-1).url, `https://example.com/wp-json/wp/v2/media${post === undefined ? "" : `?post=${post}`}`);
+    assert.equal(calls.at(-1).init.method, "POST");
+    assert.ok(Buffer.isBuffer(calls.at(-1).init.body));
+    assert.equal(result.post, post ?? 0);
+  }
+  for (const post of [-1, 1.5, "42", null, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(() => client.uploadMediaFromFile("missing.webp", { post }), /non-negative safe integer/);
+  }
+  assert.equal(calls.length, 3);
+});
+
+/** 验证上传时分配分类、清空分类及服务端忽略分类时清理附件的完整请求链。 */
+test("WordPressClient uploads with verified media categories and rolls back ignored assignments", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "wp-api-media-category-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filePath = path.join(directory, "photo.webp");
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: "white" } }).webp().toFile(filePath);
+  for (const assigned of [[3, 2], [], undefined, [2]]) {
+    const requested = assigned?.length === 0 ? [] : [2, 3];
+    const calls = [];
+    const client = new WordPressClient({
+      baseUrl: "https://example.com", username: "admin", appPassword: "secret",
+      /** 模拟上传、分类写入和失败后的清理请求。 */
+      async fetchImpl(url, init) {
+        calls.push({ url, init });
+        const data = calls.length === 1 ? { id: 55 }
+          : init.method === "DELETE" ? { deleted: true } : { id: 55, media_category: assigned };
+        return new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+      }
+    });
+    if (assigned === undefined || assigned.length === 1) {
+      await assert.rejects(() => client.uploadMediaFromFile(filePath, { categories: requested }), /not assigned/);
+      assert.equal(calls[2].init.method, "DELETE");
+      assert.equal(calls[2].url, "https://example.com/wp-json/wp/v2/media/55?force=true");
+    } else {
+      const result = await client.uploadMediaFromFile(filePath, { categories: requested });
+      assert.deepEqual(result.media_category, assigned);
+      assert.equal(calls.length, 2);
+    }
+    assert.deepEqual(JSON.parse(calls[1].init.body), { media_category: requested });
+    await assert.rejects(() => client.uploadMediaFromFile(filePath, { categories: [0] }), /positive integer/);
+  }
+});
+
+/** 校验 Jelly Core 请求头确实绑定了方法、路由、时间戳、Nonce 与原始请求体。 */
+function assertJellySignature(init, route) {
+  const timestamp = init.headers["X-Jelly-Timestamp"];
+  const nonce = init.headers["X-Jelly-Nonce"];
+  const bodyHash = createHash("sha256").update(init.body).digest("hex");
+  const payload = [init.method, route, timestamp, nonce, bodyHash].join("\n");
+  assert.match(timestamp, /^\d+$/);
+  assert.match(nonce, /^[A-Za-z0-9_-]{8,128}$/);
+  assert.equal(
+    init.headers["X-Jelly-Signature"],
+    createHmac("sha256", JELLY_CORE_REST_SECRET).update(payload).digest("hex")
+  );
+}
 
 test("WordPressClient sends Application Password auth and preserves pagination headers", async () => {
   const calls = [];
@@ -305,6 +388,31 @@ test("WordPressClient accepts a successful empty JSON response", async () => {
   assert.equal(result.data, null);
 });
 
+test("WordPressClient signs a Jelly Core plugin update with the exact JSON body", async () => {
+  const calls = [];
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "admin",
+    appPassword: "secret",
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ success: true, action: "updated" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+  });
+
+  await client.jellyCorePluginInstall("jelly-form", "https://example.com/jelly-form.zip");
+
+  assert.equal(calls[0].url, "https://example.com/wp-json/jelly-core/v1/plugins/update");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    plugin_name: "jelly-form",
+    package_url: "https://example.com/jelly-form.zip"
+  });
+  assertJellySignature(calls[0].init, "/jelly-core/v1/plugins/update");
+});
+
 test("WordPressClient pushes a local theme zip directly to jelly-core", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-theme-"));
   const filePath = path.join(tempDir, "jelly-theme.zip");
@@ -340,8 +448,7 @@ test("WordPressClient pushes a local theme zip directly to jelly-core", async ()
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers["Content-Type"], "application/zip");
   assert.equal(calls[0].init.headers["X-Jelly-Theme-Slug"], "jelly-theme");
-  assert.match(calls[0].init.headers["X-Jelly-Timestamp"], /^\d+$/);
-  assert.ok(calls[0].init.headers["X-Jelly-Signature"]);
+  assertJellySignature(calls[0].init, "/jelly-core/v1/themes/install");
   assert.deepEqual(Buffer.from(calls[0].init.body), bytes);
 
   await rm(tempDir, { recursive: true, force: true });
@@ -373,8 +480,7 @@ test("WordPressClient activates a theme through jelly-core", async () => {
   assert.equal(calls[0].url, "https://example.com/wp-json/jelly-core/v1/themes/jelly-theme/status");
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), { status: "active" });
-  assert.match(calls[0].init.headers["X-Jelly-Timestamp"], /^\d+$/);
-  assert.ok(calls[0].init.headers["X-Jelly-Signature"]);
+  assertJellySignature(calls[0].init, "/jelly-core/v1/themes/jelly-theme/status");
 });
 
 test("WordPressClient deactivates a theme by sending a replacement theme", async () => {

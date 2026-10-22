@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createWpApiMcpServer } from "../build/mcp/server.js";
+import { WP_API_TOOL_NAMES } from "../build/mcp/tool-router.js";
 
 test("MCP transport 完成工具发现、结构化成功响应和标准错误响应", async (t) => {
   const configDir = await mkdtemp(path.join(os.tmpdir(), "wp-api-mcp-transport-"));
@@ -24,12 +25,13 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   });
 
   const tools = await client.listTools();
-  assert.equal(tools.tools.length, 35);
+  assert.equal(tools.tools.length, WP_API_TOOL_NAMES.length);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_catalog_fields_get"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_get"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_use"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_add"), false);
-  assert.equal(tools.tools.some((tool) => tool.name === "wp_rest_api"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_api_route"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_api_schema"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_pull"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_inspect"), true);
@@ -38,9 +40,12 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_get"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_seo_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_seo_batch_update"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_media_alt_update"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_menu_get"), true);
+  assert.equal(tools.tools.some((tool) => tool.name === "wp_menu_item_update"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_cache_clear"), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_elementor_read"), false);
-  const restApiTool = tools.tools.find((tool) => tool.name === "wp_rest_api");
+  const restApiTool = tools.tools.find((tool) => tool.name === "wp_api_route");
   assert.deepEqual(restApiTool.inputSchema.required, ["domain"]);
   assert.equal(Object.hasOwn(restApiTool.inputSchema.properties, "domain"), true);
   assert.equal(Object.hasOwn(restApiTool.inputSchema.properties, "client"), false);

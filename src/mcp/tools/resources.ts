@@ -133,6 +133,8 @@ export interface ResourceGetInput {
   target: ResourceTarget;
   /** 要读取的正安全整数资源 ID。 */
   id: number;
+  /** 读取上下文；edit 请求编辑权限并返回可编辑的原始内容，默认保持 WordPress view 行为。 */
+  context?: "view" | "edit";
 }
 
 /** Post 类型资源创建和更新共享的写入字段。 */
@@ -646,10 +648,13 @@ export async function listResource(client: WordPressClient, input: ResourceListI
   return response;
 }
 
-/** 按 ID 读取单个资源。 */
+/** 按 ID 和可选编辑上下文读取单个资源，拒绝未知上下文，保留原始 Meta 值。 */
 export async function getResource(client: WordPressClient, input: ResourceGetInput): Promise<WordPressResourceEntity> {
   assertPositiveId(input.id, "Resource id");
-  return client.get<WordPressResourceEntity>(getResourceTargetConfig(input.target).route, input.id);
+  if (input.context !== undefined && input.context !== "view" && input.context !== "edit") {
+    throw new TypeError("context must be view or edit.");
+  }
+  return client.get<WordPressResourceEntity>(getResourceTargetConfig(input.target).route, input.id, input.context ? { context: input.context } : undefined);
 }
 
 /** 创建单个资源。 */

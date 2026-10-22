@@ -1,3 +1,4 @@
+import { getCatalogFields, type CatalogFieldsInput } from "./tools/catalog.js";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -13,11 +14,18 @@ import {
 import {
   managePostLink,
   replacePostContent,
-  uploadMedia,
-  type MediaUploadInput,
   type PostContentReplaceInput,
   type PostLinkInput
 } from "./tools/content.js";
+import {
+  uploadMedia, updateMediaAlt, listMedia, getMedia, updateMedia, deleteMedia,
+  batchImportMedia, validateMediaBatchImport, type MediaBatchImportInput,
+  listMediaCategories, getMediaCategory, createMediaCategory, updateMediaCategory, deleteMediaCategory,
+  type MediaCategoryListInput, type MediaCategoryGetInput, type MediaCategoryCreateInput,
+  type MediaCategoryUpdateInput, type MediaCategoryDeleteInput,
+  type MediaUploadInput, type MediaAltUpdateInput, type MediaListInput,
+  type MediaGetInput, type MediaUpdateInput, type MediaDeleteInput
+} from "./tools/media.js";
 import {
   batchCreateResources,
   batchUpdateResources,
@@ -63,27 +71,46 @@ import {
   type PackageStatusMutationInput
 } from "./tools/packages.js";
 import {
-  getJellyFormInquiry,
-  getJellyFormSettings,
-  listJellyFormInquiries,
-  updateJellyFormSettings,
-  type JellyFormInquiryGetInput,
-  type JellyFormInquiryListInput,
-  type JellyFormSettingsUpdateInput
-} from "./tools/jelly-form.js";
+  getInquiry,
+  getInquirySettings,
+  listInquiries,
+  updateInquirySettings,
+  type InquiryGetInput,
+  type InquiryListInput,
+  type InquirySettingsUpdateInput
+} from "./tools/inquiry.js";
 import {
-  getApiSchema,
+  getApiRoute,
   normalizeRestApiDomain,
-  type ApiSchemaInput
-} from "./tools/api-schema.js";
+  type ApiRouteInput
+} from "./tools/api-route.js";
 import { getWpStructure, type StructureGetInput } from "./tools/structures.js";
+import {
+  createMenu,
+  createMenuItem,
+  deleteMenu,
+  deleteMenuItem,
+  getMenu,
+  listMenus,
+  updateMenu,
+  updateMenuItem,
+  type MenuCreateInput,
+  type MenuDeleteInput,
+  type MenuGetInput,
+  type MenuItemCreateInput,
+  type MenuItemDeleteInput,
+  type MenuItemUpdateInput,
+  type MenuListInput,
+  type MenuUpdateInput
+} from "./tools/menus.js";
 
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [
   "wp_client_list",
   "wp_client_get",
   "wp_structure_get",
-  "wp_rest_api",
+  "wp_api_route",
+  "wp_catalog_fields_get",
   "wp_resource_count",
   "wp_resource_list",
   "wp_resource_get",
@@ -92,6 +119,14 @@ export const WP_API_TOOL_NAMES = [
   "wp_resource_update",
   "wp_resource_batch_update",
   "wp_resource_delete",
+  "wp_menu_list",
+  "wp_menu_get",
+  "wp_menu_create",
+  "wp_menu_update",
+  "wp_menu_delete",
+  "wp_menu_item_create",
+  "wp_menu_item_update",
+  "wp_menu_item_delete",
   "wp_seo_get",
   "wp_seo_update",
   "wp_seo_list",
@@ -99,6 +134,17 @@ export const WP_API_TOOL_NAMES = [
   "wp_post_link",
   "wp_post_content_replace",
   "wp_media_upload",
+  "wp_media_batch_import",
+  "wp_media_category_list",
+  "wp_media_category_get",
+  "wp_media_category_create",
+  "wp_media_category_update",
+  "wp_media_category_delete",
+  "wp_media_list",
+  "wp_media_get",
+  "wp_media_update",
+  "wp_media_delete",
+  "wp_media_alt_update",
   "wp_elementor_pull",
   "wp_elementor_inspect",
   "wp_elementor_edit",
@@ -111,10 +157,10 @@ export const WP_API_TOOL_NAMES = [
   "wp_package_deactivate",
   "wp_package_pack_theme",
   "wp_package_pack_plugin",
-  "wp_jelly_form_settings_get",
-  "wp_jelly_form_settings_update",
-  "wp_jelly_form_inquiry_list",
-  "wp_jelly_form_inquiry_get"
+  "wp_inquiry_settings_get",
+  "wp_inquiry_settings_update",
+  "wp_inquiry_list",
+  "wp_inquiry_get"
 ] as const;
 
 /** wp-api MCP 服务支持的工具名称联合类型。 */
@@ -331,6 +377,17 @@ async function validateToolLocalPaths(
     }
     validatedInput.data = resourceData;
     return validatedInput;
+  } else if (toolName === "wp_media_batch_import") {
+    const batch = input as unknown as MediaBatchImportInput;
+    validateMediaBatchImport(batch);
+    const allowedRoots = await resolveAllowedLocalRoots(context);
+    const items = [];
+    for (const [index, item] of batch.items.entries()) {
+      const path = await validateExistingLocalPath(`items[${index}].filePath`, item.filePath, allowedRoots);
+      items.push({ ...item, filePath: path.realPath });
+    }
+    validatedInput.items = items;
+    return validatedInput;
   } else if (toolName === "wp_media_upload") {
     pathFields.push("filePath");
   } else if (toolName === "wp_package_install" || toolName === "wp_package_update") {
@@ -414,6 +471,8 @@ async function executeRemoteTool(
   }
 
   switch (toolName) {
+    case "wp_catalog_fields_get":
+      return getCatalogFields(client, input as unknown as CatalogFieldsInput);
     case "wp_resource_count":
       return countResource(client, input as unknown as ResourceCountInput);
     case "wp_resource_list":
@@ -430,6 +489,22 @@ async function executeRemoteTool(
       return batchUpdateResources(client, input as unknown as ResourceBatchUpdateInput);
     case "wp_resource_delete":
       return deleteResource(client, input as unknown as ResourceDeleteInput);
+    case "wp_menu_list":
+      return listMenus(client, input as unknown as MenuListInput);
+    case "wp_menu_get":
+      return getMenu(client, input as unknown as MenuGetInput);
+    case "wp_menu_create":
+      return createMenu(client, input as unknown as MenuCreateInput);
+    case "wp_menu_update":
+      return updateMenu(client, input as unknown as MenuUpdateInput);
+    case "wp_menu_delete":
+      return deleteMenu(client, input as unknown as MenuDeleteInput);
+    case "wp_menu_item_create":
+      return createMenuItem(client, input as unknown as MenuItemCreateInput);
+    case "wp_menu_item_update":
+      return updateMenuItem(client, input as unknown as MenuItemUpdateInput);
+    case "wp_menu_item_delete":
+      return deleteMenuItem(client, input as unknown as MenuItemDeleteInput);
     case "wp_seo_get":
       return getResourceSeo(client, input as unknown as ResourceSeoGetInput);
     case "wp_seo_update":
@@ -444,6 +519,28 @@ async function executeRemoteTool(
       return replacePostContent(client, input as unknown as PostContentReplaceInput);
     case "wp_media_upload":
       return uploadMedia(client, input as unknown as MediaUploadInput);
+    case "wp_media_batch_import":
+      return batchImportMedia(client, input as unknown as MediaBatchImportInput);
+    case "wp_media_category_list":
+      return listMediaCategories(client, input as unknown as MediaCategoryListInput);
+    case "wp_media_category_get":
+      return getMediaCategory(client, input as unknown as MediaCategoryGetInput);
+    case "wp_media_category_create":
+      return createMediaCategory(client, input as unknown as MediaCategoryCreateInput);
+    case "wp_media_category_update":
+      return updateMediaCategory(client, input as unknown as MediaCategoryUpdateInput);
+    case "wp_media_category_delete":
+      return deleteMediaCategory(client, input as unknown as MediaCategoryDeleteInput);
+    case "wp_media_list":
+      return listMedia(client, input as unknown as MediaListInput);
+    case "wp_media_get":
+      return getMedia(client, input as unknown as MediaGetInput);
+    case "wp_media_update":
+      return updateMedia(client, input as unknown as MediaUpdateInput);
+    case "wp_media_delete":
+      return deleteMedia(client, input as unknown as MediaDeleteInput);
+    case "wp_media_alt_update":
+      return updateMediaAlt(client, input as unknown as MediaAltUpdateInput);
     case "wp_package_list":
       return listPackages(client, input as unknown as PackageListInput);
     case "wp_package_get":
@@ -456,14 +553,14 @@ async function executeRemoteTool(
       return activatePackage(client, input as unknown as PackageStatusMutationInput);
     case "wp_package_deactivate":
       return deactivatePackage(client, input as unknown as PackageStatusMutationInput);
-    case "wp_jelly_form_settings_get":
-      return getJellyFormSettings(client);
-    case "wp_jelly_form_settings_update":
-      return updateJellyFormSettings(client, input as unknown as JellyFormSettingsUpdateInput);
-    case "wp_jelly_form_inquiry_list":
-      return listJellyFormInquiries(client, input as unknown as JellyFormInquiryListInput);
-    case "wp_jelly_form_inquiry_get":
-      return getJellyFormInquiry(client, input as unknown as JellyFormInquiryGetInput);
+    case "wp_inquiry_settings_get":
+      return getInquirySettings(client);
+    case "wp_inquiry_settings_update":
+      return updateInquirySettings(client, input as unknown as InquirySettingsUpdateInput);
+    case "wp_inquiry_list":
+      return listInquiries(client, input as unknown as InquiryListInput);
+    case "wp_inquiry_get":
+      return getInquiry(client, input as unknown as InquiryGetInput);
     default:
       throw new Error(`Tool does not perform a remote WordPress operation: ${toolName}`);
   }
@@ -487,9 +584,9 @@ export async function executeWpApiTool(
       return getStoredClient(readRequiredString(validatedInput, "name"), context);
     case "wp_structure_get":
       return getWpStructure(validatedInput as StructureGetInput);
-    case "wp_rest_api": {
+    case "wp_api_route": {
       if (validatedInput.client !== undefined || validatedInput.siteUrl !== undefined) {
-        throw new Error("wp_rest_api does not accept client or siteUrl. Provide domain only.");
+        throw new Error("wp_api_route does not accept client or siteUrl. Provide domain only.");
       }
       const domain = normalizeRestApiDomain(validatedInput.domain);
       const publicClient = new WordPressClient({
@@ -500,7 +597,7 @@ export async function executeWpApiTool(
         fetchImpl: context.fetchImpl,
         logger: context.logger
       });
-      return getApiSchema(publicClient, validatedInput as unknown as ApiSchemaInput);
+      return getApiRoute(publicClient, validatedInput as unknown as ApiRouteInput);
     }
     case "wp_elementor_inspect":
     case "wp_elementor_edit":
