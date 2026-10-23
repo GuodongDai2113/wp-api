@@ -1,3 +1,4 @@
+import { recordDiagnostic } from "../shared/diagnostics.js";
 import { open } from "node:fs/promises";
 import { lookup as lookupHostname } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -617,6 +618,7 @@ async function readResponseBytes(response: Response, maxBytes: number, bodyKind:
     return Buffer.alloc(0);
   }
 
+  const readStarted = performance.now();
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -627,6 +629,7 @@ async function readResponseBytes(response: Response, maxBytes: number, bodyKind:
         break;
       }
       totalBytes += value.byteLength;
+      recordDiagnostic("responseBytes", value.byteLength);
       if (totalBytes > maxBytes) {
         try {
           await reader.cancel();
@@ -638,6 +641,7 @@ async function readResponseBytes(response: Response, maxBytes: number, bodyKind:
       chunks.push(Buffer.from(value));
     }
   } finally {
+    recordDiagnostic("upstreamMs", performance.now() - readStarted);
     reader.releaseLock();
   }
   return Buffer.concat(chunks, totalBytes);
@@ -785,11 +789,17 @@ export class WordPressClient {
 
   /** 使用统一超时和手动重定向策略执行单次网络请求。 */
   private async fetchWithLimits(url: string, init: RequestInit = {}): Promise<Response> {
-    return this.fetchImpl(url, {
-      ...init,
-      redirect: "manual",
-      signal: AbortSignal.timeout(this.requestTimeoutMs)
-    });
+    const started = performance.now();
+    recordDiagnostic("requests", 1);
+    try {
+      return await this.fetchImpl(url, {
+        ...init,
+        redirect: "manual",
+        signal: AbortSignal.timeout(this.requestTimeoutMs)
+      });
+    } finally {
+      recordDiagnostic("upstreamMs", performance.now() - started);
+    }
   }
 
   /** 拒绝 REST 请求收到的重定向；认证模式下同时确保凭据不会被带到其他 origin。 */
@@ -955,9 +965,9 @@ export class WordPressClient {
     return result.data;
   }
 
-  /** 创建资源。 */
-  async create<T = unknown>(route: string, body: unknown): Promise<T> {
-    const result = await this.request<T>(route, { method: "POST", body });
+  /** 创建资源，并允许限制成功响应字段；错误处理及请求体保持原样。 */
+  async create<T = unknown>(route: string, body: unknown, query?: QueryParams): Promise<T> {
+    const result = await this.request<T>(route, { method: "POST", body, query });
     return result.data;
   }
 
@@ -1161,17 +1171,17 @@ export class WordPressClient {
     }
   }
 
-  /** 更新指定 ID 的资源。 */
-  async update<T = unknown>(route: string, id: number, body: unknown): Promise<T> {
-    const result = await this.request<T>(`${route}/${id}`, { method: "POST", body });
+  /** 更新指定 ID 的资源，可通过查询参数限制响应字段；不改变提交内容及错误处理。 */
+  async update<T = unknown>(route: string, id: number, body: unknown, query?: QueryParams): Promise<T> {
+    const result = await this.request<T>(`${route}/${id}`, { method: "POST", body, query });
     return result.data;
   }
 
-  /** 删除指定 ID 的资源。 */
-  async delete<T = unknown>(route: string, id: number, { force = false }: { force?: boolean } = {}): Promise<T> {
+  /** 删除指定 ID 的资源，可独立限制返回字段，force 保持由专用参数控制。 */
+  async delete<T = unknown>(route: string, id: number, { force = false }: { force?: boolean } = {}, query?: QueryParams): Promise<T> {
     const result = await this.request<T>(`${route}/${id}`, {
       method: "DELETE",
-      query: force ? { force: true } : undefined
+      query: query ? { ...query, ...(force ? { force: true } : {}) } : force ? { force: true } : undefined
     });
     return result.data;
   }

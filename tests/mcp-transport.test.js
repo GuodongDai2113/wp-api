@@ -26,7 +26,7 @@ test("MCP transport 完成工具发现、结构化成功响应和标准错误响
 
   const tools = await client.listTools();
   assert.equal(tools.tools.length, WP_API_TOOL_NAMES.length);
-  assert.equal(tools.tools.some((tool) => tool.name === "wp_catalog_fields_get"), true);
+  assert.equal(tools.tools.some((tool) => tool.name.startsWith("wp_product_")), false);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_list"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_get"), true);
   assert.equal(tools.tools.some((tool) => tool.name === "wp_client_use"), false);

@@ -2,21 +2,36 @@
 
 本项目的重要变更记录在此文件中，版本格式遵循语义化版本。
 
-## Unreleased
+## 2.3.0
 
 ### Added
+
+- 新增 `wp_result_read`，仅通过当前服务签发的结果 ID 执行有界 JSON Pointer、字段与数组区间读取，支持续读偏移、文件完整性验证及会话隔离。
+- 通用结果增加默认一小时 TTL、128 MiB 会话容量和 25 MiB 单文件上限；读写清理串行，仅惰性清理本会话登记文件。跨重启遗留清理仍待实现。
+
+- 新增 `npm run benchmark:cost` 固定合成成本基准，覆盖工具发现、13 个场景、完整任务链、HTTP 请求/响应、MCP JSON-RPC 体积及结果文件补读；提供原始报告和测量限制说明。
+- 新增默认关闭的 `WP_API_DIAGNOSTICS=1` 数值诊断，仅输出 stderr，按并发调用隔离计数，不记录凭据、URL、输入或正文；不改变工具返回契约。
 
 - 单文件媒体上传与批量导入条目新增 `post`，随首次附件创建请求关联父文章，不因关联操作追加更新请求；支持 `0` 表示不关联并校验安全整数。
 - 新增 `wp_media_batch_import`，支持 1～100 个本地媒体及独立元数据、分类的顺序导入；上传前校验全部路径，逐项失败继续并返回紧凑回执，不自动重试。
 - 新增五个 `wp_media_category_*` 工具，管理 Jelly Editor `media_category` 分类；媒体上传支持 `categories` 并核对分配结果，媒体更新支持替换/清空分类，媒体列表支持分类筛选。
 - 媒体工具拆分到独立 `media.ts`，新增 `wp_media_list/get/update/delete`，保留上传创建与独立 alt 更新；支持分页筛选、编辑上下文、元数据清空和显式永久删除。
 - 新增 8 个 WordPress 经典导航菜单工具，支持发现主题位置、读取完整菜单项以及创建、更新、排序、移动和删除菜单与菜单项。
-- 新增认证工具 `wp_catalog_fields_get`，读取 Jelly Catalog 产品和分类的字段说明、选项及完整重复组 schema。
+- Jelly Catalog 产品和分类统一由 `wp_resource_*` 管理，已注册的 REST Meta 通过 `meta`/`metaFile` 写入。
 - `wp_resource_get` 新增 `context: "view" | "edit"`，支持更新前读取原始内容；补充动态 Meta 部分更新、删除及 HTML 内容工作流。
 
 - 新增 `wp_media_alt_update`，允许 Agent 按附件 ID 直接更新或清空媒体库图片的替代文本。
 
+- 本地结构目录按 Jelly Editor、Jelly Form、Jelly Catalog 插件实际注册的 REST 字段与权限更新：新增 `media-category`、`inquiry`、`inquiry-settings`，补充页面自定义布局与 Jelly Catalog 动态字段，并移除未注册到 REST 的 `category_inherit_parent_content` 写入说明。
+
 ### Changed
+
+- 资源单条 create/update/delete 默认改为有界证据回执，`detail=full` 保留完整模式；写入 HTTP 响应下推字段选择，不把提交数据当作已核实落盘值。
+- 资源/SEO batch 新增 unknown/notExecuted 和 nullable success，保留中断前成功索引/ID，未知块后停止发送且不自动重试；部分失败通过 MCP isError 保留失败语义。
+- 通用结果交付移至独立模块；落盘引用保留分页和执行摘要，序列化或落盘失败返回独立 deliveryError 及已知写入回执。新增第二批故障测试和成本报告。
+
+- 正文替换默认返回最多 120 码点的预览，`detail=full` 恢复完整输入回显；正文/链接内部 GET 与 POST 响应、SEO 单条 GET 下推 `_fields`，不增加请求或重试写入。
+- 成本基准 CLI 为每个场景启动独立进程记录内存高水位，新增 P1 前后对比报告；仍保留优化前原始基线。
 
 - `wp_api_route` 默认改为严格分层的 `overview`，不自动展开路由定义；新增 `section/httpMethod/names` 支持分页目录及按需获取完整参数、字段定义。默认输出形状发生变化：依赖旧摘要的调用方需显式传入 `detail: "summary"`；无 section 的 `full` 原始响应保持不变。
 - 将公开 MCP 工具 `wp_rest_api` 重命名为 `wp_api_route`，并将源码模块 `api-schema` 同步重命名为 `api-route`；输入参数、返回结构和行为保持不变。

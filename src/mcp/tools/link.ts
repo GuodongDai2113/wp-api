@@ -1,4 +1,3 @@
-import { replaceContentText, type ReplaceContentTextResult } from "../../wordpress/content/replace.js";
 import {
   addLinkToContent,
   extractPostContent,
@@ -9,15 +8,18 @@ import {
   type PostLinkEntry
 } from "../../wordpress/content/links.js";
 import { WordPressClient } from "../../wordpress/client.js";
+import { getResourceConfig, type PostResourceName } from "../../wordpress/resources.js";
 import { assertPositiveId } from "../shared/validation.js";
 import type { WordPressResourceEntity } from "./resources.js";
 
-/** 文章链接工具接收的 MCP 风格输入。 */
-export interface PostLinkInput {
+/** 链接工具接收的 MCP 风格输入。 */
+export interface LinkInput {
+  /** 要操作的文章、页面或产品资源。 */
+  resource: PostResourceName;
   /** 要执行的链接动作。 */
   action: "list" | "add" | "update" | "remove";
-  /** 要读取或更新的正安全整数文章 ID。 */
-  postId: number;
+  /** 要读取或更新的正安全整数资源 ID。 */
+  id: number;
   /** 添加动作的匹配文本，或更新和移除动作的可选锚文本过滤条件。 */
   text?: string;
   /** 添加动作的目标地址，或更新和移除动作定位的现有地址。 */
@@ -28,15 +30,15 @@ export interface PostLinkInput {
   newText?: string;
 }
 
-/** 文章链接工具返回的稳定结构。 */
-export interface PostLinkPayload {
-  /** 文章 ID。 */
+/** 链接工具返回的稳定结构。 */
+export interface LinkPayload {
+  /** 文章、页面或产品 ID。 */
   id: number;
-  /** 固定资源名称。 */
-  resource: "posts";
+  /** 实际操作的资源名称。 */
+  resource: PostResourceName;
   /** 实际执行的链接动作。 */
   action: "links.list" | "links.add" | "links.update" | "links.remove";
-  /** 是否实际更新了文章正文。 */
+  /** 是否实际更新了资源正文。 */
   updated: boolean;
   /** 链接操作结果状态。 */
   status: "listed" | "updated" | "not_found" | "skipped_existing_link";
@@ -54,42 +56,22 @@ export interface PostLinkPayload {
   links?: PostLinkEntry[];
 }
 
-/** 文章正文替换工具接收的 MCP 风格输入。 */
-export interface PostContentReplaceInput {
-  /** 要更新的正安全整数文章 ID。 */
-  postId: number;
-  /** 需要精确匹配的非空原文本。 */
-  text: string;
-  /** 替换文本，允许空字符串用于删除匹配内容。 */
-  replacement: string;
+/** 返回 post 类型资源的 WordPress REST route，并拒绝非 post 类型资源。 */
+function getPostResourceRoute(resource: PostResourceName): string {
+  const config = getResourceConfig(resource);
+  if (config.type !== "post") {
+    throw new Error(`Link tool supports only posts, pages, and products: ${String(resource)}.`);
+  }
+  return config.route;
 }
 
-/** 文章正文替换工具返回的稳定结构。 */
-export interface PostContentReplacePayload {
-  /** 文章 ID。 */
-  id: number;
-  /** 固定资源名称。 */
-  resource: "posts";
-  /** 固定动作名称。 */
-  action: "content.replace";
-  /** 是否实际更新了文章正文。 */
-  updated: boolean;
-  /** 文本替换结果状态。 */
-  status: ReplaceContentTextResult["status"];
-  /** 被匹配的原文本。 */
-  text: string;
-  /** 用于替换的新文本。 */
-  replacement: string;
-  /** 实际替换次数。 */
-  replacements: number;
-}
-
-/** 列出、添加、更新或移除文章正文中的链接。 */
-export async function managePostLink(
+/** 列出、添加、更新或移除文章、页面或产品正文中的链接。 */
+export async function manageLink(
   client: WordPressClient,
-  input: PostLinkInput
-): Promise<PostLinkPayload> {
-  assertPositiveId(input.postId, "Post id");
+  input: LinkInput
+): Promise<LinkPayload> {
+  assertPositiveId(input.id, "Resource id");
+  const route = getPostResourceRoute(input.resource);
   if (input.action === "add" && (!input.text || !input.href)) {
     throw new Error("Link add requires text and href.");
   }
@@ -106,12 +88,12 @@ export async function managePostLink(
     }
   }
 
-  const entity = await client.get<WordPressResourceEntity>("posts", input.postId, { context: "edit" });
+  const entity = await client.get<WordPressResourceEntity>(route, input.id, { context: "edit", _fields: "id,content" });
   const content = extractPostContent(entity);
   if (input.action === "list") {
     return {
-      id: input.postId,
-      resource: "posts",
+      id: input.id,
+      resource: input.resource,
       action: "links.list",
       updated: false,
       status: "listed",
@@ -132,11 +114,11 @@ export async function managePostLink(
       : removeLinkFromContent(content, { href: input.href as string, text: input.text });
 
   if (result.updated) {
-    await client.update("posts", input.postId, { content: result.content });
+    await client.update(route, input.id, { content: result.content }, { _fields: "id" });
   }
   return {
-    id: input.postId,
-    resource: "posts",
+    id: input.id,
+    resource: input.resource,
     action: `links.${input.action}`,
     updated: result.updated,
     status: result.status,
@@ -144,39 +126,6 @@ export async function managePostLink(
     href: input.href,
     newHref: input.newHref,
     newText: input.newText,
-    replacements: result.replacements
-  };
-}
-
-/** 精确替换文章正文中的全部匹配文本，并仅在内容变化时写回。 */
-export async function replacePostContent(
-  client: WordPressClient,
-  input: PostContentReplaceInput
-): Promise<PostContentReplacePayload> {
-  assertPositiveId(input.postId, "Post id");
-  if (!input.text) {
-    throw new Error("Replacement text to find must not be empty.");
-  }
-  if (typeof input.replacement !== "string") {
-    throw new Error("Replacement must be a string.");
-  }
-
-  const entity = await client.get<WordPressResourceEntity>("posts", input.postId, { context: "edit" });
-  const result = replaceContentText(extractPostContent(entity), {
-    text: input.text,
-    replacement: input.replacement
-  });
-  if (result.updated) {
-    await client.update("posts", input.postId, { content: result.content });
-  }
-  return {
-    id: input.postId,
-    resource: "posts",
-    action: "content.replace",
-    updated: result.updated,
-    status: result.status,
-    text: input.text,
-    replacement: input.replacement,
     replacements: result.replacements
   };
 }

@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  managePostLink,
-  replacePostContent
-} from "../build/mcp/tools/content.js";
+  manageLink
+} from "../build/mcp/tools/link.js";
 import {
   createResource,
   deleteResource,
@@ -37,7 +36,7 @@ test("content handler maps resource list input without CLI arguments", async () 
 
   assert.deepEqual(calls, [{
     route: "product",
-    query: { search: "shoe", page: 2, per_page: 25, status: "publish" }
+      query: { search: "shoe", page: 2, per_page: 25, status: "publish" }
   }]);
   assert.equal(result.items[0].id, 7);
 });
@@ -251,40 +250,50 @@ test("content handler preserves explicit SEO clearing", async () => {
   });
 });
 
-/** 验证文章链接和正文替换只在发生变化时调用 WordPress 更新接口。 */
-test("content handler writes changed post content directly", async () => {
+/** 验证链接工具按资源路由写入，并且只在发生变化时调用 WordPress 更新接口。 */
+test("link handler writes changed resource content directly", async () => {
   const updates = [];
   const client = {
-    /** 根据文章 ID 返回对应的可编辑原始正文。 */
+    /** 返回对应的可编辑原始正文。 */
     async get(_route, id) {
-      return id === 1
-        ? { id, content: { raw: "Read docs now" } }
-        : { id, content: { raw: "wrong wrong" } };
+      return { id, content: { raw: "Read docs now" } };
     },
-    /** 记录 handler 写回的文章正文。 */
+    /** 记录 handler 写回的资源正文。 */
     async update(route, id, body) {
       updates.push({ route, id, body });
       return { id };
     }
   };
 
-  const linkResult = await managePostLink(client, {
+  const linkResult = await manageLink(client, {
+    resource: "posts",
     action: "add",
-    postId: 1,
+    id: 1,
     text: "docs",
     href: "/docs"
   });
-  const replaceResult = await replacePostContent(client, {
-    postId: 2,
-    text: "wrong",
-    replacement: "right"
+  const productResult = await manageLink(client, {
+    resource: "products",
+    action: "add",
+    id: 2,
+    text: "docs",
+    href: "/docs"
+  });
+  const pageResult = await manageLink(client, {
+    resource: "pages",
+    action: "add",
+    id: 3,
+    text: "docs",
+    href: "/docs"
   });
 
   assert.equal(linkResult.status, "updated");
-  assert.equal(replaceResult.replacements, 2);
+  assert.equal(productResult.resource, "products");
+  assert.equal(pageResult.resource, "pages");
   assert.deepEqual(updates, [
     { route: "posts", id: 1, body: { content: "Read <a href=\"/docs\">docs</a> now" } },
-    { route: "posts", id: 2, body: { content: "right right" } }
+    { route: "product", id: 2, body: { content: "Read <a href=\"/docs\">docs</a> now" } },
+    { route: "pages", id: 3, body: { content: "Read <a href=\"/docs\">docs</a> now" } }
   ]);
 });
 

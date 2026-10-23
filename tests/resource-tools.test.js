@@ -240,7 +240,7 @@ test("resource batch create chunks requests and correlates source IDs", async ()
   assert.equal(calls[1].options.body.requests.length, 1);
   assert.deepEqual(calls[0].options.body.requests[0], {
     method: "POST",
-    path: "/wp/v2/posts",
+    path: "/wp/v2/posts?_fields=id,status",
     body: { title: "Post 1" }
   });
   assert.deepEqual(result.items[0], { index: 0, sourceId: 1, id: 100, success: true });
@@ -330,7 +330,7 @@ test("resource batch update imports post CSV and reports partial failures", asyn
 
   assert.deepEqual(calls[0].options.body.requests[0], {
     method: "POST",
-    path: "/wp/v2/posts/7",
+    path: "/wp/v2/posts/7?_fields=id,status",
     body: { title: "", status: "draft", content: "Body", featured_media: 0, categories: [], meta: { flag: true } }
   });
   assert.equal(result.succeeded, 1);
@@ -373,7 +373,7 @@ test("product CSV maps categories to product_cat", async (t) => {
   });
   assert.deepEqual(calls[0].options.body.requests[0], {
     method: "POST",
-    path: "/wp/v2/product/12",
+    path: "/wp/v2/product/12?_fields=id,status",
     body: { title: "Pump", product_cat: [2, 5], meta: {} }
   });
 });
@@ -414,7 +414,7 @@ test("taxonomy resources use a distinct CSV schema", async (t) => {
   });
   assert.deepEqual(calls[0].options.body.requests[0], {
     method: "POST",
-    path: "/wp/v2/categories/4",
+    path: "/wp/v2/categories/4?_fields=id,status",
     body: { name: "Guides", slug: "guides", description: "", parent: 0, meta: { featured: true } }
   });
   assert.equal(result.succeeded, 1);

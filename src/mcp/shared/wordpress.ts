@@ -1,4 +1,4 @@
-import { WordPressApiError } from "../../wordpress/client.js";
+import { WordPressApiError, type WordPressClient } from "../../wordpress/client.js";
 
 /** WordPress batch/v1 默认支持的单批最大子请求数。 */
 const WORDPRESS_BATCH_SIZE = 25;
@@ -41,6 +41,8 @@ export interface WordPressBatchResponse {
 
 /** WordPress batch 子请求的规范化错误。 */
 export interface WordPressBatchError {
+  /** 错误码或消息超出有界摘要时显式标记。 */
+  truncated?: boolean;
   /** WordPress 错误码。 */
   code: string;
   /** 可供调用方展示的错误消息。 */
@@ -97,9 +99,12 @@ export function normalizeWordPressBatchError(
   fallbackMessage: string
 ): WordPressBatchError {
   const body = isRecord(response.body) ? response.body : {};
+  const code = typeof body.code === "string" ? body.code : "wordpress_batch_item_failed";
+  const message = typeof body.message === "string" ? body.message : fallbackMessage;
   return {
-    code: typeof body.code === "string" ? body.code : "wordpress_batch_item_failed",
-    message: typeof body.message === "string" ? body.message : fallbackMessage,
+    code: code.slice(0, 128),
+    message: message.slice(0, 512),
+    ...(code.length > 128 || message.length > 512 ? { truncated: true } : {}),
     status: typeof response.status === "number" ? response.status : 500
   };
 }
@@ -112,6 +117,64 @@ export function isSuccessfulWordPressBatchResponse(
     && response.status >= 200
     && response.status < 300
     && isRecord(response.body);
+}
+
+/** 批处理条目已知的执行状态，未知与未执行不能计为失败或自动重试。 */
+export type BatchExecutionState = "succeeded" | "failed" | "unknown" | "not_executed";
+
+/** 保留原始条目关联的批处理结果，不携带顶层网络错误中的敏感请求数据。 */
+export interface BatchExecutionOutcome<T> {
+  /** 原始输入与请求，用于生成稳定索引和 ID 映射。 */
+  entry: T;
+  /** 当前条目执行状态。 */
+  state: BatchExecutionState;
+  /** 仅在收到结构完整的对应子响应时保留。 */
+  response?: WordPressBatchSubresponse;
+}
+
+/**
+ * 预检全部分块后顺序执行；传输失败或无法对应响应时保留先前结果，当前块标未知，后续不执行。
+ * 单个有效失败响应不会阻止后续块。不得重试任何块，避免重复创建。
+ */
+export async function executeWordPressBatch<T extends { request: WordPressBatchRequest }>(
+  client: WordPressClient,
+  entries: readonly T[],
+  label: string,
+  confirmsSuccess: (body: Record<string, unknown>, entry: T) => boolean
+): Promise<BatchExecutionOutcome<T>[]> {
+  const chunks = chunkWordPressBatchEntries(entries, label);
+  const outcomes: BatchExecutionOutcome<T>[] = [];
+  let interrupted = false;
+  for (const chunk of chunks) {
+    if (interrupted) {
+      outcomes.push(...chunk.map((entry) => ({ entry, state: "not_executed" as const })));
+      continue;
+    }
+    let responses: WordPressBatchSubresponse[];
+    try {
+      const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
+        method: "POST", body: { validation: "normal", requests: chunk.map((entry) => entry.request) }
+      });
+      if (!Array.isArray(batch.data?.responses) || batch.data.responses.length !== chunk.length) throw new Error("Unmatched batch responses");
+      responses = batch.data.responses;
+    } catch {
+      outcomes.push(...chunk.map((entry) => ({ entry, state: "unknown" as const })));
+      interrupted = true;
+      continue;
+    }
+    for (const [index, entry] of chunk.entries()) {
+      const response = responses[index];
+      if (isRecord(response) && isSuccessfulWordPressBatchResponse(response) && confirmsSuccess(response.body, entry)) {
+        outcomes.push({ entry, state: "succeeded", response });
+      } else if (isRecord(response) && typeof response.status === "number" && response.status >= 400 && response.status <= 599) {
+        outcomes.push({ entry, state: "failed", response });
+      } else {
+        outcomes.push({ entry, state: "unknown" });
+        interrupted = true;
+      }
+    }
+  }
+  return outcomes;
 }
 
 /** 判断错误是否表示动态分页期间集合缩减造成的页码越界。 */

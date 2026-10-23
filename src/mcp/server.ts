@@ -1,7 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-
+import { measureToolCall } from "../shared/diagnostics.js";
+import { toToolResult } from "./tool-result.js";
+import { getResultStore } from "./result-store.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
@@ -77,10 +76,11 @@ const outputSchema = {
 
 /** 所有 MCP 工具的副作用、幂等性和外部交互提示。 */
 export const WP_API_TOOL_ANNOTATIONS = {
+  /** 只读本会话签发的本地结果，不访问 WordPress。 */
+  wp_result_read: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_client_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_client_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   wp_structure_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  wp_catalog_fields_get: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_api_route: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_count: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_resource_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -102,8 +102,7 @@ export const WP_API_TOOL_ANNOTATIONS = {
   wp_seo_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   wp_seo_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   wp_seo_batch_update: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-  wp_post_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  wp_post_content_replace: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  wp_link: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   wp_media_upload: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   wp_media_batch_import: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   wp_media_category_list: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -158,7 +157,7 @@ const postResourceBodyShape = {
   gutenberg: z.boolean().optional().describe("Convert resolved HTML content to WordPress Gutenberg block markup before upload."),
   featuredMedia: z.number().int().nonnegative().optional().describe("Featured media attachment ID; use 0 to clear the current featured image."),
   categories: z.array(z.number().int().positive()).optional().describe("Category IDs. Maps to categories for posts and product_cat for products; use an empty array to clear assignments. Not supported by pages."),
-  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. For Jelly Catalog products/categories, first call wp_catalog_fields_get with the same client. Send only changed keys; null deletes a value, arrays replace the entire field, and omitted keys are preserved. Use declared option values, not labels."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST meta fields. Send only changed keys; null deletes a value, arrays replace the entire field, and omitted keys are preserved."),
   metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST meta object. Do not provide together with meta.")
 };
 
@@ -168,7 +167,7 @@ const taxonomyResourceBodyShape = {
   slug: z.string().optional().describe("Taxonomy term slug."),
   description: z.string().optional().describe("Taxonomy term description."),
   parent: z.number().int().nonnegative().optional().describe("Parent ID for hierarchical categories and product categories; use 0 to remove the parent. Not supported by product tags."),
-  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST term meta fields. For product-categories first call wp_catalog_fields_get(target=product_cat) with the same client. Send only changed keys; null deletes, arrays replace the entire field, omitted keys are preserved. HTML editor fields such as category_buying_guide and category_why_choose accept source HTML."),
+  meta: z.record(z.unknown()).optional().describe("Registered WordPress REST term meta fields. Send only changed keys; null deletes, arrays replace the entire field, and omitted keys are preserved."),
   metaFile: nonBlankStringSchema.optional().describe("Local JSON file containing the complete registered WordPress REST term meta object. Do not provide together with meta.")
 };
 
@@ -255,110 +254,17 @@ const elementorEditOperationSchema = z.discriminatedUnion("op", [
   elementorMoveElementOperationSchema
 ]);
 
-/** MCP 工具结果允许直接进入会话的最大紧凑 JSON 字节数。 */
-const MAX_INLINE_RESULT_BYTES = 8 * 1024;
-
-/** 超过内联阈值后返回给 MCP host 的本地结果文件引用。 */
-interface StoredToolResult {
-  /** 表示完整结果已保存在本地文件中。 */
-  stored: true;
-  /** 保存完整 JSON 结果的绝对路径。 */
-  file_path: string;
-  /** 本地结果文件的 UTF-8 字节数。 */
-  bytes: number;
-  /** 本地结果文件内容的 SHA-256。 */
-  sha256: string;
-  /** 本地结果文件的媒体类型。 */
-  media_type: "application/json";
-}
-
-/** 将大型 MCP 结果保存到本地目录，并返回不包含原始数据的小型引用。 */
-async function storeLargeToolResult(
-  toolName: WpApiToolName,
-  serializedJson: string,
-  context: WpApiToolContext
-): Promise<StoredToolResult> {
-  const resultDirectory = resolve(context.resultDirectory ?? resolve(process.cwd(), ".wp-api-results"));
-  await mkdir(resultDirectory, { recursive: true });
-  const filePath = resolve(resultDirectory, `${toolName}-${Date.now()}-${randomUUID()}.json`);
-  const fileContents = `${serializedJson}\n`;
-  await writeFile(filePath, fileContents, { encoding: "utf8", flag: "wx" });
-  return {
-    stored: true,
-    file_path: filePath,
-    bytes: Buffer.byteLength(fileContents, "utf8"),
-    sha256: createHash("sha256").update(fileContents).digest("hex"),
-    media_type: "application/json"
-  };
-}
-
-/**
- * 将任意结构化数据包装为 MCP 工具响应。
- * 超过 8 KiB 的完整结果只写入本地文件，避免 structuredContent 再次占用会话上下文。
- */
-async function toToolResult(
-  toolName: WpApiToolName,
-  data: unknown,
-  context: WpApiToolContext,
-  structuredOnly = false
-) {
-  const serializedJson = JSON.stringify(data);
-  if (serializedJson === undefined) {
-    throw new Error(`MCP tool ${toolName} returned a value that cannot be serialized as JSON.`);
-  }
-  const serializedBytes = Buffer.byteLength(serializedJson, "utf8");
-  if (serializedBytes > MAX_INLINE_RESULT_BYTES) {
-    const storedResult = await storeLargeToolResult(toolName, serializedJson, context);
-    return {
-      structuredContent: {
-        result: storedResult
-      },
-      content: [
-        {
-          type: "text" as const,
-          text: `Result is ${serializedBytes} bytes and was stored locally at ${storedResult.file_path}.\n`
-        }
-      ]
-    };
-  }
-
-  if (structuredOnly) {
-    return {
-      structuredContent: {
-        result: data
-      },
-      content: [
-        {
-          type: "text" as const,
-          text: "Compact result is available in structuredContent.result.\n"
-        }
-      ]
-    };
-  }
-  const formattedJson = `${JSON.stringify(data, null, 2)}\n`;
-  return {
-    structuredContent: {
-      result: data
-    },
-    content: [
-      {
-        type: "text" as const,
-        text: formattedJson
-      }
-    ]
-  };
-}
-
 /** 创建绑定具体工具名和上下文的 MCP 回调，并为紧凑查询启用单份结构化输出。 */
 function createToolCallback(toolName: WpApiToolName, context: WpApiToolContext) {
   const structuredOnly = toolName === "wp_structure_get"
     || toolName === "wp_api_route";
-  return async (input: WpApiToolInput) => toToolResult(
+  return async (input: WpApiToolInput) => measureToolCall(toolName, async () => toToolResult(
     toolName,
     await executeWpApiTool(toolName, input, context),
     context,
-    structuredOnly
-  );
+    structuredOnly,
+    typeof input.id === "number" ? input.id : undefined
+  ));
 }
 
 /** 注册一个 Elementor MCP 工具。 */
@@ -385,6 +291,26 @@ function registerElementorTool(
 
 /** 在 MCP server 上注册 wp-api 的全部工具。 */
 export function registerWpApiTools(server: McpServer, context: WpApiToolContext = {}): void {
+  // 每次注册获得独立上下文，同一个外部配置对象不能导致两个服务器共享结果 ID。
+  context = { ...context };
+  getResultStore(context);
+  server.registerTool("wp_result_read", {
+    title: "Read a stored result slice",
+    description: "Read only a server-issued resultId. Objects default to field-name indexes; select fields or a JSON Pointer for values. Arrays return bounded slices with nextOffset; no paths accepted. Expired or unknown write results must be verified remotely, never blindly repeated.",
+    annotations: WP_API_TOOL_ANNOTATIONS.wp_result_read,
+    inputSchema: {
+      /** 仅接受当前会话生成的 ID。 */
+      resultId: z.string().uuid().describe("resultId from a stored tool response in this server session."),
+      /** 精确 RFC 6901 指针，默认根节点。 */
+      jsonPointer: z.string().max(512).optional().describe("RFC 6901 pointer, e.g. /items or /items/2/error. Default root."),
+      /** 只读取选中的对象字段；数组时作用于每项。 */
+      fields: z.array(nonBlankStringSchema).min(1).max(50).optional().describe("Object field paths; applied per array item. Omit to inspect object keys."),
+      /** 当前数组或对象键列表的起点。 */
+      offset: z.number().int().nonnegative().optional().describe("Zero-based array or key offset; default 0."),
+      /** 请求上限仍受字节预算控制。 */
+      limit: z.number().int().min(1).max(100).optional().describe("Maximum entries, default 20. Follow returned nextOffset; the byte budget may return fewer.")
+    }, outputSchema
+  }, createToolCallback("wp_result_read", context));
   server.registerTool(
     "wp_client_list",
     {
@@ -496,7 +422,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
     "wp_resource_get",
     {
       title: "Get WordPress resource",
-      description: "Get one WordPress or Jelly Catalog resource by ID. Use context=edit to read original content and meta before remote edits. Discover live Jelly Catalog field definitions with wp_catalog_fields_get.",
+      description: "Get one WordPress or Jelly Catalog resource by ID. Use context=edit to read the original editable entity before remote edits.",
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_get,
       inputSchema: {
         ...globalInputShape,
@@ -517,6 +443,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_create,
       inputSchema: {
         ...globalInputShape,
+        /** 默认返回有界回执；full 恢复完整实体。 */
+        detail: z.enum(["summary", "full"]).optional().describe("Default summary returns a bounded receipt. Use full for the complete legacy entity. Verify unknown outcomes before retrying."),
         target: resourceTargetSchema,
         data: resourceDataSchema.describe("Resource fields matching target.type.")
       },
@@ -556,6 +484,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_update,
       inputSchema: {
         ...globalInputShape,
+        /** 默认返回有界回执；full 恢复完整实体。 */
+        detail: z.enum(["summary", "full"]).optional().describe("Default summary returns a bounded receipt. Use full for the complete legacy entity. Verify unknown outcomes before retrying."),
         target: resourceTargetSchema,
         id: z.number().int().positive().describe("Resource ID."),
         data: resourceDataSchema.describe("Resource fields matching target.type.")
@@ -596,6 +526,8 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       annotations: WP_API_TOOL_ANNOTATIONS.wp_resource_delete,
       inputSchema: {
         ...globalInputShape,
+        /** 默认返回有界回执；full 恢复完整实体。 */
+        detail: z.enum(["summary", "full"]).optional().describe("Default summary returns a bounded receipt. Use full for the complete legacy entity. Verify unknown outcomes before retrying."),
         target: resourceTargetSchema,
         id: z.number().int().positive().describe("Resource ID."),
         force: z.boolean().optional().describe("Force permanent deletion. Required for every taxonomy target because taxonomy terms do not support trash.")
@@ -813,15 +745,16 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   );
 
   server.registerTool(
-    "wp_post_link",
+    "wp_link",
     {
-      title: "Manage links in WordPress post content",
-      description: "List, add, update, or remove links in the editable raw content of a WordPress post.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_post_link,
+      title: "Manage links in WordPress content",
+      description: "List, add, update, or remove links in the editable raw content of a post, page, or product.",
+      annotations: WP_API_TOOL_ANNOTATIONS.wp_link,
       inputSchema: {
         ...globalInputShape,
+        resource: postResourceSchema.describe("Post-type resource: posts, pages, or products."),
         action: z.enum(["list", "add", "update", "remove"]).describe("Link operation to perform."),
-        postId: z.number().int().positive().describe("Post ID."),
+        id: z.number().int().positive().describe("Resource ID (post, page, or product)."),
         text: z.string().min(1).optional().describe("Add: exact visible text to link. Update/remove: optional anchor text filter."),
         href: z.string().min(1).optional().describe("Add: new link URL. Update/remove: existing link URL to locate."),
         newHref: z.string().min(1).optional().describe("Update: replacement link URL."),
@@ -829,24 +762,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
       },
       outputSchema
     },
-    createToolCallback("wp_post_link", context)
-  );
-
-  server.registerTool(
-    "wp_post_content_replace",
-    {
-      title: "Replace text in WordPress post content",
-      description: "Replace every exact occurrence of text in a post's content, for example to fix a misspelled word.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_post_content_replace,
-      inputSchema: {
-        ...globalInputShape,
-        postId: z.number().int().positive().describe("Post ID."),
-        text: z.string().min(1).describe("Exact text to find in the post content."),
-        replacement: z.string().describe("Text that replaces every exact match; use an empty string to remove matches.")
-      },
-      outputSchema
-    },
-    createToolCallback("wp_post_content_replace", context)
+    createToolCallback("wp_link", context)
   );
 
   /** Jelly Editor 媒体分类可写字段，共享创建和更新的字段类型。 */
@@ -1169,21 +1085,6 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
   }).strict();
 
   server.registerTool(
-    "wp_catalog_fields_get",
-    {
-      title: "Get Jelly Catalog writable fields",
-      description: "Discover live product or product-category field definitions using the saved authenticated client. Returns labels, descriptions, types, choices, nested repeater schema, native meta schema and update semantics without truncating field definitions. Call before wp_resource_create/update or batch updates with meta. Read existing values via wp_resource_get (context=edit). Only enabled dynamic fields are available; this tool does not change field definitions. Requires the Jelly Catalog fields endpoint and edit permission; wp_api_route is anonymous and is not a substitute.",
-      annotations: WP_API_TOOL_ANNOTATIONS.wp_catalog_fields_get,
-      inputSchema: {
-        ...globalInputShape,
-        target: z.enum(["product", "product_cat"]).describe("product maps to resource target {type:post,resource:products}; product_cat maps to {type:taxonomy,resource:product-categories}.")
-      },
-      outputSchema
-    },
-    createToolCallback("wp_catalog_fields_get", context)
-  );
-
-  server.registerTool(
     "wp_inquiry_settings_get",
     {
       title: "Get Inquiry settings",
@@ -1365,7 +1266,7 @@ export function registerWpApiTools(server: McpServer, context: WpApiToolContext 
 export function createWpApiMcpServer(context: WpApiToolContext = {}): McpServer {
   const server = new McpServer({
     name: "wp-api",
-    version: "2.2.0"
+    version: "2.3.0"
   });
   registerWpApiTools(server, context);
   return server;

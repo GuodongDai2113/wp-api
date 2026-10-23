@@ -396,6 +396,12 @@ test("MCP 资源 schema 校验分页并支持显式清空字段", () => {
   assert.equal(listSchema.include.safeParse([1, 2]).success, true);
   assert.equal(listSchema.outputFile.safeParse("resources.csv").success, true);
   assert.equal(listSchema.overwrite.safeParse(true).success, true);
+  assert.equal(listSchema.detail, undefined);
+  assert.equal(listSchema.fields, undefined);
+
+  const getSchema = registrations.get("wp_resource_get").inputSchema;
+  assert.equal(getSchema.detail, undefined);
+  assert.equal(getSchema.fields, undefined);
 
   const countSchema = registrations.get("wp_resource_count").inputSchema;
   assert.equal(countSchema.perPage.safeParse(undefined).success, true);
@@ -520,7 +526,7 @@ test("executeWpApiTool 分发资源计数和 batch 创建更新", async () => {
       return {
         data: { responses: options.body.requests.map((request, index) => ({
           status: 200,
-          body: { id: request.path.endsWith("/4") ? 4 : 100 + index }
+          body: { id: new URL(request.path, "https://example.test").pathname.endsWith("/4") ? 4 : 100 + index }
         })) },
         pagination: { total: 0, totalPages: 0 }
       };
@@ -551,8 +557,8 @@ test("executeWpApiTool 分发资源计数和 batch 创建更新", async () => {
     route: "posts",
     query: { page: 1, per_page: 100, _fields: "id" }
   });
-  assert.equal(calls[1].options.body.requests[0].path, "/wp/v2/posts");
-  assert.equal(calls[2].options.body.requests[0].path, "/wp/v2/posts/4");
+  assert.equal(calls[1].options.body.requests[0].path, "/wp/v2/posts?_fields=id,status");
+  assert.equal(calls[2].options.body.requests[0].path, "/wp/v2/posts/4?_fields=id,status");
 });
 
 test("executeWpApiTool 分发 SEO 列表与 batch 更新", async () => {

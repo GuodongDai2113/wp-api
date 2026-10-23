@@ -1,11 +1,5 @@
 # wp-api
 
-### Jelly Catalog dynamic fields
-
-Use `wp_catalog_fields_get` with a saved authenticated `client` and `target: "product" | "product_cat"` to discover live writable fields, labels, descriptions, choices, and nested repeater schemas. This calls `jelly-catalog/v1/fields/{target}` with authentication; the anonymous `wp_api_route` tool cannot replace it.
-
-Read current values with `wp_resource_get` and `context: "edit"`, then use the existing `wp_resource_update` tool with `data.meta` or `data.metaFile`. Omitted keys remain unchanged, `null` deletes values, and arrays replace whole fields. Zero values, empty arrays, gallery ID strings, and editor HTML are passed through unchanged. Field definitions remain managed in WordPress admin. See [the MCP workflow](mcp.md#jelly-catalog-动态字段工作流) for examples and compatibility details.
-
 A pure [Model Context Protocol](https://modelcontextprotocol.io/) server for managing WordPress through native, Jelly Core, Jelly Catalog, and Inquiry REST APIs. It runs over STDIO and exposes 55 structured tools for clients, local structure guidance, live REST schema discovery, content, navigation menus, SEO, Elementor, media, packages, and inquiries.
 
 Chinese documentation: [README.zh-CN.md](./README.zh-CN.md) · Detailed MCP setup: [mcp.md](./mcp.md)
@@ -112,7 +106,7 @@ Except for the standalone public `wp_api_route` query, all remote tools require 
 
 ## Tools
 
-The server exposes exactly 55 tools.
+The server exposes exactly 56 tools.
 
 ### Client configuration (2)
 
@@ -135,7 +129,7 @@ The server exposes exactly 55 tools.
 - `wp_resource_batch_update` — update inline or CSV-imported resources by ID through `batch/v1` in groups of 25.
 - `wp_resource_delete` — trash content or permanently delete a taxonomy term.
 
-Every resource tool identifies its resource with `target: { type, resource }`. `type: "post"` accepts `posts`, `pages`, and `products`; `type: "taxonomy"` accepts `categories` and `product-categories`. Mismatched combinations are rejected. Single create/update calls place writable fields under `data`; inline batch records use `{ id?, data }`, clearly separating resource selection, operation arguments, and writable data. `categories` maps automatically: posts use REST `categories`, Jelly Catalog products use REST `product_cat`, and pages reject the field. MCP does not expose the `product_tag` resource or product-tag assignments. Use authenticated `wp_catalog_fields_get` before writing Jelly Catalog dynamic meta; use `wp_api_route` for other public API schemas. Category and product-category deletion requires explicit `force: true`, because taxonomy terms have no trash. Resource list pagination is always bounded to `perPage: 1..100`.
+Every resource tool identifies its resource with `target: { type, resource }`. `type: "post"` accepts `posts`, `pages`, and `products`; `type: "taxonomy"` accepts `categories` and `product-categories`. Mismatched combinations are rejected. Single create/update calls place writable fields under `data`; inline batch records use `{ id?, data }`, clearly separating resource selection, operation arguments, and writable data. `categories` maps automatically: posts use REST `categories`, Jelly Catalog products use REST `product_cat`, and pages reject the field. MCP does not expose the `product_tag` resource or product-tag assignments. Use `wp_api_route` to inspect live REST schemas when needed. Category and product-category deletion requires explicit `force: true`, because taxonomy terms have no trash. Resource list pagination is always bounded to `perPage: 1..100`.
 
 Common Jelly Catalog product `meta` structures are:
 
@@ -159,14 +153,13 @@ Product-category `meta` includes `thumbnail_id`, `banner_id`, headings, HTML mar
 
 Read `wp_menu_list` before assigning `locations`, because an update replaces that menu's complete location assignment. Read `wp_menu_get` before changing `parent` or `menuOrder`. Menu items go to trash by default unless `force: true` is supplied.
 
-### SEO, post content, and media (8)
+### SEO, links, and media (8)
 
 - `wp_seo_get` — read Rank Math title, description, and focus keyword fields.
 - `wp_seo_update` — update or explicitly clear Rank Math REST meta fields.
 - `wp_seo_list` — return one filtered SEO page and optionally stream every matching record to a UTF-8 CSV file; with `resource: "posts"` and no filters, the CSV covers the whole site.
 - `wp_seo_batch_update` — update inline SEO records or import the fixed four-column CSV format through `batch/v1` in groups of 25.
-- `wp_post_link` — list, add, update, or remove links in editable raw post content.
-- `wp_post_content_replace` — replace every exact text occurrence in a post.
+- `wp_link` — list, add, update, or remove links in the editable raw content of posts, pages, and products.
 - `wp_media_upload` — compress a local JPEG/PNG to WebP before upload, or upload GIF/AVIF/WebP unchanged, and optionally set attachment metadata.
 - `wp_media_alt_update` — update an existing media attachment's alt text by ID; an empty string clears it.
 - `wp_media_upload` and each batch-import item accept `post: ID` to attach the media during the initial upload, without an extra association request. `post: 0` leaves it unattached. WordPress validates the target post and edit permissions.
@@ -274,6 +267,15 @@ Package listing/details and plugin activation/deactivation use native WordPress 
 The current release removes `wp_client_add`, `wp_client_use`, active-client state, the build-time plaintext credential copy, and UI plaintext imports. Run `wp-api-config` to re-enter connections, then pass the saved `client` name explicitly to remote tools. Configure a separate vault on every host.
 
 ## Development
+
+Stored results can now be queried with `wp_result_read` using a server-issued `resultId`, JSON Pointer, fields and bounded array ranges. Follow `nextOffset`; no arbitrary paths are accepted. Defaults: one-hour TTL, 128 MiB **per-session** capacity, 25 MiB per file. Cleanup is lazy and only covers this session's registered files; restart leftovers are not automatically removed. See [result reading and lifecycle](./RESULT_READING.md). Run `npm run benchmark:result-read -- cost-result-read.json` to replay the bounded-read task.
+
+Mutation migration: resource create/update/delete now default to evidence-based receipts; pass `detail:"full"` for full entities. Resource/SEO batches distinguish confirmed success/failure from `unknown` and `not_executed` (`success:null`). Partial batches return MCP `isError:true` with structured progress; never retry an entire create batch after an unknown outcome. Stored references include bounded summaries. Delivery failures preserve known receipts separately from execution state. See [recovery contracts and measurements](./COST_P1_RECOVERY.md).
+
+
+Run `npm run benchmark:cost -- cost-baseline.json` from the source checkout for the synthetic MCP cost benchmark. It measures tool discovery, full JSON-RPC responses, upstream requests, and result-file rereads without contacting WordPress. See [COST_BASELINE.md](./COST_BASELINE.md) for measurement limits. Bytes are not token estimates; host visibility of structured output is not assumed.
+
+Set `WP_API_DIAGNOSTICS=1` on the MCP server process to emit per-call numeric cost records to stderr. Disabled by default; records exclude credentials, URLs, inputs, content and error messages. Callback result sizes exclude the SDK JSON-RPC envelope. Tool responses and error semantics remain unchanged.
 
 ```bash
 npm run build

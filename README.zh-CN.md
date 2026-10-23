@@ -1,11 +1,5 @@
 # wp-api
 
-### Jelly Catalog 动态字段
-
-新增 `wp_catalog_fields_get`：传入认证站点 `client` 和 `target: "product" | "product_cat"`，获取实时可填写字段、标签、说明、选项和重复组结构。它使用新的 `jelly-catalog/v1/fields/{target}` 接口，不同于匿名查询工具 `wp_api_route`。
-
-推荐先发现字段，再通过 `wp_resource_get` 的 `context: "edit"` 读取当前内容，最后使用现有 `wp_resource_update` 的 `data.meta` 或 `data.metaFile` 更新。未提交键保留，`null` 删除，数组整体替换；数字零值、空数组、图库 ID 字符串和编辑器 HTML 均保持原值传递。定义仍在 WordPress 后台管理。详见 [MCP 动态字段工作流](mcp.md#jelly-catalog-动态字段工作流)。
-
 一个纯 [Model Context Protocol](https://modelcontextprotocol.io/) 服务，通过 WordPress 原生 REST API 以及 Jelly Core、Jelly Catalog 和 Inquiry REST API 管理站点。服务使用 STDIO 传输，提供 55 个结构化工具，覆盖 client、本地结构指南、实时 REST 接口结构查询、内容、导航菜单、SEO、Elementor 页面、媒体、插件/主题及询价管理。
 
 English documentation: [README.md](./README.md) · MCP 详细配置：[mcp.md](./mcp.md)
@@ -135,7 +129,7 @@ wp-api-config
 - `wp_resource_batch_update`：通过 `batch/v1` 每 25 条按 ID 更新内联或 CSV 导入资源。
 - `wp_resource_delete`：把内容移入回收站，或永久删除分类项。
 
-所有资源工具都使用 `target: { type, resource }` 定位资源。`type: "post"` 对应 `posts`、`pages`、`products`，`type: "taxonomy"` 对应 `categories`、`product-categories`；不匹配的组合会被拒绝。单条创建/更新把业务字段放在 `data` 中，批量内联条目使用 `{ id?, data }`，从而把资源定位、操作参数和写入数据明确分开。`categories` 根据目标自动映射：文章写入 REST `categories`，Jelly Catalog 产品写入 REST `product_cat`，页面不支持该字段。MCP 不提供 `product_tag` 资源或产品标签写入。Jelly Catalog 动态字段先用认证工具 `wp_catalog_fields_get` 发现；其他公开接口结构可用 `wp_api_route` 查询。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。资源列表始终使用 `perPage: 1..100` 的有界分页。
+所有资源工具都使用 `target: { type, resource }` 定位资源。`type: "post"` 对应 `posts`、`pages`、`products`，`type: "taxonomy"` 对应 `categories`、`product-categories`；不匹配的组合会被拒绝。单条创建/更新把业务字段放在 `data` 中，批量内联条目使用 `{ id?, data }`，从而把资源定位、操作参数和写入数据明确分开。`categories` 根据目标自动映射：文章写入 REST `categories`，Jelly Catalog 产品写入 REST `product_cat`，页面不支持该字段。MCP 不提供 `product_tag` 资源或产品标签写入。需要字段约束时用 `wp_api_route` 查询对应 REST 接口。分类和产品分类没有回收站，删除时必须显式传入 `force: true`。资源列表始终使用 `perPage: 1..100` 的有界分页。
 
 常用 Jelly Catalog 产品 `meta` 结构：
 
@@ -159,14 +153,13 @@ wp-api-config
 
 分配 `locations` 前先调用 `wp_menu_list`，因为更新会替换该菜单的全部位置分配。调整 `parent` 或 `menuOrder` 前先调用 `wp_menu_get`。菜单项默认进入回收站，传 `force: true` 才永久删除。
 
-### SEO、文章内容与媒体（8 个）
+### SEO、链接与媒体（8 个）
 
 - `wp_seo_get`：读取 Rank Math 标题、描述和焦点关键词。
 - `wp_seo_update`：更新或显式清空 Rank Math REST meta。
 - `wp_seo_list`：返回一页筛选后的 SEO 数据，并可把全部匹配项流式导出为 UTF-8 CSV；`resource: "posts"` 且无过滤条件时导出整个站点的文章。
 - `wp_seo_batch_update`：通过 `batch/v1` 每 25 条更新内联 SEO 数据，或导入固定四列 CSV。
-- `wp_post_link`：列出、新增、更新或删除可编辑文章正文中的链接。
-- `wp_post_content_replace`：替换文章中的所有精确文本匹配。
+- `wp_link`：列出、新增、更新或删除文章、页面和产品可编辑正文中的链接。
 - `wp_media_upload`：本地 JPEG/PNG 先压缩为 WebP 再上传，GIF/AVIF/WebP 原样上传，并可设置附件元数据。
 - `wp_media_alt_update`：按附件 ID 更新媒体库中已有图片的替代文本，传入空字符串可清除。
 - `wp_media_upload` 及批量导入的每个条目支持 `post: 文章ID`，在首次上传时关联父文章，不增加关联请求；`post: 0` 表示不关联。目标文章及编辑权限由 WordPress 校验。
@@ -274,6 +267,15 @@ MCP 工具的紧凑 JSON 结果超过 8 KiB 时，完整结果不会继续放入
 当前版本移除了 `wp_client_add`、`wp_client_use`、当前连接状态、构建时复制明文凭据以及 UI 明文导入功能。请运行 `wp-api-config` 重新录入连接，并在远端工具中显式传入已保存的 `client` 名称。每台主机都需要单独配置自己的凭据库。
 
 ## 开发
+
+落盘结果新增 `wp_result_read`，凭当前服务签发的 resultId 按 JSON Pointer、字段及数组区间读取；使用 nextOffset 续读，不接受任意路径。默认一小时 TTL、128 MiB **当前会话容量**、单文件 25 MiB，惰性清理只作用于本会话登记文件，重启遗留文件不会自动删除。详见 [结果读取与生命周期](./RESULT_READING.md)。可运行 `npm run benchmark:result-read -- cost-result-read.json` 回放完整任务。
+
+写入契约迁移：资源 create/update/delete 默认返回基于远端证据的回执，`detail:"full"` 恢复完整实体。资源/SEO 批次区分确认成功/失败与 unknown/not_executed（后两者 success=null），部分失败返回 MCP isError=true 并保留执行汇总，不能据此重跑整批创建。落盘引用新增有界摘要；结果交付失败独立于远端执行状态。详见 [恢复契约与测量报告](./COST_P1_RECOVERY.md)。
+
+
+在源码仓库运行 `npm run benchmark:cost -- cost-baseline.json`，可通过固定合成数据测量工具发现、完整 JSON-RPC 响应、上游请求和落盘补读成本，不访问真实 WordPress。报告及统计口径见 [COST_BASELINE.md](./COST_BASELINE.md)。当前只报告字节，不估算 token，也未假定宿主能看到 structuredContent。
+
+给 MCP 服务进程设置 `WP_API_DIAGNOSTICS=1` 可启用每次调用的数值诊断，仅输出 stderr，默认关闭。不记录凭据、URL、输入、正文或错误消息；运行时结果大小不含 SDK 的 JSON-RPC 信封。现有工具返回值和错误语义保持不变。
 
 ```bash
 npm run build

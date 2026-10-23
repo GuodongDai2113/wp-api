@@ -176,7 +176,7 @@ test("SEO handler chunks batch updates and summarizes item failures", async () =
       return {
         data: {
           responses: options.body.requests.map((request) => {
-            const id = Number(request.path.split("/").at(-1));
+            const id = Number(new URL(request.path, "https://example.test").pathname.split("/").at(-1));
             return id === 2
               ? { status: 403, body: { code: "rest_cannot_edit", message: "Forbidden" } }
               : { status: 200, body: { id, meta: request.body.meta } };
@@ -196,7 +196,7 @@ test("SEO handler chunks batch updates and summarizes item failures", async () =
   assert.equal(calls[1].options.body.requests.length, 1);
   assert.deepEqual(calls[0].options.body.requests[0], {
     method: "POST",
-    path: "/wp/v2/pages/1",
+    path: "/wp/v2/pages/1?_fields=id,meta",
     body: { meta: { rank_math_title: "Title 1" } }
   });
   assert.equal(result.total, 26);

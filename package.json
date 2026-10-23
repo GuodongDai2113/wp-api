@@ -1,6 +1,6 @@
 {
   "name": "wp-api",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "author": "JellyDai",
   "license": "MIT",
   "description": "MCP server for managing WordPress through native, Jelly Core, Jelly Catalog, and Inquiry REST APIs",
@@ -46,7 +46,9 @@
     "start": "node build/bin/wp-api-mcp.js",
     "prepack": "npm run build",
     "test": "npm run build && node --test",
-    "test:unit": "node --test"
+    "test:unit": "node --test",
+    "benchmark:cost": "npm run build && node scripts/benchmark-cost.mjs",
+    "benchmark:result-read": "npm run build && node scripts/benchmark-result-read.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

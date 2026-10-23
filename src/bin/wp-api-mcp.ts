@@ -31,6 +31,9 @@ function readMaxElementorDataBytesFromEnvironment(): number | undefined {
 
 try {
   await startStdioServer({
+    // 具体正整数限制由结果存储统一校验，不接受零值禁用容量保护。
+    resultTtlMs: process.env.WP_API_RESULT_TTL_MS ? Number(process.env.WP_API_RESULT_TTL_MS) : undefined,
+    resultMaxBytes: process.env.WP_API_RESULT_MAX_BYTES ? Number(process.env.WP_API_RESULT_MAX_BYTES) : undefined,
     configDir: process.env.WP_API_CONFIG_DIR?.trim() || undefined,
     allowedLocalRoots: readAllowedLocalRootsFromEnvironment(),
     resultDirectory: process.env.WP_API_RESULT_DIR?.trim() || undefined,

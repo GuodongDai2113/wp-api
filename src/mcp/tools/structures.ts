@@ -1,4 +1,4 @@
-/** 可通过本地结构目录查询的 WordPress 与 Elementor 结构名称。 */
+/** 可通过本地结构目录查询的 WordPress、Jelly 插件与 Elementor 结构名称。 */
 export const WP_STRUCTURE_NAMES = [
   "post",
   "page",
@@ -7,6 +7,9 @@ export const WP_STRUCTURE_NAMES = [
   "product-category",
   "menu",
   "media",
+  "media-category",
+  "inquiry",
+  "inquiry-settings",
   "seo-meta",
   "elementor-page"
 ] as const;
@@ -156,7 +159,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
       title: "WordPress post",
       description: "Standard WordPress post resource, including body content, post categories, featured media, and registered meta.",
       remoteSchemaPath: "wp-json/wp/v2/posts",
-      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_post_link", "wp_post_content_replace", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_link", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         target: "{type:\"post\",resource:\"posts\"}",
         id: "required positive integer for update/get/delete; omit for create",
@@ -189,19 +192,27 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     page: {
       name: "page",
       title: "WordPress page",
-      description: "Standard hierarchical WordPress page. Elementor tools also operate on this resource through page meta.",
+      description: "Standard hierarchical WordPress page. Elementor tools operate on this resource through page meta; Jelly Editor adds optional REST-visible custom layout meta for full-page HTML/CSS overrides.",
       remoteSchemaPath: "wp-json/wp/v2/pages",
-      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update", "wp_elementor_pull", "wp_elementor_inspect", "wp_elementor_edit", "wp_elementor_push"],
+      mcpTools: ["wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_link", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update", "wp_elementor_pull", "wp_elementor_inspect", "wp_elementor_edit", "wp_elementor_push"],
       writeShape: {
         target: "{type:\"post\",resource:\"pages\"}",
         id: "required positive integer for update/get/delete; omit for create",
-        data: contentData
+        data: {
+          ...contentData,
+          meta: {
+            custom_layout_enabled: "string enum 0 or 1; enables the Jelly Editor page custom layout when set to 1",
+            custom_layout_html: "string; custom layout HTML sanitized with WordPress safe post HTML rules; empty string clears it",
+            custom_layout_css: "string; multiline custom layout CSS with HTML tags removed; empty string clears it"
+          }
+        }
       },
       responseShape: {
         ...contentResponse,
         parent: "integer; parent page ID",
         menu_order: "integer",
-        template: "string; page template filename"
+        template: "string; page template filename",
+        meta: "object; includes Jelly Editor custom_layout_enabled, custom_layout_html, and custom_layout_css when active"
       },
       example: {
         target: { type: "post", resource: "pages" },
@@ -209,20 +220,26 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
           title: "Landing page",
           status: "draft",
           content: "<h1>Landing page</h1>",
-          featuredMedia: 42
+          featuredMedia: 42,
+          meta: {
+            custom_layout_enabled: "1",
+            custom_layout_html: "<section class=\"hero\"><h1>Landing page</h1></section>",
+            custom_layout_css: ".hero { padding: 4rem 1rem; }"
+          }
         }
       },
       notes: [
         "Use the Elementor-specific structures before writing _elementor_data.",
+        "Jelly Editor registers custom_layout_enabled, custom_layout_html, and custom_layout_css as REST-visible page meta with edit_post authorization; send them under data.meta.",
         "The current resource tool intentionally exposes a safe common subset; query the live route for parent, template, menu_order, author, and plugin fields."
       ]
     },
     product: {
       name: "product",
       title: "Jelly Catalog product",
-      description: "Jelly Catalog product content with product categories, gallery, attributes, FAQ, video, download attachment meta, and optional custom HTML/CSS layout.",
+      description: "Jelly Catalog product content with product categories, site-defined dynamic fields, gallery, attributes, FAQ, video, download attachment meta, and optional custom HTML/CSS layout.",
       remoteSchemaPath: "wp-json/wp/v2/product",
-      mcpTools: ["wp_catalog_fields_get", "wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
+      mcpTools: ["wp_api_route", "wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_link", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         target: "{type:\"post\",resource:\"products\"}",
         id: "required positive integer for update/get/delete; omit for create",
@@ -239,14 +256,16 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
             product_file: "non-negative integer; download attachment ID; 0 clears it",
             _product_image_gallery: "comma-separated positive attachment IDs; empty string clears it",
             _product_attributes: "{name:string,value:string}[]",
-            _product_faqs: "{name:string,value:string}[]; name is question and value is answer"
+            _product_faqs: "{name:string,value:string}[]; name is question and value is answer",
+            "_jc_dynamic_<field_key>": "site-defined Jelly Catalog dynamic field; the exact type, enum, and nested item schema come from the live product OPTIONS schema"
           }
         }
       },
       responseShape: {
         ...contentResponse,
         product_cat: "integer[]; product category IDs",
-        meta: "object matching the Jelly Catalog product meta write shape plus fields registered by other plugins"
+        product_tag: "integer[]; product tag term IDs; read-only through the MCP catalog",
+        meta: "object matching the Jelly Catalog product meta write shape, site-defined _jc_dynamic_* fields, plus fields registered by other plugins"
       },
       example: {
         target: { type: "post", resource: "products" },
@@ -262,7 +281,8 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
           }
         }
       },
-      notes: ["Discover enabled dynamic fields using wp_catalog_fields_get with the same authenticated client. Read existing meta with context=edit before writing; send changed keys only. null deletes, arrays replace, omitted keys are preserved. Field definitions remain managed in WordPress admin.",
+      notes: ["Jelly Catalog dynamic fields are registered as native REST post meta with keys prefixed _jc_dynamic_; their keys, types, enums, and nested repeater schemas vary per site, so query the live product OPTIONS schema before writing.",
+        "Jelly Catalog also registers the non-hierarchical product_tag taxonomy and exposes product_tag IDs on REST product responses, but MCP resource tools intentionally do not create, update, or assign product tags.",
         "Upload media first and use returned attachment IDs for featuredMedia, product_file, and gallery fields.",
         "Jelly Catalog is not WooCommerce; do not send WooCommerce price or inventory fields unless another plugin explicitly registers them."
       ]
@@ -281,9 +301,9 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     "product-category": {
       name: "product-category",
       title: "Jelly Catalog product category (product_cat)",
-      description: "Hierarchical Jelly Catalog product_cat taxonomy with category marketing content, media meta, and optional custom HTML/CSS layout.",
+      description: "Hierarchical Jelly Catalog product_cat taxonomy with category marketing content, site-defined dynamic fields, media meta, and optional custom HTML/CSS layout.",
       remoteSchemaPath: "wp-json/wp/v2/product_cat",
-      mcpTools: ["wp_catalog_fields_get", "wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
+      mcpTools: ["wp_api_route", "wp_resource_count", "wp_resource_list", "wp_resource_get", "wp_resource_create", "wp_resource_batch_create", "wp_resource_update", "wp_resource_batch_update", "wp_resource_delete", "wp_seo_get", "wp_seo_update", "wp_seo_list", "wp_seo_batch_update"],
       writeShape: {
         ...createTaxonomyWriteShape("product-categories"),
         data: {
@@ -306,15 +326,19 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
             category_applications_title: "string",
             category_applications: "{title:string,description:string,image_id:integer,link_url:string}[]",
             category_cta_title: "string",
+            category_cta_button_text: "string; legacy CTA title fallback; prefer category_cta_title for new writes",
             category_buying_guide_title: "string",
             category_buying_guide: "string; safe HTML",
             category_faq_title: "string",
             product_cat_faqs: "{name:string,value:string}[]",
-            category_inherit_parent_content: "string enum 0 or 1"
+            "_jc_dynamic_<field_key>": "site-defined Jelly Catalog dynamic field; the exact type, enum, and nested item schema come from the live product_cat OPTIONS schema"
           }
         }
       },
-      responseShape: taxonomyResponse,
+      responseShape: {
+        ...taxonomyResponse,
+        meta: "object including Jelly Catalog category marketing/media meta, site-defined _jc_dynamic_* fields, and other registered term meta"
+      },
       example: {
         target: { type: "taxonomy", resource: "product-categories" },
         data: {
@@ -324,11 +348,15 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
             thumbnail_id: 42,
             category_h1_title: "Industrial Pumps",
             category_applications: [{ title: "Chemical plants", description: "Transfer applications", image_id: 43, link_url: "/contact/" }],
-            category_inherit_parent_content: "0"
+            category_cta_title: "Request a quote"
           }
         }
       },
-      notes: ["Discover enabled dynamic fields using wp_catalog_fields_get with the same authenticated client. Read existing meta with context=edit before writing; send changed keys only. null deletes, arrays replace, omitted keys are preserved. Field definitions remain managed in WordPress admin.", "Deletion requires force=true.", "Use empty strings, empty arrays, 0, or string 0 according to each field's declared clearing value."]
+      notes: ["Jelly Catalog dynamic fields for product categories are registered as native REST term meta with keys prefixed _jc_dynamic_; their schemas vary per site, so query the live product_cat OPTIONS schema before writing.",
+        "category_inherit_parent_content is stored in term meta for template fallback but is not registered with show_in_rest; set it in the WordPress admin rather than through this REST meta.",
+        "Deletion requires force=true.",
+        "Use empty strings, empty arrays, 0, or string 0 according to each field's declared clearing value."
+      ]
     },
     menu: {
       name: "menu",
@@ -385,7 +413,7 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
     media: {
       name: "media",
       title: "WordPress media attachment",
-      description: "WordPress media attachment uploaded from a local bitmap; JPEG and PNG sources are converted to WebP before upload.",
+      description: "WordPress media attachment uploaded from a local bitmap; JPEG and PNG sources are converted to WebP before upload. Jelly Editor adds a hierarchical media_category taxonomy for organizing attachments when active.",
       remoteSchemaPath: "wp-json/wp/v2/media",
       mcpTools: ["wp_media_batch_import", "wp_media_upload", "wp_media_list", "wp_media_get", "wp_media_update", "wp_media_delete", "wp_media_alt_update", "wp_media_category_list", "wp_media_category_get", "wp_media_category_create", "wp_media_category_update", "wp_media_category_delete", "wp_api_route"],
       writeShape: {
@@ -418,7 +446,142 @@ function createStructureCatalog(): Record<WpStructureName, StructureDefinition> 
         media_category: "integer[]; assigned Jelly Editor media category IDs, requires its REST-enabled taxonomy"
       },
       example: { filePath: "C:/content/product.jpg", title: "Product front view", altText: "Product front view" },
-      notes: ["JPEG and PNG are converted in memory to quality-85 WebP before any network request.", "GIF, AVIF, and existing WebP remain unchanged.", "The MCP upload tool intentionally rejects SVG and non-bitmap files.", "Use wp_media_alt_update with mediaId and altText to edit or clear an existing attachment's alt text.", "Upload first, then reuse the returned id in content or taxonomy writes."]
+      notes: ["JPEG and PNG are converted in memory to quality-85 WebP before any network request.", "GIF, AVIF, and existing WebP remain unchanged.", "The MCP upload tool intentionally rejects SVG and non-bitmap files.", "Use wp_media_alt_update with mediaId and altText to edit or clear an existing attachment's alt text.", "Jelly Editor registers media_category as an attachment-only hierarchical taxonomy; manage terms with wp_media_category_* and assign them through categories.", "Upload first, then reuse the returned id in content or taxonomy writes."]
+    },
+    "media-category": {
+      name: "media-category",
+      title: "Jelly Editor media category (media_category)",
+      description: "Hierarchical Jelly Editor media_category taxonomy for organizing WordPress media library attachments. The taxonomy is registered for attachments, is not publicly queryable, and is exposed through the media_category REST base.",
+      remoteSchemaPath: "wp-json/wp/v2/media_category",
+      mcpTools: ["wp_media_category_list", "wp_media_category_get", "wp_media_category_create", "wp_media_category_update", "wp_media_category_delete", "wp_media_list", "wp_media_upload", "wp_media_batch_import", "wp_media_update", "wp_api_route"],
+      writeShape: {
+        categoryId: "required positive integer for get/update/delete",
+        data: {
+          name: "string; required when creating and must not be blank",
+          slug: "string",
+          description: "string; empty string clears it",
+          parent: "non-negative integer; 0 makes the category top-level"
+        },
+        force: "delete only; must be true because taxonomy terms have no trash"
+      },
+      responseShape: {
+        id: "integer; term ID",
+        count: "integer; assigned attachment count",
+        description: "string",
+        name: "string",
+        slug: "string",
+        taxonomy: "literal media_category",
+        parent: "integer; parent term ID, 0 for a top-level category",
+        meta: "object; registered term meta fields"
+      },
+      example: {
+        list: { page: 1, perPage: 20, parent: 0, hideEmpty: false },
+        create: { data: { name: "Product photos", slug: "product-photos", parent: 0 } },
+        assign: { mediaId: 42, data: { categories: [7] } }
+      },
+      notes: [
+        "Requires Jelly Editor to be active; the taxonomy is registered only for attachments and is not public.",
+        "Deleting a media category permanently removes the term and its attachment relationships; attachment files are not deleted.",
+        "Assign terms through wp_media_upload, wp_media_batch_import, or wp_media_update using categories[]; list media with categories[] to match any assigned term."
+      ]
+    },
+    inquiry: {
+      name: "inquiry",
+      title: "Jelly Form inquiry submission",
+      description: "Read-only Jelly Form inquiry records stored in the jelly_form_submission table and exposed through jelly-form/v1. The REST controller and MCP tools hide submissions marked as spam.",
+      remoteSchemaPath: "wp-json/jelly-form/v1/inquiries",
+      mcpTools: ["wp_inquiry_list", "wp_inquiry_get"],
+      writeShape: {
+        list: {
+          search: "string; matches submission content, page title, or country",
+          page: "positive integer; starts at 1",
+          perPage: "integer 1-100; defaults to 20",
+          startDate: "string YYYY-MM-DD; inclusive created_at lower bound",
+          endDate: "string YYYY-MM-DD; inclusive created_at upper bound",
+          orderBy: "id | created_at | page_title | country; defaults to created_at",
+          order: "ASC | DESC; defaults to DESC"
+        },
+        get: {
+          id: "required positive inquiry ID"
+        }
+      },
+      responseShape: {
+        list: "{total:integer, total_pages:integer, current_page:integer, per_page:integer, data:Inquiry[]}",
+        inquiry: {
+          id: "integer",
+          content: "{name:string, email:string, company?:string, phone?:string, message:string, trigger_heading?:string, trigger_button?:string, [field:string]:string}",
+          is_read: "boolean",
+          tags: "string[]; spam and traffic-source labels",
+          country: "string; IPInfo country name or code, or unknown",
+          page_title: "string; page where the form was submitted",
+          page_url: "string; page URL where the form was submitted",
+          created_at: "string; MySQL datetime in site timezone"
+        }
+      },
+      example: {
+        list: { page: 1, perPage: 20, orderBy: "created_at", order: "DESC" },
+        get: { id: 9 }
+      },
+      notes: [
+        "Requires Jelly Form to be active and the Application Password user to have manage_options.",
+        "Returned records are filtered to is_spam=0; spam and confirmed-spam submissions require the WordPress admin screens.",
+        "The built-in form submits name, email, company, phone, message, trigger_heading, and trigger_button; additional sanitized form_fields keys are preserved in content.",
+        "The REST response does not expose user_ip, user_agent, origin, spam_score, spam_status, spam_details, or manual spam review fields.",
+        "Inquiries contain personal data; request only the records needed and avoid unnecessary export."
+      ]
+    },
+    "inquiry-settings": {
+      name: "inquiry-settings",
+      title: "Jelly Form inquiry settings",
+      description: "Jelly Form notification, popup, redirect, IPInfo, and SMTP settings exposed through jelly-form/v1/settings. SMTP passwords are never returned.",
+      remoteSchemaPath: "wp-json/jelly-form/v1/settings",
+      mcpTools: ["wp_inquiry_settings_get", "wp_inquiry_settings_update"],
+      writeShape: {
+        recipientEmail: "email address that receives inquiry notifications",
+        emailEnabled: "boolean; send notification emails",
+        popupEnabled: "boolean; render the front-end popup form",
+        ipinfoToken: "string of letters and digits; empty string clears it",
+        redirectSlug: "site-relative success path; empty string disables redirecting",
+        smtpEnabled: "boolean; deliver notification email through custom SMTP",
+        smtp: {
+          host: "string",
+          port: "integer 1-65535",
+          encryption: "none | ssl | tls",
+          username: "string",
+          password: "string; omit or leave empty to keep the saved password",
+          clearPassword: "boolean; true clears the saved password",
+          fromEmail: "email address or empty string",
+          fromName: "string"
+        }
+      },
+      responseShape: {
+        recipient_email: "string",
+        email_enabled: "boolean",
+        popup_enabled: "boolean",
+        conversion_tracking_enabled: "boolean",
+        conversion_anonymize_ip: "boolean",
+        conversion_retention_days: "integer; 0, 90, 180, or 365",
+        async_processing_enabled: "boolean",
+        ipinfo_token: "string",
+        redirect_slug: "string; empty string means no redirect",
+        smtp_enabled: "boolean",
+        smtp: "{host:string, port:integer, encryption:string, username:string, from_email:string, from_name:string, password_set:boolean}"
+      },
+      example: {
+        update: {
+          recipientEmail: "sales@example.com",
+          emailEnabled: true,
+          redirectSlug: "/thanks/",
+          smtpEnabled: true,
+          smtp: { host: "smtp.example.com", port: 465, encryption: "ssl", username: "sales@example.com", password: "<smtp-password>", fromEmail: "sales@example.com", fromName: "Sales" }
+        }
+      },
+      notes: [
+        "Requires Jelly Form to be active and the Application Password user to have manage_options.",
+        "wp_inquiry_settings_update changes only the submitted fields; omitted settings keep their current values.",
+        "SMTP password is never returned; password_set indicates whether one is saved. Set clearPassword=true to remove it.",
+        "conversion_tracking_enabled, conversion_anonymize_ip, conversion_retention_days, and async_processing_enabled are writable through POST jelly-form/v1/settings but are not exposed by wp_inquiry_settings_update."
+      ]
     },
     "seo-meta": {
       name: "seo-meta",

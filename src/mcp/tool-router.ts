@@ -1,4 +1,4 @@
-import { getCatalogFields, type CatalogFieldsInput } from "./tools/catalog.js";
+import { getResultStore, type ResultReadInput } from "./result-store.js";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -12,11 +12,9 @@ import {
   type WordPressConnectionInput
 } from "./client-registry.js";
 import {
-  managePostLink,
-  replacePostContent,
-  type PostContentReplaceInput,
-  type PostLinkInput
-} from "./tools/content.js";
+  manageLink,
+  type LinkInput
+} from "./tools/link.js";
 import {
   uploadMedia, updateMediaAlt, listMedia, getMedia, updateMedia, deleteMedia,
   batchImportMedia, validateMediaBatchImport, type MediaBatchImportInput,
@@ -106,11 +104,11 @@ import {
 
 /** wp-api MCP 服务支持的全部工具名称。 */
 export const WP_API_TOOL_NAMES = [
+  "wp_result_read",
   "wp_client_list",
   "wp_client_get",
   "wp_structure_get",
   "wp_api_route",
-  "wp_catalog_fields_get",
   "wp_resource_count",
   "wp_resource_list",
   "wp_resource_get",
@@ -131,8 +129,7 @@ export const WP_API_TOOL_NAMES = [
   "wp_seo_update",
   "wp_seo_list",
   "wp_seo_batch_update",
-  "wp_post_link",
-  "wp_post_content_replace",
+  "wp_link",
   "wp_media_upload",
   "wp_media_batch_import",
   "wp_media_category_list",
@@ -177,6 +174,10 @@ export type ResolveWordPressClientImpl = (
 
 /** 执行 MCP 工具时允许注入的运行上下文。 */
 export interface WpApiToolContext extends WordPressConnectionContext {
+  /** 通用结果有效期毫秒数，默认一小时，惰性清理。 */
+  resultTtlMs?: number;
+  /** 当前会话托管结果容量字节数，默认 128 MiB。 */
+  resultMaxBytes?: number;
   /** 在默认工作目录之外，额外允许 MCP 工具读取或写入的本地目录。 */
   allowedLocalRoots?: string[];
   /** 超过内联阈值的 MCP 结果保存目录；默认使用当前工作目录下的 .wp-api-results。 */
@@ -471,8 +472,6 @@ async function executeRemoteTool(
   }
 
   switch (toolName) {
-    case "wp_catalog_fields_get":
-      return getCatalogFields(client, input as unknown as CatalogFieldsInput);
     case "wp_resource_count":
       return countResource(client, input as unknown as ResourceCountInput);
     case "wp_resource_list":
@@ -513,10 +512,8 @@ async function executeRemoteTool(
       return listResourceSeo(client, input as unknown as ResourceSeoListInput);
     case "wp_seo_batch_update":
       return batchUpdateResourceSeo(client, input as unknown as ResourceSeoBatchUpdateInput);
-    case "wp_post_link":
-      return managePostLink(client, input as unknown as PostLinkInput);
-    case "wp_post_content_replace":
-      return replacePostContent(client, input as unknown as PostContentReplaceInput);
+    case "wp_link":
+      return manageLink(client, input as unknown as LinkInput);
     case "wp_media_upload":
       return uploadMedia(client, input as unknown as MediaUploadInput);
     case "wp_media_batch_import":
@@ -580,6 +577,8 @@ export async function executeWpApiTool(
   switch (toolName) {
     case "wp_client_list":
       return listStoredClients(context);
+    case "wp_result_read":
+      return getResultStore(context).read(validatedInput as unknown as ResultReadInput);
     case "wp_client_get":
       return getStoredClient(readRequiredString(validatedInput, "name"), context);
     case "wp_structure_get":

@@ -6,6 +6,7 @@ import {
   writeCsvFileAtomically
 } from "../../shared/files/csv.js";
 import { compactObject } from "../../shared/objects.js";
+import { mutationReceipt, wantsFullResult, type MutationReceipt } from "../shared/mutation-receipt.js";
 import { resolveContentInput } from "../../wordpress/content/input.js";
 import { convertHtmlToGutenberg } from "../../wordpress/content/gutenberg.js";
 import { readBoundedJsonFile } from "../../shared/files/json.js";
@@ -17,15 +18,13 @@ import {
 } from "../../wordpress/resources.js";
 import { type Pagination, type QueryParams, WordPressClient } from "../../wordpress/client.js";
 import {
-  chunkWordPressBatchEntries,
+  executeWordPressBatch,
   isInvalidWordPressPageNumberError,
-  isSuccessfulWordPressBatchResponse,
   MAX_WORDPRESS_BATCH_REQUEST_BYTES,
   MAX_WORDPRESS_BATCH_TOTAL_BYTES,
   normalizeWordPressBatchError,
   type WordPressBatchError,
-  type WordPressBatchRequest,
-  type WordPressBatchResponse
+  type WordPressBatchRequest
 } from "../shared/wordpress.js";
 import { assertPerPage, assertPositiveId, assertUniquePositiveIds } from "../shared/validation.js";
 
@@ -183,17 +182,23 @@ export interface TaxonomyResourceBodyInput {
 export type ResourceBodyInput = PostResourceBodyInput | TaxonomyResourceBodyInput;
 
 /** 单条资源创建工具输入。 */
-export type ResourceCreateInput =
+export type ResourceCreateInput = ResourceWriteOutputInput & (
   | { target: PostResourceTarget; data: PostResourceBodyInput }
-  | { target: TaxonomyResourceTarget; data: TaxonomyResourceBodyInput };
+  | { target: TaxonomyResourceTarget; data: TaxonomyResourceBodyInput });
+
+/** 单条写入的输出选择，不影响提交的数据和校验。 */
+export interface ResourceWriteOutputInput {
+  /** 默认摘要回执，full 返回旧版完整实体。 */
+  detail?: "summary" | "full";
+}
 
 /** 单条资源更新工具输入。 */
-export type ResourceUpdateInput =
+export type ResourceUpdateInput = ResourceWriteOutputInput & (
   | { target: PostResourceTarget; id: number; data: PostResourceBodyInput }
-  | { target: TaxonomyResourceTarget; id: number; data: TaxonomyResourceBodyInput };
+  | { target: TaxonomyResourceTarget; id: number; data: TaxonomyResourceBodyInput });
 
 /** 单条资源删除工具输入。 */
-export interface ResourceDeleteInput extends ResourceGetInput {
+export interface ResourceDeleteInput extends ResourceGetInput, ResourceWriteOutputInput {
   /** 是否执行永久删除；taxonomy 资源必须显式设为 true。 */
   force?: boolean;
 }
@@ -305,7 +310,9 @@ export interface ResourceBatchItemResult {
   /** 创建后或更新目标的 WordPress ID。 */
   id?: number;
   /** 当前记录是否成功。 */
-  success: boolean;
+  success: boolean | null;
+  /** 仅用于未知或尚未执行的条目；success=null，不能视为已失败。 */
+  state?: "unknown" | "not_executed";
   /** 失败后的规范化错误。 */
   error?: ResourceBatchError;
 }
@@ -320,6 +327,12 @@ export interface ResourceBatchResult {
   succeeded: number;
   /** 失败记录数。 */
   failed: number;
+  /** 已发出但无法确认结果的条目数；必须先核对站点，不得直接重跑创建。 */
+  unknown: number;
+  /** 中断后尚未发送的条目数。 */
+  notExecuted: number;
+  /** 结果未知时的核查提示，避免盲目重跑已确认创建的条目。 */
+  recovery?: string;
   /** 与输入顺序一致的逐项结果。 */
   items: ResourceBatchItemResult[];
 }
@@ -658,28 +671,35 @@ export async function getResource(client: WordPressClient, input: ResourceGetInp
 }
 
 /** 创建单个资源。 */
-export async function createResource(client: WordPressClient, input: ResourceCreateInput): Promise<WordPressResourceEntity> {
+export async function createResource(client: WordPressClient, input: ResourceCreateInput): Promise<WordPressResourceEntity | MutationReceipt> {
+  const full = wantsFullResult(input.detail);
   const body = await buildResourceBody(input.target, input.data);
   if (Object.keys(body).length === 0) throw new Error("At least one applicable resource field is required to create a resource.");
-  return client.create<WordPressResourceEntity>(getResourceTargetConfig(input.target).route, body);
+  const entity = await client.create<WordPressResourceEntity>(getResourceTargetConfig(input.target).route, body, full ? undefined : { _fields: "id,status" });
+  return full ? entity : mutationReceipt("create", entity);
 }
 
 /** 更新单个资源。 */
-export async function updateResource(client: WordPressClient, input: ResourceUpdateInput): Promise<WordPressResourceEntity> {
+export async function updateResource(client: WordPressClient, input: ResourceUpdateInput): Promise<WordPressResourceEntity | MutationReceipt> {
+  const full = wantsFullResult(input.detail);
   assertPositiveId(input.id, "Resource id");
   const body = await buildResourceBody(input.target, input.data);
   if (Object.keys(body).length === 0) throw new Error("No update fields were provided.");
-  return client.update<WordPressResourceEntity>(getResourceTargetConfig(input.target).route, input.id, body);
+  const entity = await client.update<WordPressResourceEntity>(getResourceTargetConfig(input.target).route, input.id, body, full ? undefined : { _fields: "id,status" });
+  return full ? entity : mutationReceipt("update", entity, input.id);
 }
 
 /** 删除单个资源，并要求 taxonomy 永久删除得到显式确认。 */
-export async function deleteResource(client: WordPressClient, input: ResourceDeleteInput): Promise<WordPressResourceEntity> {
+export async function deleteResource(client: WordPressClient, input: ResourceDeleteInput): Promise<WordPressResourceEntity | MutationReceipt> {
+  const full = wantsFullResult(input.detail);
   assertPositiveId(input.id, "Resource id");
   const config = getResourceTargetConfig(input.target);
   if (config.deleteMode === "force" && input.force !== true) {
     throw new Error("Taxonomy terms do not support trash; set force to true to confirm permanent deletion.");
   }
-  return client.delete<WordPressResourceEntity>(config.route, input.id, { force: config.deleteMode === "force" ? true : input.force === true });
+  const entity = await client.delete<WordPressResourceEntity>(config.route, input.id, { force: config.deleteMode === "force" ? true : input.force === true },
+    full ? undefined : { _fields: "id,status,deleted,previous.id" });
+  return full ? entity : mutationReceipt("delete", entity, input.id);
 }
 
 /** 解析并预校验全部批量创建输入及 WordPress 请求体。 */
@@ -696,7 +716,7 @@ async function prepareBatchCreateItems(input: ResourceBatchCreateInput): Promise
     if (item.id !== undefined) assertPositiveId(item.id, `Resource create item ${index + 1} source id`);
     const body = await buildResourceBody(input.target, item.data);
     if (Object.keys(body).length === 0) throw new Error(`Resource create item ${index + 1} requires at least one applicable field.`);
-    const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}`, body };
+    const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}?_fields=id,status`, body };
     prepared.push({ index, sourceId: item.id, request });
   }
   return prepared;
@@ -720,64 +740,47 @@ async function prepareBatchUpdateItems(input: ResourceBatchUpdateInput): Promise
     seenIds.add(id);
     const body = await buildResourceBody(input.target, item.data);
     if (Object.keys(body).length === 0) throw new Error(`Resource update item ${index + 1} requires at least one update field.`);
-    const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}/${id}`, body };
+    const request: WordPressBatchRequest = { method: "POST", path: `/wp/v2/${route}/${id}?_fields=id,status`, body };
     prepared.push({ index, id, request });
   }
   return prepared;
 }
 
-/** 通过 WordPress batch v1 分块创建多条资源。 */
+/** 通过 WordPress batch v1 分块创建资源，保留中断前已确认的索引及新 ID。 */
 export async function batchCreateResources(client: WordPressClient, input: ResourceBatchCreateInput): Promise<ResourceBatchResult> {
-  const items = await prepareBatchCreateItems(input);
-  const results: ResourceBatchItemResult[] = [];
-  for (const chunk of chunkWordPressBatchEntries(items, "Resource batch create")) {
-    const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
-      method: "POST",
-      body: { validation: "normal", requests: chunk.map((item) => item.request) }
-    });
-    if (!Array.isArray(batch.data.responses) || batch.data.responses.length !== chunk.length) throw new Error("WordPress batch response count does not match the submitted resource creates.");
-    batch.data.responses.forEach((response, index) => {
-      const item = chunk[index];
-      if (isSuccessfulWordPressBatchResponse(response) && typeof response.body.id === "number") {
-        results.push({ index: item.index, sourceId: item.sourceId, id: response.body.id, success: true });
-      } else {
-        results.push({
-          index: item.index,
-          sourceId: item.sourceId,
-          success: false,
-          error: normalizeWordPressBatchError(response, "WordPress batch resource operation failed.")
-        });
-      }
-    });
-  }
-  const succeeded = results.filter((item) => item.success).length;
-  return { target: input.target, total: results.length, succeeded, failed: results.length - succeeded, items: results };
+  const entries = await prepareBatchCreateItems(input);
+  const outcomes = await executeWordPressBatch(client, entries, "Resource batch create",
+    (body) => Number.isSafeInteger(body.id) && (body.id as number) > 0);
+  const items: ResourceBatchItemResult[] = outcomes.map(({ entry, state, response }) => {
+    const base = { index: entry.index, sourceId: entry.sourceId };
+    if (state === "succeeded") return { ...base, id: (response!.body as WordPressResourceEntity).id, success: true };
+    if (state === "failed") return { ...base, success: false, error: normalizeWordPressBatchError(response!, "WordPress batch resource operation failed.") };
+    return { ...base, success: null, state };
+  });
+  return summarizeResourceBatch(input.target, items);
 }
 
-/** 通过 WordPress batch v1 分块更新多条资源。 */
+/** 通过 WordPress batch v1 分块更新资源，未知结果与未执行条目分别返回。 */
 export async function batchUpdateResources(client: WordPressClient, input: ResourceBatchUpdateInput): Promise<ResourceBatchResult> {
-  const items = await prepareBatchUpdateItems(input);
-  const results: ResourceBatchItemResult[] = [];
-  for (const chunk of chunkWordPressBatchEntries(items, "Resource batch update")) {
-    const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
-      method: "POST",
-      body: { validation: "normal", requests: chunk.map((item) => item.request) }
-    });
-    if (!Array.isArray(batch.data.responses) || batch.data.responses.length !== chunk.length) throw new Error("WordPress batch response count does not match the submitted resource updates.");
-    batch.data.responses.forEach((response, index) => {
-      const item = chunk[index];
-      if (isSuccessfulWordPressBatchResponse(response)) {
-        results.push({ index: item.index, id: typeof response.body.id === "number" ? response.body.id : item.id, success: true });
-      } else {
-        results.push({
-          index: item.index,
-          id: item.id,
-          success: false,
-          error: normalizeWordPressBatchError(response, "WordPress batch resource operation failed.")
-        });
-      }
-    });
-  }
-  const succeeded = results.filter((item) => item.success).length;
-  return { target: input.target, total: results.length, succeeded, failed: results.length - succeeded, items: results };
+  const entries = await prepareBatchUpdateItems(input);
+  const outcomes = await executeWordPressBatch(client, entries, "Resource batch update",
+    (body, entry) => body.id === entry.id);
+  const items: ResourceBatchItemResult[] = outcomes.map(({ entry, state, response }) => {
+    const base = { index: entry.index, id: entry.id };
+    if (state === "succeeded") return { ...base, success: true };
+    if (state === "failed") return { ...base, success: false, error: normalizeWordPressBatchError(response!, "WordPress batch resource operation failed.") };
+    return { ...base, success: null, state };
+  });
+  return summarizeResourceBatch(input.target, items);
+}
+
+/** 按互斥执行状态计数，未知或未执行条目不混入失败数。 */
+function summarizeResourceBatch(target: ResourceTarget, items: ResourceBatchItemResult[]): ResourceBatchResult {
+  return { target, total: items.length,
+    succeeded: items.filter((item) => item.success === true).length,
+    failed: items.filter((item) => item.success === false).length,
+    unknown: items.filter((item) => item.state === "unknown").length,
+    notExecuted: items.filter((item) => item.state === "not_executed").length,
+    ...(items.some((item) => item.state === "unknown") ? { recovery: "Verify unknown entries on the site before retrying; do not repeat the complete batch. not_executed entries were not sent." } : {}),
+    items };
 }

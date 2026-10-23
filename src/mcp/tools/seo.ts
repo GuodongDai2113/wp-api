@@ -9,13 +9,10 @@ import { compactObject } from "../../shared/objects.js";
 import { getResourceConfig, type ResourceName } from "../../wordpress/resources.js";
 import { type Pagination, type QueryParams, WordPressClient } from "../../wordpress/client.js";
 import {
-  chunkWordPressBatchEntries,
+  executeWordPressBatch,
   isInvalidWordPressPageNumberError,
-  isSuccessfulWordPressBatchResponse,
   normalizeWordPressBatchError,
-  type WordPressBatchError,
-  type WordPressBatchRequest,
-  type WordPressBatchResponse
+  type WordPressBatchError
 } from "../shared/wordpress.js";
 import { assertPerPage, assertPositiveId, assertUniquePositiveIds } from "../shared/validation.js";
 
@@ -132,10 +129,14 @@ export type ResourceSeoBatchError = WordPressBatchError;
 
 /** SEO 批量更新单项结果。 */
 export interface ResourceSeoBatchItemResult {
+  /** 原始输入中的零基索引，用于恢复及失败定位。 */
+  index: number;
   /** 输入记录 ID。 */
   id: number;
   /** 当前记录是否更新成功。 */
-  success: boolean;
+  success: boolean | null;
+  /** 未知或尚未执行时 success=null，不能混作失败重试。 */
+  state?: "unknown" | "not_executed";
   /** 更新成功后的稳定 SEO 字段。 */
   seo?: ResourceSeoPayload;
   /** 更新失败后的规范化错误。 */
@@ -152,6 +153,12 @@ export interface ResourceSeoBatchUpdateResult {
   succeeded: number;
   /** 失败记录数。 */
   failed: number;
+  /** 已发送但未能确认结果的条目数。 */
+  unknown: number;
+  /** 中断后没有发送的条目数。 */
+  notExecuted: number;
+  /** 结果未知时先核查远端，不自动重复整批写入。 */
+  recovery?: string;
   /** 与输入顺序一致的逐项结果。 */
   items: ResourceSeoBatchItemResult[];
 }
@@ -302,7 +309,7 @@ async function exportSeoCsv(
 export async function getResourceSeo(client: WordPressClient, input: ResourceSeoGetInput): Promise<ResourceSeoPayload> {
   assertPositiveId(input.id, "Resource id");
   const config = getResourceConfig(input.resource);
-  const entity = await client.get<SeoResourceEntity>(config.route, input.id);
+  const entity = await client.get<SeoResourceEntity>(config.route, input.id, { _fields: "id,meta" });
   return extractResourceSeo(input.resource, entity, input.id);
 }
 
@@ -338,59 +345,26 @@ export async function listResourceSeo(
   return response;
 }
 
-/** 通过 WordPress batch v1 分块更新多条 Rank Math SEO 数据。 */
-export async function batchUpdateResourceSeo(
-  client: WordPressClient,
-  input: ResourceSeoBatchUpdateInput
-): Promise<ResourceSeoBatchUpdateResult> {
+/** 分块更新 SEO 并保留中途失败前的实际返回值；未知块不自动重试。 */
+export async function batchUpdateResourceSeo(client: WordPressClient, input: ResourceSeoBatchUpdateInput): Promise<ResourceSeoBatchUpdateResult> {
   const items = await resolveBatchItems(input);
   const config = getResourceConfig(input.resource);
-  const results: ResourceSeoBatchItemResult[] = [];
-  const prepared = items.map((item) => {
-    const request: WordPressBatchRequest = {
-      method: "POST",
-      path: `/wp/v2/${config.route}/${item.id}`,
-      body: { meta: buildSeoMeta(item) }
-    };
-    return { item, request };
+  const prepared = items.map((item, index) => ({ item, index, request: {
+    method: "POST" as const, path: `/wp/v2/${config.route}/${item.id}?_fields=id,meta`, body: { meta: buildSeoMeta(item) }
+  } }));
+  const outcomes = await executeWordPressBatch(client, prepared, "SEO batch update",
+    (body, entry) => body.id === entry.item.id && typeof body.meta === "object" && body.meta !== null && !Array.isArray(body.meta));
+  const results: ResourceSeoBatchItemResult[] = outcomes.map(({ entry, state, response }) => {
+    const base = { index: entry.index, id: entry.item.id };
+    if (state === "succeeded") return { ...base, success: true, seo: extractResourceSeo(input.resource, response!.body as SeoResourceEntity, entry.item.id) };
+    if (state === "failed") return { ...base, success: false, error: normalizeWordPressBatchError(response!, "WordPress batch item update failed.") };
+    return { ...base, success: null, state };
   });
-
-  for (const chunk of chunkWordPressBatchEntries(prepared, "SEO batch update")) {
-    const batch = await client.requestApiPath<WordPressBatchResponse>("batch/v1", {
-      method: "POST",
-      body: {
-        validation: "normal",
-        requests: chunk.map((entry) => entry.request)
-      }
-    });
-    if (!Array.isArray(batch.data.responses) || batch.data.responses.length !== chunk.length) {
-      throw new Error("WordPress batch response count does not match the submitted SEO updates.");
-    }
-    for (let index = 0; index < chunk.length; index += 1) {
-      const item = chunk[index].item;
-      const response = batch.data.responses[index];
-      if (isSuccessfulWordPressBatchResponse(response)) {
-        results.push({
-          id: item.id,
-          success: true,
-          seo: extractResourceSeo(input.resource, response.body, item.id)
-        });
-      } else {
-        results.push({
-          id: item.id,
-          success: false,
-          error: normalizeWordPressBatchError(response, "WordPress batch item update failed.")
-        });
-      }
-    }
-  }
-
-  const succeeded = results.filter((item) => item.success).length;
-  return {
-    resource: input.resource,
-    total: results.length,
-    succeeded,
-    failed: results.length - succeeded,
-    items: results
-  };
+  return { resource: input.resource, total: results.length,
+    succeeded: results.filter((item) => item.success === true).length,
+    failed: results.filter((item) => item.success === false).length,
+    unknown: results.filter((item) => item.state === "unknown").length,
+    notExecuted: results.filter((item) => item.state === "not_executed").length,
+    ...(results.some((item) => item.state === "unknown") ? { recovery: "Verify unknown entries on the site before retrying; do not repeat the complete batch. not_executed entries were not sent." } : {}),
+    items: results };
 }
